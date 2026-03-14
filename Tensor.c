@@ -10,15 +10,15 @@
 #include <pthread.h>
 #include "Tensor.h"
 
-// "Map function" and it's arguments
-typedef void (*MapFunction)(void *arg, int start, int end);
+typedef void (*KernelFn)(void *arg, int start, int end);
+typedef struct {
+    Tensor out, A;
+    UnaryFn f;
+} UnaryArgs;
 typedef struct {
     Tensor out, A, B;
-} TensorArgs;
-typedef struct {
-    Tensor A;
-    EntryFunction f;
-} ApplyArgs;
+    BinaryFn f;
+} BinaryArgs;
 
 // Thread pool representation
 typedef struct threadPool {
@@ -27,7 +27,7 @@ typedef struct threadPool {
     pthread_mutex_t mutex;
     pthread_cond_t mapReady;
     pthread_cond_t mapDone;
-    MapFunction f;
+    KernelFn f;
     void *mapArgs;
     int mapTotal;
     int mapId;
@@ -35,18 +35,21 @@ typedef struct threadPool {
     int shutdown;
 } *ThreadPool;
 
-// Map functions that operate on a subset of entries [start, end)
-static void applySubset(void *arg, int start, int end);
-static void addSubset(void *arg, int start, int end);
-static void subtractSubset(void *arg, int start, int end);
-static void hadamardSubset(void *arg, int start, int end);
-static void MultiplySubset(void *arg, int start, int end);
+// kernel functions that operate on a subset of entries [start, end)
+static void mapSubset(void *arg, int start, int end);
+static void zipSubset(void *arg, int start, int end);
+static void multiplySubset(void *arg, int start, int end);
+
+// Binary functions
+static Entry add(Entry x, Entry y)      { return x + y; }
+static Entry subtract(Entry x, Entry y) { return x - y; }
+static Entry hadamard(Entry x, Entry y) { return x * y; }
 
 // Thread pool functions
 static ThreadPool threadPoolNew(int n);
 static void threadPoolFree(void);
 static ThreadPool threadPoolGet(void);
-static void threadPoolMap(ThreadPool pool, MapFunction f, void *arg, int total);
+static void threadPoolMap(ThreadPool pool, KernelFn f, void *arg, int total);
 static void *threadFn(void *arg);
 
 // Utility functions
@@ -125,37 +128,29 @@ Tensor TensorTranspose(Tensor A)
     return t;
 }
 
-void TensorApply(Tensor A, EntryFunction f)
+void TensorMap(Tensor out, UnaryFn f, Tensor A)
 {
-    ApplyArgs args = {A, f};
-    threadPoolMap(threadPoolGet(), applySubset, &args, TensorSize(A));
+    UnaryArgs args = {out, A, f};
+    threadPoolMap(threadPoolGet(), mapSubset, &args, TensorSize(A));
 }
 
-void TensorAdd(Tensor out, Tensor A, Tensor B)
+void TensorZip(Tensor out, BinaryFn f, Tensor A, Tensor B)
 {
-    TensorArgs args = {out, A, B};
-    threadPoolMap(threadPoolGet(), addSubset, &args, TensorSize(A));
+    BinaryArgs args = {out, A, B, f};
+    threadPoolMap(threadPoolGet(), zipSubset, &args, TensorSize(A));
 }
 
-void TensorSubtract(Tensor out, Tensor A, Tensor B)
-{
-    TensorArgs args = {out, A, B};
-    threadPoolMap(threadPoolGet(), subtractSubset, &args, TensorSize(A));
-}
-
-void TensorHadamard(Tensor out, Tensor A, Tensor B)
-{
-    TensorArgs args = {out, A, B};
-    threadPoolMap(threadPoolGet(), hadamardSubset, &args, TensorSize(A));
-}
+void TensorAdd(Tensor out, Tensor A, Tensor B)      { TensorZip(out, add, A, B); }
+void TensorSubtract(Tensor out, Tensor A, Tensor B) { TensorZip(out, subtract, A, B); }
+void TensorHadamard(Tensor out, Tensor A, Tensor B) { TensorZip(out, hadamard, A, B); }
 
 void TensorMultiply(Tensor out, Tensor A, Tensor B)
 {
     int m = A.shape[A.dimensions - 2];
     int k = A.shape[A.dimensions - 1];
     int batchSize = TensorSize(A) / (m * k);
-    TensorArgs args = {out, A, B};
-    threadPoolMap(threadPoolGet(), MultiplySubset, &args, batchSize * m);
+    BinaryArgs args = {out, A, B, NULL};
+    threadPoolMap(threadPoolGet(), multiplySubset, &args, batchSize * m);
 }
 
 void TensorXavier(Tensor A)
@@ -192,37 +187,23 @@ void TensorSet(Tensor A, int *indices, Entry value)
     A.entries[idx] = value;
 }
 
-static void applySubset(void *arg, int start, int end)
+static void mapSubset(void *arg, int start, int end)
 {
-    ApplyArgs *args = arg;
+    UnaryArgs *args = arg;
     for (int i = start; i < end; i++)
-        args->A.entries[i] = args->f(args->A.entries[i]);
+        args->out.entries[i] = args->f(args->A.entries[i]);
 }
 
-static void addSubset(void *arg, int start, int end)
+static void zipSubset(void *arg, int start, int end)
 {
-    TensorArgs *args = arg;
+    BinaryArgs *args = arg;
     for (int i = start; i < end; i++)
-        args->out.entries[i] = args->A.entries[i] + args->B.entries[i];
+        args->out.entries[i] = args->f(args->A.entries[i], args->B.entries[i]);
 }
 
-static void subtractSubset(void *arg, int start, int end)
+static void multiplySubset(void *arg, int start, int end)
 {
-    TensorArgs *args = arg;
-    for (int i = start; i < end; i++)
-        args->out.entries[i] = args->A.entries[i] - args->B.entries[i];
-}
-
-static void hadamardSubset(void *arg, int start, int end)
-{
-    TensorArgs *args = arg;
-    for (int i = start; i < end; i++)
-        args->out.entries[i] = args->A.entries[i] * args->B.entries[i];
-}
-
-static void MultiplySubset(void *arg, int start, int end)
-{
-    TensorArgs *args = arg;
+    BinaryArgs *args = arg;
     int m = args->A.shape[args->A.dimensions - 2];
     int k = args->A.shape[args->A.dimensions - 1];
     int n = args->B.shape[1];
@@ -270,7 +251,7 @@ static void *threadFn(void *arg)
         }
 
         lastMapId = pool->mapId;
-        MapFunction f = pool->f;
+        KernelFn f = pool->f;
         void *ma = pool->mapArgs;
         int total = pool->mapTotal;
         int n = pool->numThreads;
@@ -348,7 +329,7 @@ static ThreadPool threadPoolGet(void)
     return pool;
 }
 
-static void threadPoolMap(ThreadPool pool, MapFunction f, void *arg, int total)
+static void threadPoolMap(ThreadPool pool, KernelFn f, void *arg, int total)
 {
     pthread_mutex_lock(&pool->mutex);
     pool->f = f;
