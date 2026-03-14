@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include "Tensor.h"
 
+// Kernel function that operates on a subset of entries [start, end)
 typedef void (*KernelFn)(void *arg, int start, int end);
 typedef struct {
     Tensor out, A;
@@ -35,15 +36,10 @@ typedef struct threadPool {
     int shutdown;
 } *ThreadPool;
 
-// kernel functions that operate on a subset of entries [start, end)
+// Kernel functions
 static void mapSubset(void *arg, int start, int end);
 static void zipSubset(void *arg, int start, int end);
 static void multiplySubset(void *arg, int start, int end);
-
-// Binary functions
-static Entry add(Entry x, Entry y)      { return x + y; }
-static Entry subtract(Entry x, Entry y) { return x - y; }
-static Entry hadamard(Entry x, Entry y) { return x * y; }
 
 // Thread pool functions
 static ThreadPool threadPoolNew(int n);
@@ -128,6 +124,15 @@ Tensor TensorTranspose(Tensor A)
     return t;
 }
 
+Entry TensorReduce(BinaryFn f, Entry initial, Tensor A)
+{
+    Entry result = initial;
+    int size = TensorSize(A);
+    for (int i = 0; i < size; i++)
+        result = f(result, A.entries[i]);
+    return result;
+}
+
 void TensorMap(Tensor out, UnaryFn f, Tensor A)
 {
     UnaryArgs args = {out, A, f};
@@ -139,10 +144,6 @@ void TensorZip(Tensor out, BinaryFn f, Tensor A, Tensor B)
     BinaryArgs args = {out, A, B, f};
     threadPoolMap(threadPoolGet(), zipSubset, &args, TensorSize(A));
 }
-
-void TensorAdd(Tensor out, Tensor A, Tensor B)      { TensorZip(out, add, A, B); }
-void TensorSubtract(Tensor out, Tensor A, Tensor B) { TensorZip(out, subtract, A, B); }
-void TensorHadamard(Tensor out, Tensor A, Tensor B) { TensorZip(out, hadamard, A, B); }
 
 void TensorMultiply(Tensor out, Tensor A, Tensor B)
 {
@@ -161,15 +162,6 @@ void TensorXavier(Tensor A)
         A.entries[i] = (Entry)randomFloat(-bound, bound);
 }
 
-void TensorCopy(Tensor out, Tensor in)
-{
-    memcpy(out.entries, in.entries, TensorSize(in) * sizeof(Entry));
-}
-
-void TensorZero(Tensor A)
-{
-    memset(A.entries, 0, TensorSize(A) * sizeof(Entry));
-}
 
 Entry TensorGet(Tensor A, int *indices)
 {

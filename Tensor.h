@@ -15,6 +15,20 @@ typedef struct {
     Entry *entries;
 } Tensor;
 
+// Unary functions
+static Entry relu(Entry x)     { return x > 0.0f ? x : 0.0f; }
+static Entry drelu(Entry x)    { return x > 0.0f ? 1.0f : 0.0f; }
+static Entry sigmoid(Entry x)  { return 1.0f / (1.0f + expf(-x)); }
+static Entry dsigmoid(Entry x) { Entry s = sigmoid(x); return s * (1.0f - s); }
+static Entry zero(Entry x)     { return 0; }
+static Entry identity(Entry x) { return x; }
+
+// Binary functions
+static Entry add(Entry x, Entry y)      { return x + y; }
+static Entry subtract(Entry x, Entry y) { return x - y; }
+static Entry multiply(Entry x, Entry y) { return x * y; }
+static Entry divide(Entry x, Entry y)   { return x / y; }
+
 
 /*========================================================================
  *                         Memory allocation
@@ -88,20 +102,10 @@ void TensorMap(Tensor out, UnaryFn f, Tensor A);
  */
 void TensorZip(Tensor out, BinaryFn f, Tensor A, Tensor B);
 
- /*
- * out = A + B.
- */
-void TensorAdd(Tensor out, Tensor A, Tensor B);
-
 /*
- * out = A - B.
+ * Reduces all entries of A to a single value: f(f(f(initial, a_0), a_1), ...).
  */
-void TensorSubtract(Tensor out, Tensor A, Tensor B);
-
-/*
- * out = A ⊙ B.
- */
-void TensorHadamard(Tensor out, Tensor A, Tensor B);
+Entry TensorReduce(BinaryFn f, Entry initial, Tensor A);
 
 /*
  * Multiply A by B using A's last two dimensions as matrices.
@@ -111,10 +115,11 @@ void TensorHadamard(Tensor out, Tensor A, Tensor B);
  */
 void TensorMultiply(Tensor out, Tensor A, Tensor B);
 
-/*
- * out = in.
- */
-void TensorCopy(Tensor out, Tensor in);
+static void TensorZero(Tensor A)                           { TensorMap(A, zero, A); }
+static void TensorCopy(Tensor out, Tensor in)              { TensorMap(out, identity, in); }
+static void TensorAdd(Tensor out, Tensor A, Tensor B)      { TensorZip(out, add, A, B); }
+static void TensorSubtract(Tensor out, Tensor A, Tensor B) { TensorZip(out, subtract, A, B); }
+static void TensorHadamard(Tensor out, Tensor A, Tensor B) { TensorZip(out, multiply, A, B); }
 
 
 /*========================================================================
@@ -125,10 +130,5 @@ void TensorCopy(Tensor out, Tensor in);
  * Xavier initialize a tensor using the last two dimensions as fan_in/fan_out.
  */
 void TensorXavier(Tensor A);
-
-/*
- * Sets all entries to zero.
- */
-void TensorZero(Tensor A);
 
 #endif
