@@ -132,8 +132,13 @@ static void TensorHadamard(Tensor out, Tensor A, Tensor B) { TensorZip(out, mult
 void TensorXavier(Tensor A);
 
 /*
- * Applies softmax to each row of A
+ * Applies softmax with temperature to each row of A.
  */
-void TensorSoftmax(Tensor A);
+void TensorSoftmax(Tensor A, float temperature);
+
+/*
+ * Applies softmax to output logits and samples an index using inverse CDF sampling.
+ */
+int TensorSample(Tensor output, float temperature);
 
 #endif

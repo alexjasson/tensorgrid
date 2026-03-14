@@ -154,7 +154,7 @@ void TensorMultiply(Tensor out, Tensor A, Tensor B)
     threadPoolMap(threadPoolGet(), multiplySubset, &args, batchSize * m);
 }
 
-void TensorSoftmax(Tensor A)
+void TensorSoftmax(Tensor A, float temperature)
 {
     int n     = A.shape[A.dimensions - 1];
     int batch = TensorSize(A) / n;
@@ -162,11 +162,24 @@ void TensorSoftmax(Tensor A)
         Tensor row = TensorSlice(A, i);
         Entry max  = TensorReduce(fmaxf, row.entries[0], row);
         for (int j = 0; j < n; j++)
-            row.entries[j] = expf(row.entries[j] - max);
+            row.entries[j] = expf((row.entries[j] - max) / temperature);
         Entry sum  = TensorReduce(add, 0.0f, row);
         for (int j = 0; j < n; j++)
             row.entries[j] /= sum;
     }
+}
+
+int TensorSample(Tensor output, float temperature)
+{
+    TensorSoftmax(output, temperature);
+    float r   = randomFloat(0.0f, 1.0f);
+    float cdf = 0.0f;
+    int n     = TensorSize(output);
+    for (int i = 0; i < n; i++) {
+        cdf += output.entries[i];
+        if (r <= cdf) return i;
+    }
+    return n - 1;
 }
 
 void TensorXavier(Tensor A)
