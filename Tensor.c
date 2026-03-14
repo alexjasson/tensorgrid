@@ -154,6 +154,21 @@ void TensorMultiply(Tensor out, Tensor A, Tensor B)
     threadPoolMap(threadPoolGet(), multiplySubset, &args, batchSize * m);
 }
 
+void TensorSoftmax(Tensor A)
+{
+    int n     = A.shape[A.dimensions - 1];
+    int batch = TensorSize(A) / n;
+    for (int i = 0; i < batch; i++) {
+        Tensor row = TensorSlice(A, i);
+        Entry max  = TensorReduce(fmaxf, row.entries[0], row);
+        for (int j = 0; j < n; j++)
+            row.entries[j] = expf(row.entries[j] - max);
+        Entry sum  = TensorReduce(add, 0.0f, row);
+        for (int j = 0; j < n; j++)
+            row.entries[j] /= sum;
+    }
+}
+
 void TensorXavier(Tensor A)
 {
     Entry bound = sqrtf(6.0f / (A.shape[A.dimensions - 2] + A.shape[A.dimensions - 1]));

@@ -131,4 +131,9 @@ static void TensorHadamard(Tensor out, Tensor A, Tensor B) { TensorZip(out, mult
  */
 void TensorXavier(Tensor A);
 
+/*
+ * Applies softmax to each row of A
+ */
+void TensorSoftmax(Tensor A);
+
 #endif
