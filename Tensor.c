@@ -10,19 +10,21 @@
 #include <pthread.h>
 #include "Tensor.h"
 
+#define START_CAPACITY 8
+
 // Kernel function that operates on a subset of entries [start, end)
 typedef void (*KernelFn)(void *arg, int start, int end);
 typedef struct {
     Tensor out, A;
-    UnaryFn f;
+    Univariate op;
 } UnaryArgs;
 typedef struct {
     Tensor out, A, B;
-    BinaryFn f;
+    Bivariate op;
 } BinaryArgs;
 
 // Thread pool representation
-typedef struct threadPool {
+typedef struct {
     pthread_t *threads;
     int numThreads;
     pthread_mutex_t mutex;
@@ -34,18 +36,40 @@ typedef struct threadPool {
     int mapId;
     int subsetsDone;
     int shutdown;
-} *ThreadPool;
+} ThreadPool;
+
+// Dynamic operation array representation - used for autograd
+typedef enum { Map, Zip, Multiply, Broadcast, Reduce } OperationType;
+
+typedef struct {
+    OperationType type;
+    Tensor out, A, B;
+    union { Univariate u; Bivariate b; };
+    int axis;      // axis needed for reduce operation
+    Entry initial; // initial value needed for reduce operation
+} Operation;
+
+typedef struct {
+    Operation *nodes;
+    int size;
+    int capacity;
+} OperationArray;
 
 // Kernel functions
 static void mapSubset(void *arg, int start, int end);
 static void zipSubset(void *arg, int start, int end);
 static void multiplySubset(void *arg, int start, int end);
 
+// Operation array functions
+static OperationArray *operationArrayGet(void);
+static void operationArrayPush(OperationArray *arr, Operation op);
+static void operationArrayClear(OperationArray *arr);
+
 // Thread pool functions
-static ThreadPool threadPoolNew(int n);
+static ThreadPool *threadPoolNew(int n);
 static void threadPoolFree(void);
-static ThreadPool threadPoolGet(void);
-static void threadPoolMap(ThreadPool pool, KernelFn f, void *arg, int total);
+static ThreadPool *threadPoolGet(void);
+static void threadPoolMap(ThreadPool *pool, KernelFn f, void *arg, int total);
 static void *threadFn(void *arg);
 
 // Utility functions
@@ -62,40 +86,34 @@ int TensorSize(Tensor A)
     return size;
 }
 
-Tensor TensorNew(int dimensions, int *shape)
+Tensor TensorNew(int dimensions, int *shape, int autograd)
 {
     Tensor t;
     t.dimensions = dimensions;
-    for (int i = 0; i < dimensions; i++)
-        t.shape[i] = shape[i];
+    for (int i = 0; i < dimensions; i++) t.shape[i] = shape[i];
     t.strides[dimensions - 1] = 1;
     for (int i = dimensions - 2; i >= 0; i--)
         t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
-    t.entries = calloc(TensorSize(t), sizeof(Entry));
-    if (!t.entries) {
+    int size    = TensorSize(t);
+    t.entries   = calloc(size, sizeof(Entry));
+    t.gradients = autograd ? calloc(size, sizeof(Entry)) : NULL;
+    t.refcount  = malloc(sizeof(int));
+    if (!t.entries || (autograd && !t.gradients) || !t.refcount) {
         fprintf(stderr, "Insufficient memory!\n");
         exit(EXIT_FAILURE);
     }
+    *t.refcount = 1;
     return t;
 }
 
 void TensorFree(Tensor A)
 {
+    if (!A.refcount || --(*A.refcount) > 0) return;
     free(A.entries);
+    free(A.gradients);
+    free(A.refcount);
 }
 
-Tensor TensorView(int dimensions, int *shape, Entry *entries)
-{
-    Tensor t;
-    t.dimensions = dimensions;
-    for (int i = 0; i < dimensions; i++)
-        t.shape[i] = shape[i];
-    t.strides[dimensions - 1] = 1;
-    for (int i = dimensions - 2; i >= 0; i--)
-        t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
-    t.entries = entries;
-    return t;
-}
 
 Tensor TensorSlice(Tensor A, int index)
 {
@@ -105,13 +123,24 @@ Tensor TensorSlice(Tensor A, int index)
         t.shape[i]   = A.shape[i + 1];
         t.strides[i] = A.strides[i + 1];
     }
-    t.entries = A.entries + index * A.strides[0];
+    t.entries   = A.entries + index * A.strides[0];
+    t.gradients = A.gradients ? A.gradients + index * A.strides[0] : NULL;
+    t.refcount  = NULL;
     return t;
 }
 
-Tensor TensorReshape(Tensor A, int dimensions, int *shape)
+Tensor TensorView(Tensor A, int dimensions, int *shape)
 {
-    return TensorView(dimensions, shape, A.entries);
+    Tensor t;
+    t.dimensions = dimensions;
+    for (int i = 0; i < dimensions; i++) t.shape[i] = shape[i];
+    t.strides[dimensions - 1] = 1;
+    for (int i = dimensions - 2; i >= 0; i--)
+        t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
+    t.entries   = A.entries;
+    t.gradients = A.gradients;
+    t.refcount  = NULL;
+    return t;
 }
 
 Tensor TensorTranspose(Tensor A)
@@ -124,54 +153,290 @@ Tensor TensorTranspose(Tensor A)
     return t;
 }
 
-Entry TensorReduce(BinaryFn f, Entry initial, Tensor A)
+void TensorReduce(Tensor out, Bivariate f, Entry initial, Tensor A, int axis)
 {
-    Entry result = initial;
-    int size = TensorSize(A);
-    for (int i = 0; i < size; i++)
-        result = f(result, A.entries[i]);
-    return result;
+    int axisSize = A.shape[axis];
+    int outSize  = TensorSize(out);
+    for (int o = 0; o < outSize; o++) {
+        int base = 0, remainder = o;
+        for (int d = 0; d < A.dimensions; d++) {
+            int idx    = remainder / out.strides[d];
+            remainder -= idx * out.strides[d];
+            base      += idx * A.strides[d];
+        }
+        Entry result = initial;
+        for (int k = 0; k < axisSize; k++)
+            result = f.f(result, A.entries[base + k * A.strides[axis]]);
+        out.entries[o] = result;
+    }
+
+    if (!out.gradients || !A.gradients) return;
+    operationArrayPush(operationArrayGet(), (Operation){ .type=Reduce, .out=out, .A=A, .axis=axis, .b=f, .initial=initial });
 }
 
-void TensorMap(Tensor out, UnaryFn f, Tensor A)
+void TensorMap(Tensor out, Univariate op, Tensor A)
 {
-    UnaryArgs args = {out, A, f};
+    UnaryArgs args = {out, A, op};
     threadPoolMap(threadPoolGet(), mapSubset, &args, TensorSize(A));
+
+    if (!out.gradients || !A.gradients) return;
+    operationArrayPush(operationArrayGet(),(Operation){ .type=Map, .out=out, .A=A, .u=op });
 }
 
-void TensorZip(Tensor out, BinaryFn f, Tensor A, Tensor B)
+void TensorZip(Tensor out, Bivariate op, Tensor A, Tensor B)
 {
-    BinaryArgs args = {out, A, B, f};
+    BinaryArgs args = {out, A, B, op};
     threadPoolMap(threadPoolGet(), zipSubset, &args, TensorSize(A));
+
+    if (!out.gradients) return;
+    operationArrayPush(operationArrayGet(),(Operation){ .type=Zip, .out=out, .A=A, .B=B, .b=op });
 }
 
 void TensorMultiply(Tensor out, Tensor A, Tensor B)
 {
-    int m = A.shape[A.dimensions - 2];
-    int k = A.shape[A.dimensions - 1];
+    int m         = A.shape[A.dimensions - 2];
+    int k         = A.shape[A.dimensions - 1];
     int batchSize = TensorSize(A) / (m * k);
-    BinaryArgs args = {out, A, B, NULL};
+    BinaryArgs args = {out, A, B, {NULL, NULL, NULL}};
     threadPoolMap(threadPoolGet(), multiplySubset, &args, batchSize * m);
+
+    if (!out.gradients) return;
+    operationArrayPush(operationArrayGet(),(Operation){ .type=Multiply, .out=out, .A=A, .B=B });
 }
 
-void TensorSoftmax(Tensor A, float temperature)
+void TensorBroadcast(Tensor out, Tensor A)
 {
-    int n     = A.shape[A.dimensions - 1];
-    int batch = TensorSize(A) / n;
-    for (int i = 0; i < batch; i++) {
-        Tensor row = TensorSlice(A, i);
-        Entry max  = TensorReduce(fmaxf, row.entries[0], row);
+    int n     = out.shape[out.dimensions - 1];
+    int batch = TensorSize(out) / n;
+    for (int i = 0; i < batch; i++)
         for (int j = 0; j < n; j++)
-            row.entries[j] = expf((row.entries[j] - max) / temperature);
-        Entry sum  = TensorReduce(add, 0.0f, row);
-        for (int j = 0; j < n; j++)
-            row.entries[j] /= sum;
+            out.entries[i * n + j] = A.entries[i];
+
+    if (!out.gradients || !A.gradients) return;
+    operationArrayPush(operationArrayGet(),(Operation){ .type=Broadcast, .out=out, .A=A });
+}
+
+void TensorBackward(Tensor loss)
+{
+    OperationArray *arr = operationArrayGet();
+
+    // Zero all input gradients
+    for (int i = 0; i < arr->size; i++) {
+        Operation *node = &arr->nodes[i];
+        if (node->A.gradients) memset(node->A.gradients, 0, TensorSize(node->A) * sizeof(Entry));
+        if (node->B.gradients) memset(node->B.gradients, 0, TensorSize(node->B) * sizeof(Entry));
     }
+
+    // Take mean over all loss entries
+    int lossSize = TensorSize(loss);
+    for (int i = 0; i < lossSize; i++)
+        loss.gradients[i] = 1.0f / lossSize;
+
+    // Accumulate gradients backwards
+    for (int i = arr->size - 1; i >= 0; i--) {
+        Operation *op = &arr->nodes[i];
+
+        switch (op->type) {
+            case Map: {
+                Entry *A    = op->A.entries;
+                Entry *dA   = op->A.gradients;
+                Entry *dout = op->out.gradients;
+                int n       = TensorSize(op->out);
+
+                if (dA) {
+                    for (int j = 0; j < n; j++)
+                        dA[j] += dout[j] * op->u.da(A[j]);
+                }
+                break;
+            }
+
+            case Zip: {
+                Entry *A    = op->A.entries;
+                Entry *B    = op->B.entries;
+                Entry *dA   = op->A.gradients;
+                Entry *dB   = op->B.gradients;
+                Entry *dout = op->out.gradients;
+                int n       = TensorSize(op->out);
+
+                if (dA) {
+                    for (int j = 0; j < n; j++)
+                        dA[j] += dout[j] * op->b.da(A[j], B[j]);
+                }
+
+                if (dB) {
+                    for (int j = 0; j < n; j++)
+                        dB[j] += dout[j] * op->b.db(A[j], B[j]);
+                }
+                break;
+            }
+
+            case Multiply: { // out[m,n] = A[m,k] @ B[k,n]
+                Entry *A    = op->A.entries;
+                Entry *B    = op->B.entries;
+                Entry *dA   = op->A.gradients;
+                Entry *dB   = op->B.gradients;
+                Entry *dout = op->out.gradients;
+
+                int m = op->A.shape[op->A.dimensions - 2];
+                int k = op->A.shape[op->A.dimensions - 1];
+                int n = op->B.shape[op->B.dimensions - 1];
+
+                if (dA) { // dA[m,k] += dout[m,n] @ B^T[n,k]
+                    for (int row = 0; row < m; row++) {
+                        for (int col = 0; col < k; col++) {
+                            Entry sum = 0;
+                            for (int j = 0; j < n; j++)
+                                sum += dout[row * n + j] * B[col * n + j];
+                            dA[row * k + col] += sum;
+                        }
+                    }
+                }
+
+                if (dB) { // dB[k,n] += A^T[k,m] @ dout[m,n]
+                    for (int row = 0; row < k; row++) {
+                        for (int col = 0; col < n; col++) {
+                            Entry sum = 0;
+                            for (int j = 0; j < m; j++)
+                                sum += A[j * k + row] * dout[j * n + col];
+                            dB[row * n + col] += sum;
+                        }
+                    }
+                }
+                break;
+            }
+
+            case Broadcast: { // out[rows,n] = broadcast(A[rows,1])
+                Entry *dA   = op->A.gradients;
+                Entry *dout = op->out.gradients;
+
+                int n    = op->out.shape[op->out.dimensions - 1];
+                int rows = TensorSize(op->out) / n;
+
+                if (dA) { // dA[rows,1] += sum(dout[rows,n], axis=last)
+                    for (int r = 0; r < rows; r++) {
+                        Entry sum = 0;
+                        for (int j = 0; j < n; j++)
+                            sum += dout[r * n + j];
+                        dA[r] += sum;
+                    }
+                }
+                break;
+            }
+
+            case Reduce: { // out[...,1,...] = reduce(f, A[...,k,...], axis)
+                Entry *dA   = op->A.gradients;
+                Entry *dout = op->out.gradients;
+                int outSize = TensorSize(op->out);
+
+                if (dA) {
+                    int axisSize   = op->A.shape[op->axis];
+                    int axisStride = op->A.strides[op->axis];
+
+                    Entry *result = malloc(axisSize * sizeof(Entry));
+                    if (!result) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+
+                    for (int o = 0; o < outSize; o++) {
+                        int base = 0, remainder = o;
+                        for (int d = 0; d < op->A.dimensions; d++) {
+                            int idx = remainder / op->out.strides[d];
+                            remainder    -= idx * op->out.strides[d];
+                            base   += idx * op->A.strides[d];
+                        }
+
+                        result[0] = op->initial;
+                        for (int k = 0; k < axisSize - 1; k++)
+                            result[k + 1] = op->b.f(result[k], op->A.entries[base + k * axisStride]);
+
+                        // dA[...,k,...] += dresult * db(result[...,k,...], A[...,k,...])
+                        // dresult       *= da(result[...,k,...], A[...,k,...])
+                        Entry dresult = dout[o];
+                        for (int k = axisSize - 1; k >= 0; k--) {
+                            Entry Ak = op->A.entries[base + k * axisStride];
+                            dA[base + k * axisStride] += dresult * op->b.db(result[k], Ak);
+                            dresult *= op->b.da(result[k], Ak);
+                        }
+                    }
+                    free(result);
+                }
+                break;
+            }
+        }
+    }
+    operationArrayClear(arr);
+}
+
+void TensorSGD(Tensor A, float lr)
+{
+    int size = TensorSize(A);
+    for (int i = 0; i < size; i++)
+        A.entries[i] -= lr * A.gradients[i];
+}
+
+void TensorSoftmax(Tensor out, Tensor in, float temperature)
+{
+    int autograd = out.gradients && in.gradients;
+    int shape[MAX_DIMENSIONS];
+    for (int i = 0; i < in.dimensions; i++) shape[i] = in.shape[i];
+    shape[in.dimensions - 1] = 1;
+
+    // Numerical stability trick
+    Tensor temp1 = TensorNew(in.dimensions, shape,  0);
+    Tensor temp2 = TensorNew(in.dimensions, in.shape, 0);
+    Tensor stableLogits = TensorNew(in.dimensions, in.shape, autograd);
+    TensorReduce(temp1, MAX, -INFINITY, in, in.dimensions - 1);
+    TensorBroadcast(temp2, temp1);
+    TensorZip(stableLogits, SUBTRACT, in, temp2);
+    TensorFree(temp1);  TensorFree(temp2);
+
+    // Temperature scaling
+    Tensor softmaxInput = stableLogits;
+    Tensor scaledLogits, T;
+    if (temperature != 1.0f) {
+        T = TensorNew(in.dimensions, in.shape, 0);
+        int size = TensorSize(in);
+        for (int i = 0; i < size; i++) T.entries[i] = temperature;
+        scaledLogits = TensorNew(in.dimensions, in.shape, autograd);
+        TensorZip(scaledLogits, DIVIDE, stableLogits, T);
+        softmaxInput = scaledLogits;
+    }
+
+    Tensor A = TensorNew(in.dimensions, in.shape, autograd);
+    Tensor B = TensorNew(in.dimensions, shape,  autograd);
+    Tensor C = TensorNew(in.dimensions, in.shape, autograd);
+
+    // out = exp(softmaxInput) ⊘ sum(exp(softmaxInput))
+    TensorMap(A, EXP, softmaxInput);
+    TensorReduce(B, ADD, 0.0f, A, in.dimensions - 1);
+    TensorBroadcast(C, B);
+    TensorZip(out, DIVIDE, A, C);
+
+    if (temperature != 1.0f) { TensorFree(T); TensorFree(scaledLogits); }
+    TensorFree(stableLogits);
+    TensorFree(A); TensorFree(B); TensorFree(C);
+}
+
+void TensorCrossEntropyLoss(Tensor out, Tensor y, Tensor y_hat)
+{
+    int autograd = out.gradients && y_hat.gradients;
+    int shape[MAX_DIMENSIONS];
+    for (int i = 0; i < y.dimensions; i++) shape[i] = y.shape[i];
+    shape[y.dimensions - 1] = 1;
+
+    Tensor A = TensorNew(y.dimensions, y.shape, autograd);
+    Tensor B = TensorNew(y.dimensions, y.shape, autograd);
+    Tensor C = TensorNew(y.dimensions, shape, autograd);
+
+    TensorMap(A, LOG, y_hat);
+    TensorZip(B, MULTIPLY, y, A);
+    TensorReduce(C, ADD, 0.0f, B, y.dimensions - 1);
+    TensorMap(out, NEGATE, C);
+
+    TensorFree(A); TensorFree(B); TensorFree(C);
 }
 
 int TensorSample(Tensor output, float temperature)
 {
-    TensorSoftmax(output, temperature);
+    TensorSoftmax(output, output, temperature);
     float r   = randomFloat(0.0f, 1.0f);
     float cdf = 0.0f;
     int n     = TensorSize(output);
@@ -189,7 +454,6 @@ void TensorXavier(Tensor A)
     for (int i = 0; i < size; i++)
         A.entries[i] = (Entry)randomFloat(-bound, bound);
 }
-
 
 Entry TensorGet(Tensor A, int *indices)
 {
@@ -211,14 +475,14 @@ static void mapSubset(void *arg, int start, int end)
 {
     UnaryArgs *args = arg;
     for (int i = start; i < end; i++)
-        args->out.entries[i] = args->f(args->A.entries[i]);
+        args->out.entries[i] = args->op.f(args->A.entries[i]);
 }
 
 static void zipSubset(void *arg, int start, int end)
 {
     BinaryArgs *args = arg;
     for (int i = start; i < end; i++)
-        args->out.entries[i] = args->f(args->A.entries[i], args->B.entries[i]);
+        args->out.entries[i] = args->op.f(args->A.entries[i], args->B.entries[i]);
 }
 
 static void multiplySubset(void *arg, int start, int end)
@@ -251,13 +515,117 @@ static void multiplySubset(void *arg, int start, int end)
     }
 }
 
+
+/*
+ * Operation array implementation
+ */
+static OperationArray *operationArrayGet(void)
+{
+    static OperationArray arr = {0};
+    return &arr;
+}
+
+static void operationArrayPush(OperationArray *arr, Operation op)
+{
+    if (op.out.refcount) (*op.out.refcount)++;
+    if (op.A.refcount)   (*op.A.refcount)++;
+    if (op.B.refcount)   (*op.B.refcount)++;
+    if (arr->size == arr->capacity) {
+        arr->capacity = arr->capacity ? arr->capacity * 2 : START_CAPACITY;
+        arr->nodes = realloc(arr->nodes, arr->capacity * sizeof(Operation));
+        if (!arr->nodes) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+    }
+    arr->nodes[arr->size++] = op;
+}
+
+static void operationArrayClear(OperationArray *arr)
+{
+    for (int i = 0; i < arr->size; i++) {
+        TensorFree(arr->nodes[i].out);
+        TensorFree(arr->nodes[i].A);
+        TensorFree(arr->nodes[i].B);
+    }
+    arr->size = 0;
+}
+
 /*
  * Thread pool implementation
  */
+static ThreadPool *threadPoolNew(int n)
+{
+    ThreadPool *pool = malloc(sizeof(*pool));
+    if (!pool) {
+        fprintf(stderr, "Insufficient memory!\n");
+        exit(EXIT_FAILURE);
+    }
+
+    pool->numThreads = n;
+    pool->mapId = 0;
+    pool->shutdown = 0;
+
+    pthread_mutex_init(&pool->mutex, NULL);
+    pthread_cond_init(&pool->mapReady, NULL);
+    pthread_cond_init(&pool->mapDone, NULL);
+
+    pool->threads = malloc(n * sizeof(pthread_t));
+    if (!pool->threads) {
+        fprintf(stderr, "Insufficient memory!\n");
+        exit(EXIT_FAILURE);
+    }
+
+    return pool;
+}
+
+static void threadPoolFree(void)
+{
+    ThreadPool *pool = threadPoolGet();
+
+    pthread_mutex_lock(&pool->mutex);
+    pool->shutdown = 1;
+    pthread_cond_broadcast(&pool->mapReady);
+    pthread_mutex_unlock(&pool->mutex);
+
+    for (int i = 0; i < pool->numThreads; i++)
+        pthread_join(pool->threads[i], NULL);
+
+    pthread_mutex_destroy(&pool->mutex);
+    pthread_cond_destroy(&pool->mapReady);
+    pthread_cond_destroy(&pool->mapDone);
+    free(pool->threads);
+    free(pool);
+}
+
+static ThreadPool *threadPoolGet(void)
+{
+    static ThreadPool *pool;
+    if (!pool) {
+        pool = threadPoolNew((int)sysconf(_SC_NPROCESSORS_ONLN));
+        for (int i = 0; i < pool->numThreads; i++)
+            pthread_create(&pool->threads[i], NULL, threadFn, (void *)(uintptr_t)i);
+        atexit(threadPoolFree);
+    }
+    return pool;
+}
+
+static void threadPoolMap(ThreadPool *pool, KernelFn f, void *arg, int total)
+{
+    pthread_mutex_lock(&pool->mutex);
+    pool->f = f;
+    pool->mapArgs = arg;
+    pool->mapTotal = total;
+    pool->subsetsDone = 0;
+    pool->mapId++;
+    pthread_cond_broadcast(&pool->mapReady);
+
+    while (pool->subsetsDone < pool->numThreads)
+        pthread_cond_wait(&pool->mapDone, &pool->mutex);
+    pthread_mutex_unlock(&pool->mutex);
+}
+
 static void *threadFn(void *arg)
 {
     int id = (int)(uintptr_t)arg;
-    ThreadPool pool = threadPoolGet();
+    ThreadPool *pool = threadPoolGet();
     int lastMapId = 0;
 
     while (1) {
@@ -291,77 +659,6 @@ static void *threadFn(void *arg)
             pthread_cond_signal(&pool->mapDone);
         pthread_mutex_unlock(&pool->mutex);
     }
-}
-
-static ThreadPool threadPoolNew(int n)
-{
-    ThreadPool pool = malloc(sizeof(struct threadPool));
-    if (!pool) {
-        fprintf(stderr, "Insufficient memory!\n");
-        exit(EXIT_FAILURE);
-    }
-
-    pool->numThreads = n;
-    pool->mapId = 0;
-    pool->shutdown = 0;
-
-    pthread_mutex_init(&pool->mutex, NULL);
-    pthread_cond_init(&pool->mapReady, NULL);
-    pthread_cond_init(&pool->mapDone, NULL);
-
-    pool->threads = malloc(n * sizeof(pthread_t));
-    if (!pool->threads) {
-        fprintf(stderr, "Insufficient memory!\n");
-        exit(EXIT_FAILURE);
-    }
-
-    return pool;
-}
-
-static void threadPoolFree(void)
-{
-    ThreadPool pool = threadPoolGet();
-
-    pthread_mutex_lock(&pool->mutex);
-    pool->shutdown = 1;
-    pthread_cond_broadcast(&pool->mapReady);
-    pthread_mutex_unlock(&pool->mutex);
-
-    for (int i = 0; i < pool->numThreads; i++)
-        pthread_join(pool->threads[i], NULL);
-
-    pthread_mutex_destroy(&pool->mutex);
-    pthread_cond_destroy(&pool->mapReady);
-    pthread_cond_destroy(&pool->mapDone);
-    free(pool->threads);
-    free(pool);
-}
-
-static ThreadPool threadPoolGet(void)
-{
-    static ThreadPool pool;
-    if (!pool) {
-        pool = threadPoolNew((int)sysconf(_SC_NPROCESSORS_ONLN));
-        for (int i = 0; i < pool->numThreads; i++)
-            pthread_create(&pool->threads[i], NULL, threadFn, (void *)(uintptr_t)i);
-        atexit(threadPoolFree);
-    }
-    return pool;
-}
-
-static void threadPoolMap(ThreadPool pool, KernelFn f, void *arg, int total)
-{
-    pthread_mutex_lock(&pool->mutex);
-    pool->f = f;
-    pool->mapArgs = arg;
-    pool->mapTotal = total;
-    pool->subsetsDone = 0;
-    pool->mapId++;
-    pthread_cond_broadcast(&pool->mapReady);
-
-    while (pool->subsetsDone < pool->numThreads)
-        pthread_cond_wait(&pool->mapDone, &pool->mutex);
-    pthread_mutex_unlock(&pool->mutex);
 }
 
 /*
