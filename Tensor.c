@@ -455,6 +455,46 @@ void TensorXavier(Tensor A)
         A.entries[i] = (Entry)randomFloat(-bound, bound);
 }
 
+void TensorPrint(Tensor A)
+{
+    int size = TensorSize(A);
+    int indices[MAX_DIMENSIONS] = {0};
+
+    if (size == 1) {
+        printf("%g\n", TensorGet(A, indices));
+        return;
+    }
+
+    int prevClose = 0;
+    for (int i = 0; i < size; i++) {
+        int temp = i;
+        for (int d = A.dimensions - 1; d >= 0; d--) {
+            indices[d] = temp % A.shape[d];
+            temp /= A.shape[d];
+        }
+
+        int open = 0;
+        for (int d = A.dimensions - 1; d >= 0; d--) {
+            if (indices[d] == 0) open++; else break;
+        }
+
+        int close = 0;
+        for (int d = A.dimensions - 1; d >= 0; d--) {
+            if (indices[d] == A.shape[d] - 1) close++; else break;
+        }
+
+        if (i > 0) {
+            for (int b = 0; b < prevClose; b++) printf("]");
+            printf(",");
+        }
+        for (int b = 0; b < open; b++) printf("[");
+        printf("%g", TensorGet(A, indices));
+        prevClose = close;
+    }
+    for (int b = 0; b < prevClose; b++) printf("]");
+    printf("\n");
+}
+
 Entry TensorGet(Tensor A, int *indices)
 {
     int idx = 0;

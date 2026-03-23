@@ -169,6 +169,11 @@ static void TensorHadamard(Tensor out, Tensor A, Tensor B) { TensorZip(out, MULT
 void TensorXavier(Tensor A);
 
 /*
+ * Prints a tensor to stdout. Tensors of size 1 are printed as scalars.
+ */
+void TensorPrint(Tensor A);
+
+/*
  * Softmax over the last dimension.
  * out = exp(in / T) ⊘ sum(exp(in / T))
  * 
