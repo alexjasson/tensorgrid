@@ -129,7 +129,7 @@ Tensor TensorSlice(Tensor A, int index)
     return t;
 }
 
-Tensor TensorView(Tensor A, int dimensions, int *shape)
+Tensor TensorView(Tensor A, int dimensions, int *shape, int autograd)
 {
     Tensor t;
     t.dimensions = dimensions;
@@ -138,7 +138,7 @@ Tensor TensorView(Tensor A, int dimensions, int *shape)
     for (int i = dimensions - 2; i >= 0; i--)
         t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
     t.entries   = A.entries;
-    t.gradients = A.gradients;
+    t.gradients = autograd ? A.gradients : NULL;
     t.refcount  = NULL;
     return t;
 }
@@ -153,8 +153,13 @@ Tensor TensorTranspose(Tensor A)
     return t;
 }
 
-void TensorReduce(Tensor out, Bivariate f, Entry initial, Tensor A, int axis)
+Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
 {
+    int outShape[MAX_DIMENSIONS];
+    for (int i = 0; i < A.dimensions; i++) outShape[i] = A.shape[i];
+    outShape[axis] = 1;
+    Tensor out = TensorNew(A.dimensions, outShape, A.gradients != NULL);
+
     int axisSize = A.shape[axis];
     int outSize  = TensorSize(out);
     for (int o = 0; o < outSize; o++) {
@@ -170,50 +175,68 @@ void TensorReduce(Tensor out, Bivariate f, Entry initial, Tensor A, int axis)
         out.entries[o] = result;
     }
 
-    if (!out.gradients || !A.gradients) return;
-    operationArrayPush(operationArrayGet(), (Operation){ .type=Reduce, .out=out, .A=A, .axis=axis, .b=f, .initial=initial });
+    if (out.gradients && A.gradients)
+        operationArrayPush(operationArrayGet(), (Operation){ .type=Reduce, .out=out, .A=A, .axis=axis, .b=f, .initial=initial });
+    return out;
 }
 
-void TensorMap(Tensor out, Univariate op, Tensor A)
+Tensor TensorMap(Univariate op, Tensor A)
 {
+    Tensor out = TensorNew(A.dimensions, A.shape, A.gradients != NULL);
     UnaryArgs args = {out, A, op};
     threadPoolMap(threadPoolGet(), mapSubset, &args, TensorSize(A));
 
-    if (!out.gradients || !A.gradients) return;
-    operationArrayPush(operationArrayGet(),(Operation){ .type=Map, .out=out, .A=A, .u=op });
+    if (out.gradients && A.gradients)
+        operationArrayPush(operationArrayGet(),(Operation){ .type=Map, .out=out, .A=A, .u=op });
+    return out;
 }
 
-void TensorZip(Tensor out, Bivariate op, Tensor A, Tensor B)
+Tensor TensorZip(Bivariate op, Tensor A, Tensor B)
 {
+    int autograd = A.gradients != NULL || B.gradients != NULL;
+    Tensor out = TensorNew(A.dimensions, A.shape, autograd);
     BinaryArgs args = {out, A, B, op};
     threadPoolMap(threadPoolGet(), zipSubset, &args, TensorSize(A));
 
-    if (!out.gradients) return;
-    operationArrayPush(operationArrayGet(),(Operation){ .type=Zip, .out=out, .A=A, .B=B, .b=op });
+    if (out.gradients)
+        operationArrayPush(operationArrayGet(),(Operation){ .type=Zip, .out=out, .A=A, .B=B, .b=op });
+    return out;
 }
 
-void TensorMultiply(Tensor out, Tensor A, Tensor B)
+Tensor TensorMultiply(Tensor A, Tensor B)
 {
+    int outShape[MAX_DIMENSIONS];
+    for (int i = 0; i < A.dimensions; i++) outShape[i] = A.shape[i];
+    outShape[A.dimensions - 1] = B.shape[B.dimensions - 1];
+    int autograd = A.gradients != NULL || B.gradients != NULL;
+    Tensor out = TensorNew(A.dimensions, outShape, autograd);
+
     int m         = A.shape[A.dimensions - 2];
     int k         = A.shape[A.dimensions - 1];
     int batchSize = TensorSize(A) / (m * k);
     BinaryArgs args = {out, A, B, {NULL, NULL, NULL}};
     threadPoolMap(threadPoolGet(), multiplySubset, &args, batchSize * m);
 
-    if (!out.gradients) return;
-    operationArrayPush(operationArrayGet(),(Operation){ .type=Multiply, .out=out, .A=A, .B=B });
+    if (out.gradients)
+        operationArrayPush(operationArrayGet(),(Operation){ .type=Multiply, .out=out, .A=A, .B=B });
+    return out;
 }
 
-void TensorBroadcast(Tensor out, Tensor A)
+Tensor TensorBroadcast(Tensor A, int n)
 {
-    int n     = out.shape[out.dimensions - 1];
-    int batch = TensorSize(out) / n;
+    int outShape[MAX_DIMENSIONS];
+    for (int i = 0; i < A.dimensions; i++) outShape[i] = A.shape[i];
+    outShape[A.dimensions - 1] = n;
+    Tensor out = TensorNew(A.dimensions, outShape, A.gradients != NULL);
+
+    int batch = TensorSize(A);
     for (int i = 0; i < batch; i++)
         for (int j = 0; j < n; j++)
             out.entries[i * n + j] = A.entries[i];
 
-    if (!out.gradients || !A.gradients) return;
-    operationArrayPush(operationArrayGet(),(Operation){ .type=Broadcast, .out=out, .A=A });
+    if (out.gradients && A.gradients)
+        operationArrayPush(operationArrayGet(),(Operation){ .type=Broadcast, .out=out, .A=A });
+    return out;
 }
 
 void TensorBackward(Tensor loss)
@@ -372,78 +395,60 @@ void TensorSGD(Tensor A, float lr)
         A.entries[i] -= lr * A.gradients[i];
 }
 
-void TensorSoftmax(Tensor out, Tensor in, float temperature)
+Tensor TensorSoftmax(Tensor in, float temperature)
 {
-    int autograd = out.gradients && in.gradients;
-    int shape[MAX_DIMENSIONS];
-    for (int i = 0; i < in.dimensions; i++) shape[i] = in.shape[i];
-    shape[in.dimensions - 1] = 1;
-
     // Numerical stability trick
-    Tensor temp1 = TensorNew(in.dimensions, shape,  0);
-    Tensor temp2 = TensorNew(in.dimensions, in.shape, 0);
-    Tensor stableLogits = TensorNew(in.dimensions, in.shape, autograd);
-    TensorReduce(temp1, MAX, -INFINITY, in, in.dimensions - 1);
-    TensorBroadcast(temp2, temp1);
-    TensorZip(stableLogits, SUBTRACT, in, temp2);
-    TensorFree(temp1);  TensorFree(temp2);
+    Tensor inView       = TensorView(in, in.dimensions, in.shape, 0);
+    Tensor temp1        = TensorReduce(MAX, -INFINITY, inView, in.dimensions - 1);
+    Tensor temp2        = TensorBroadcast(temp1, in.shape[in.dimensions - 1]);
+    Tensor stableLogits = TensorZip(SUBTRACT, in, temp2);
+    TensorFree(temp1); TensorFree(temp2);
 
     // Temperature scaling
-    Tensor softmaxInput = stableLogits;
-    Tensor scaledLogits, T;
+    Tensor softmaxInput;
     if (temperature != 1.0f) {
-        T = TensorNew(in.dimensions, in.shape, 0);
+        Tensor T = TensorNew(in.dimensions, in.shape, 0);
         int size = TensorSize(in);
         for (int i = 0; i < size; i++) T.entries[i] = temperature;
-        scaledLogits = TensorNew(in.dimensions, in.shape, autograd);
-        TensorZip(scaledLogits, DIVIDE, stableLogits, T);
+        Tensor scaledLogits = TensorZip(DIVIDE, stableLogits, T);
+        TensorFree(stableLogits); TensorFree(T);
         softmaxInput = scaledLogits;
+    } else {
+        softmaxInput = stableLogits;
     }
 
-    Tensor A = TensorNew(in.dimensions, in.shape, autograd);
-    Tensor B = TensorNew(in.dimensions, shape,  autograd);
-    Tensor C = TensorNew(in.dimensions, in.shape, autograd);
-
     // out = exp(softmaxInput) ⊘ sum(exp(softmaxInput))
-    TensorMap(A, EXP, softmaxInput);
-    TensorReduce(B, ADD, 0.0f, A, in.dimensions - 1);
-    TensorBroadcast(C, B);
-    TensorZip(out, DIVIDE, A, C);
+    Tensor A = TensorMap(EXP, softmaxInput);
+    Tensor B = TensorReduce(ADD, 0.0f, A, in.dimensions - 1);
+    Tensor C = TensorBroadcast(B, in.shape[in.dimensions - 1]);
+    Tensor result = TensorZip(DIVIDE, A, C);
 
-    if (temperature != 1.0f) { TensorFree(T); TensorFree(scaledLogits); }
-    TensorFree(stableLogits);
+    TensorFree(softmaxInput);
     TensorFree(A); TensorFree(B); TensorFree(C);
+    return result;
 }
 
-void TensorCrossEntropyLoss(Tensor out, Tensor y, Tensor y_hat)
+Tensor TensorCrossEntropyLoss(Tensor y, Tensor y_hat)
 {
-    int autograd = out.gradients && y_hat.gradients;
-    int shape[MAX_DIMENSIONS];
-    for (int i = 0; i < y.dimensions; i++) shape[i] = y.shape[i];
-    shape[y.dimensions - 1] = 1;
-
-    Tensor A = TensorNew(y.dimensions, y.shape, autograd);
-    Tensor B = TensorNew(y.dimensions, y.shape, autograd);
-    Tensor C = TensorNew(y.dimensions, shape, autograd);
-
-    TensorMap(A, LOG, y_hat);
-    TensorZip(B, MULTIPLY, y, A);
-    TensorReduce(C, ADD, 0.0f, B, y.dimensions - 1);
-    TensorMap(out, NEGATE, C);
-
+    Tensor A = TensorMap(LOG, y_hat);
+    Tensor B = TensorZip(MULTIPLY, y, A);
+    Tensor C = TensorReduce(ADD, 0.0f, B, y.dimensions - 1);
+    Tensor result = TensorMap(NEGATE, C);
     TensorFree(A); TensorFree(B); TensorFree(C);
+    return result;
 }
 
 int TensorSample(Tensor output, float temperature)
 {
-    TensorSoftmax(output, output, temperature);
+    Tensor P  = TensorSoftmax(output, temperature);
     float r   = randomFloat(0.0f, 1.0f);
     float cdf = 0.0f;
-    int n     = TensorSize(output);
+    int n     = TensorSize(P);
     for (int i = 0; i < n; i++) {
-        cdf += output.entries[i];
-        if (r <= cdf) return i;
+        cdf += P.entries[i];
+        if (r <= cdf) { TensorFree(P); return i; }
     }
+    TensorFree(P);
     return n - 1;
 }
 

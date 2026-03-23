@@ -94,7 +94,7 @@ int TensorSize(Tensor A);
  * Returns a view with a new shape. Total size must be unchanged. Shares memory
  * with A, use with caution.
  */
-Tensor TensorView(Tensor A, int dimensions, int *shape);
+Tensor TensorView(Tensor A, int dimensions, int *shape, int autograd);
 
 /*
  * Returns a view of A[index] along the first axis (dimensions reduced by 1).
@@ -124,26 +124,26 @@ void TensorSet(Tensor A, int *indices, Entry value);
 /*
  * out = f(A).
  */
-void TensorMap(Tensor out, Univariate f, Tensor A);
+Tensor TensorMap(Univariate f, Tensor A);
 
 /*
  * out = f(A, B).
  */
-void TensorZip(Tensor out, Bivariate f, Tensor A, Tensor B);
+Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
 
 /*
  * Reduces A along the given axis using f, starting from initial.
  * A:   [..., m, ...]
  * out: [..., 1, ...]
  */
-void TensorReduce(Tensor out, Bivariate f, Entry initial, Tensor A, int axis);
+Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis);
 
 /*
- * Broadcasts the last dimension of A from 1 to match out.
+ * Broadcasts the last dimension of A from 1 to n.
  * A:   [..., 1]
  * out: [..., n]
  */
-void TensorBroadcast(Tensor out, Tensor A);
+Tensor TensorBroadcast(Tensor A, int n);
 
 /*
  * Multiply A by B using A's last two dimensions as matrices.
@@ -151,12 +151,12 @@ void TensorBroadcast(Tensor out, Tensor A);
  * B:   [k, n]
  * out: [..., m, n]
  */
-void TensorMultiply(Tensor out, Tensor A, Tensor B);
+Tensor TensorMultiply(Tensor A, Tensor B);
 
-static void TensorCopy(Tensor out, Tensor in)              { TensorMap(out, IDENTITY, in); }
-static void TensorAdd(Tensor out, Tensor A, Tensor B)      { TensorZip(out, ADD,      A, B); }
-static void TensorSubtract(Tensor out, Tensor A, Tensor B) { TensorZip(out, SUBTRACT, A, B); }
-static void TensorHadamard(Tensor out, Tensor A, Tensor B) { TensorZip(out, MULTIPLY, A, B); }
+static Tensor TensorCopy(Tensor in)              { return TensorMap(IDENTITY, in); }
+static Tensor TensorAdd(Tensor A, Tensor B)      { return TensorZip(ADD,      A, B); }
+static Tensor TensorSubtract(Tensor A, Tensor B) { return TensorZip(SUBTRACT, A, B); }
+static Tensor TensorHadamard(Tensor A, Tensor B) { return TensorZip(MULTIPLY, A, B); }
 
 
 /*========================================================================
@@ -176,21 +176,21 @@ void TensorPrint(Tensor A);
 /*
  * Softmax over the last dimension.
  * out = exp(in / T) ⊘ sum(exp(in / T))
- * 
- * in:   Input logits  [..., n]
- * out: Probabilities  [..., n]
+ *
+ * in:  Input logits    [..., n]
+ * out: Probabilities   [..., n]
  */
-void TensorSoftmax(Tensor out, Tensor in, float temperature);
+Tensor TensorSoftmax(Tensor in, float temperature);
 
 /*
  * Cross entropy loss over the last dimension.
  * out = -sum(y ⊙ log(y_hat))
- * 
+ *
  * y_hat: Predicted probabilities [..., n]
  * y:     Target distribution     [..., n]
  * out:   Cross entropy loss      [..., 1]
  */
-void TensorCrossEntropyLoss(Tensor out, Tensor y, Tensor y_hat);
+Tensor TensorCrossEntropyLoss(Tensor y, Tensor y_hat);
 
 /*
  * Applies softmax to output logits and samples an index using inverse CDF sampling.
