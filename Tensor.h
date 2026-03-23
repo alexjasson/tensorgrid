@@ -97,9 +97,9 @@ int TensorSize(Tensor A);
 Tensor TensorView(Tensor A, int dimensions, int *shape, int autograd);
 
 /*
- * Returns a view of A[index] along the first axis (dimensions reduced by 1).
+ * Returns a view of A[index] along the given axis (dimensions reduced by 1).
  */
-Tensor TensorSlice(Tensor A, int index);
+Tensor TensorSlice(Tensor A, int axis, int index);
 
 /*
  * Returns a view with the last two dimensions transposed.

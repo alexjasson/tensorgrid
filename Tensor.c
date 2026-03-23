@@ -115,16 +115,20 @@ void TensorFree(Tensor A)
 }
 
 
-Tensor TensorSlice(Tensor A, int index)
+Tensor TensorSlice(Tensor A, int axis, int index)
 {
     Tensor t;
     t.dimensions = A.dimensions - 1;
-    for (int i = 0; i < t.dimensions; i++) {
+    for (int i = 0; i < axis; i++) {
+        t.shape[i]   = A.shape[i];
+        t.strides[i] = A.strides[i];
+    }
+    for (int i = axis; i < t.dimensions; i++) {
         t.shape[i]   = A.shape[i + 1];
         t.strides[i] = A.strides[i + 1];
     }
-    t.entries   = A.entries + index * A.strides[0];
-    t.gradients = A.gradients ? A.gradients + index * A.strides[0] : NULL;
+    t.entries   = A.entries   + index * A.strides[axis];
+    t.gradients = A.gradients ? A.gradients + index * A.strides[axis] : NULL;
     t.refcount  = NULL;
     return t;
 }
