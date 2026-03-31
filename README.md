@@ -21,6 +21,7 @@ cd tensorgrid
 sudo make install
 ```
 
+## Usage
 Include the header in your code:
 ```c
 #include <tensorgrid.h>
@@ -31,6 +32,7 @@ Then compile with:
 gcc main.c -ltensorgrid -lm -lpthread
 ```
 
+## Uninstall
 To uninstall, run the following from the cloned repo:
 ```sh
 sudo make uninstall
