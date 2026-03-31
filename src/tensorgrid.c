@@ -10,6 +10,46 @@
 #include "ThreadPool.h"
 #include "DynamicArray.h"
 
+// Univariate functions and derivatives
+static Entry relu(Entry a)     { return a > 0.0f ? a : 0.0f; }
+static Entry drelu(Entry a)    { return a > 0.0f ? 1.0f : 0.0f; }
+static Entry sigmoid(Entry a)  { return 1.0f / (1.0f + expf(-a)); }
+static Entry dsigmoid(Entry a) { return sigmoid(a) * (1.0f - sigmoid(a)); }
+static Entry loge(Entry a)     { return logf(a); }
+static Entry dloge(Entry a)    { return 1.0f / a; }
+static Entry negate(Entry a)   { return -a; }
+static Entry identity(Entry a) { return a; }
+static Entry one(Entry a)      { (void)a; return  1.0f; }
+static Entry minusOne(Entry a) { (void)a; return -1.0f; }
+static Entry expe(Entry a)     { return expf(a); }
+
+// Bivariate functions and partial derivatives
+static Entry add(Entry a, Entry b)       { return a + b; }
+static Entry subtract(Entry a, Entry b)  { return a - b; }
+static Entry multiply(Entry a, Entry b)  { return a * b; }
+static Entry divide(Entry a, Entry b)    { return a / b; }
+static Entry max(Entry a, Entry b)       { return a > b ? a : b; }
+static Entry first(Entry a, Entry b)     { (void)b; return a; }
+static Entry second(Entry a, Entry b)    { (void)a; return b; }
+static Entry ones(Entry a, Entry b)      { (void)a; (void)b; return  1.0f; }
+static Entry minusOnes(Entry a, Entry b) { (void)a; (void)b; return -1.0f; }
+static Entry divideDa(Entry a, Entry b)  { (void)a; return 1.0f / b; }
+static Entry divideDb(Entry a, Entry b)  { return -a / (b * b); }
+static Entry maxDa(Entry a, Entry b)     { return a >= b ? 1.0f : 0.0f; }
+static Entry maxDb(Entry a, Entry b)     { return b > a ? 1.0f : 0.0f; }
+
+Univariate RELU     = { relu,     drelu    };
+Univariate SIGMOID  = { sigmoid,  dsigmoid };
+Univariate LOG      = { loge,     dloge    };
+Univariate EXP      = { expe,     expe     };
+Univariate NEGATE   = { negate,   minusOne };
+Univariate IDENTITY = { identity, one      };
+Bivariate  ADD      = { add,      ones,      ones      };
+Bivariate  SUBTRACT = { subtract, ones,      minusOnes };
+Bivariate  MULTIPLY = { multiply, second,    first     };
+Bivariate  DIVIDE   = { divide,   divideDa,  divideDb  };
+Bivariate  MAX      = { max,      maxDa,     maxDb     };
+
 // Kernel function arguments
 typedef struct {
     Tensor out, A;

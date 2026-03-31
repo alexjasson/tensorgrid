@@ -23,47 +23,18 @@ typedef struct {
     int   *refcount;  // Number of references, NULL for views
 } Tensor;
 
-// Univariate functions and derivates
-static Entry relu(Entry a)     { return a > 0.0f ? a : 0.0f; }
-static Entry drelu(Entry a)    { return a > 0.0f ? 1.0f : 0.0f; }
-static Entry sigmoid(Entry a)  { return 1.0f / (1.0f + expf(-a)); }
-static Entry dsigmoid(Entry a) { return sigmoid(a) * (1.0f - sigmoid(a)); }
-static Entry loge(Entry a)     { return logf(a); }
-static Entry dloge(Entry a)    { return 1.0f / a; }
-static Entry negate(Entry a)   { return -a; }
-static Entry identity(Entry a) { return a; }
-static Entry one(Entry a)      { (void)a; return  1.0f; }
-static Entry minusOne(Entry a) { (void)a; return -1.0f; }
-static Entry zero(Entry a)     { (void)a; return 0.0f; }
-static Entry expe(Entry a)     { return expf(a); }
-
-// Bivariate functions and partial derivatives
-static Entry add(Entry a, Entry b)       { return a + b; }
-static Entry subtract(Entry a, Entry b)  { return a - b; }
-static Entry multiply(Entry a, Entry b)  { return a * b; }
-static Entry divide(Entry a, Entry b)    { return a / b; }
-static Entry max(Entry a, Entry b)       { return a > b ? a : b; }
-static Entry first(Entry a, Entry b)     { (void)b; return a; }
-static Entry second(Entry a, Entry b)    { (void)a; return b; }
-static Entry ones(Entry a, Entry b)      { (void)a; (void)b; return 1.0f; }
-static Entry minusOnes(Entry a, Entry b) { (void)a; (void)b; return -1.0f; }
-static Entry divideDa(Entry a, Entry b)  { (void)a; return 1.0f / b; }
-static Entry divideDb(Entry a, Entry b)  { return -a / (b * b); }
-static Entry maxDa(Entry a, Entry b)     { return a >= b ? 1.0f : 0.0f; }
-static Entry maxDb(Entry a, Entry b)     { return b > a ? 1.0f : 0.0f; }
-
-// Univariate/Bivariate functions and their derivatives/partial derivates - add more as needed
-static Univariate RELU     = { relu,     drelu    };
-static Univariate SIGMOID  = { sigmoid,  dsigmoid };
-static Univariate LOG      = { loge,     dloge    };
-static Univariate EXP      = { expe,     expe     };
-static Univariate NEGATE   = { negate,   minusOne };
-static Univariate IDENTITY = { identity, one      };
-static Bivariate  ADD      = { add,      ones,      ones      };
-static Bivariate  SUBTRACT = { subtract, ones,      minusOnes };
-static Bivariate  MULTIPLY = { multiply, second,    first     };
-static Bivariate  DIVIDE   = { divide,   divideDa,  divideDb  };
-static Bivariate  MAX      = { max,      maxDa,     maxDb     };
+// Univariate/Bivariate functions to be applied to tensors
+extern Univariate RELU;
+extern Univariate SIGMOID;
+extern Univariate LOG;
+extern Univariate EXP;
+extern Univariate NEGATE;
+extern Univariate IDENTITY;
+extern Bivariate  ADD;
+extern Bivariate  SUBTRACT;
+extern Bivariate  MULTIPLY;
+extern Bivariate  DIVIDE;
+extern Bivariate  MAX;
 
 
 /*========================================================================
@@ -164,10 +135,10 @@ Tensor TensorBroadcast(Tensor A, int n);
  */
 Tensor TensorMultiply(Tensor A, Tensor B);
 
-static Tensor TensorCopy(Tensor in)              { return TensorMap(IDENTITY, in); }
-static Tensor TensorAdd(Tensor A, Tensor B)      { return TensorZip(ADD,      A, B); }
-static Tensor TensorSubtract(Tensor A, Tensor B) { return TensorZip(SUBTRACT, A, B); }
-static Tensor TensorHadamard(Tensor A, Tensor B) { return TensorZip(MULTIPLY, A, B); }
+static inline Tensor TensorCopy(Tensor in)              { return TensorMap(IDENTITY, in); }
+static inline Tensor TensorAdd(Tensor A, Tensor B)      { return TensorZip(ADD,      A, B); }
+static inline Tensor TensorSubtract(Tensor A, Tensor B) { return TensorZip(SUBTRACT, A, B); }
+static inline Tensor TensorHadamard(Tensor A, Tensor B) { return TensorZip(MULTIPLY, A, B); }
 
 
 /*========================================================================
