@@ -1,4 +1,4 @@
-// https://github.com/alexjasson/tensor
+// https://github.com/alexjasson/tensorgrid
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,7 +8,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <pthread.h>
-#include "Tensor.h"
+#include "tensorgrid.h"
 
 #define START_CAPACITY 8
 

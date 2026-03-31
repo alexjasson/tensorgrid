@@ -1,5 +1,5 @@
-#ifndef TENSOR_H
-#define TENSOR_H
+#ifndef TENSORGRID_H
+#define TENSORGRID_H
 
 #include <math.h>
 
