@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include "tensorgrid.h"
+#include "utility.h"
 
 #define START_CAPACITY 8
 
@@ -72,8 +73,6 @@ static ThreadPool *threadPoolGet(void);
 static void threadPoolMap(ThreadPool *pool, KernelFn f, void *arg, int total);
 static void *threadFn(void *arg);
 
-// Utility functions
-static float randomFloat(float lower, float upper);
 
 /*
  * Tensor implementation
@@ -836,29 +835,3 @@ static void *threadFn(void *arg)
     }
 }
 
-/*
- * Utility functions
- */
-static uint32_t xorshift(void)
-{
-    static uint32_t state = 0;
-    static int seeded = 0;
-
-    if (!seeded) {
-        state = (uint32_t)time(NULL);
-        seeded = 1;
-    }
-
-    uint32_t x = state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    state = x;
-    return x;
-}
-
-static float randomFloat(float lower, float upper)
-{
-    float r = (xorshift() >> 8) / 16777216.0f;
-    return lower + r * (upper - lower);
-}
