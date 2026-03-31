@@ -504,6 +504,99 @@ void TensorPrint(Tensor A)
     printf("\n");
 }
 
+Tensor TensorRead(char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "Cannot open file: %s\n", path); exit(EXIT_FAILURE); }
+
+    // Open file and validate
+    char magic[6];
+    fread(magic, 1, 6, f);
+    if (memcmp(magic, "\x93NUMPY", 6) != 0) {
+        fprintf(stderr, "Not a .npy file: %s\n", path);
+        exit(EXIT_FAILURE);
+    }
+
+    // Read version number
+    uint8_t major, minor;
+    fread(&major, 1, 1, f);
+    fread(&minor, 1, 1, f);
+    (void)minor;
+
+    // Read header
+    uint32_t headerLength;
+    if (major == 1) {
+        uint16_t length;
+        fread(&length, 2, 1, f);
+        headerLength = length;
+    } else {
+        fread(&headerLength, 4, 1, f);
+    }
+    char *header = malloc(headerLength + 1);
+    fread(header, 1, headerLength, f);
+    header[headerLength] = '\0';
+
+    if (strstr(header, "'fortran_order': True")) {
+        fprintf(stderr, "Fortran-order arrays not supported\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // Parse data type
+    char *start = strstr(header, "'descr'");
+    start = strchr(start, ':') + 1;
+    while (*start == ' ') start++;
+    start++;
+    char *end = strchr(start, '\'');
+    char type[8] = {0};
+    strncpy(type, start, end - start < 7 ? end - start : 7);
+    char   dataType = type[1];
+    size_t entrySize = (size_t)atoi(&type[2]);
+
+    // Parse shape
+    int shape[MAX_DIMENSIONS];
+    int dimensions = 0;
+    char *start = strchr(strstr(header, "'shape'"), '(') + 1;
+    char *end = strchr(start, ')');
+    char *curr  = start;
+    while (curr < end) {
+        while (curr < end && (*curr == ' ' || *curr == ',')) curr++;
+        if (curr >= end) break;
+        int n;
+        if (sscanf(curr, "%d", &n) != 1) break;
+        shape[dimensions++] = n;
+        while (*curr >= '0' && *curr <= '9') curr++;
+    }
+
+    free(header);
+
+    int size = 1;
+    for (int i = 0; i < dimensions; i++) size *= shape[i];
+
+    void *data = malloc(size * entrySize);
+    fread(data, entrySize, size, f);
+    fclose(f);
+
+    Tensor t = TensorNew(dimensions, shape, FALSE);
+    if (dataType == 'f' && entrySize == 4) {
+        memcpy(t.entries, data, size * sizeof(float));
+    } else if (dataType == 'f' && entrySize == 8) {
+        double *src = data;
+        for (int i = 0; i < size; i++) t.entries[i] = (float)src[i];
+    } else if (dataType == 'i' && entrySize == 4) {
+        int32_t *src = data;
+        for (int i = 0; i < size; i++) t.entries[i] = (float)src[i];
+    } else if (dataType == 'i' && entrySize == 8) {
+        int64_t *src = data;
+        for (int i = 0; i < size; i++) t.entries[i] = (float)src[i];
+    } else {
+        uint8_t *src = data;
+        for (int i = 0; i < size; i++) t.entries[i] = (float)src[i];
+    }
+
+    free(data);
+    return t;
+}
+
 Entry TensorGet(Tensor A, int *indices)
 {
     int idx = 0;

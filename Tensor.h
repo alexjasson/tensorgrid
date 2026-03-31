@@ -80,6 +80,12 @@ Tensor TensorNew(int dimensions, int *shape, int autograd);
  */
 void TensorFree(Tensor A);
 
+/*
+ * Reads a .npy file and returns it as a tensor. Data is cast to the Entry
+ * data type (most likely float32).
+ */
+Tensor TensorRead(char *path);
+
 
 /*========================================================================
  *                         Shape, views and access
