@@ -555,8 +555,8 @@ Tensor TensorRead(char *path)
     // Parse shape
     int shape[MAX_DIMENSIONS];
     int dimensions = 0;
-    char *start = strchr(strstr(header, "'shape'"), '(') + 1;
-    char *end = strchr(start, ')');
+    start = strchr(strstr(header, "'shape'"), '(') + 1;
+    end   = strchr(start, ')');
     char *curr  = start;
     while (curr < end) {
         while (curr < end && (*curr == ' ' || *curr == ',')) curr++;
@@ -595,6 +595,39 @@ Tensor TensorRead(char *path)
 
     free(data);
     return t;
+}
+
+void TensorWrite(Tensor A, char *path)
+{
+    // Build shape string
+    char shape[256] = "(";
+    for (int i = 0; i < A.dimensions; i++) {
+        char dim[32];
+        snprintf(dim, sizeof(dim), "%d, ", A.shape[i]);
+        strcat(shape, dim);
+    }
+    strcat(shape, ")");
+
+    // Build header string
+    char header[512];
+    int unpaddedLength      = snprintf(header, sizeof(header),
+        "{'descr': '<f4', 'fortran_order': False, 'shape': %s, }", shape);
+    int headerLength = ((unpaddedLength + 1 + 10 + 63) / 64) * 64 - 10;
+    for (int i = unpaddedLength; i < headerLength - 1; i++) header[i] = ' ';
+    header[headerLength - 1] = '\n';
+
+    FILE *f = fopen(path, "wb");
+    if (!f) { fprintf(stderr, "Cannot open file: %s\n", path); exit(EXIT_FAILURE); }
+
+    uint16_t length = (uint16_t)headerLength;
+    fwrite("\x93NUMPY", 1, 6, f);
+    fwrite("\x01\x00",  1, 2, f);
+    fwrite(&length,     2, 1, f);
+    fwrite(header,      1, headerLength, f);
+
+    int size = TensorSize(A);
+    fwrite(A.entries, sizeof(Entry), size, f);
+    fclose(f);
 }
 
 Entry TensorGet(Tensor A, int *indices)

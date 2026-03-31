@@ -67,7 +67,7 @@ static Bivariate  MAX      = { max,      maxDa,     maxDb     };
 
 
 /*========================================================================
- *                         Memory allocation
+ *                         Memory management
  *========================================================================*/
 
 /*
@@ -85,6 +85,11 @@ void TensorFree(Tensor A);
  * data type (most likely float32).
  */
 Tensor TensorRead(char *path);
+
+/*
+ * Writes a tensor to a .npy file.
+ */
+void TensorWrite(Tensor A, char *path);
 
 
 /*========================================================================
