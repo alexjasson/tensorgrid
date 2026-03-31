@@ -8,8 +8,7 @@
 #include "tensorgrid.h"
 #include "utility.h"
 #include "ThreadPool.h"
-
-#define START_CAPACITY 8
+#include "DynamicArray.h"
 
 // Kernel function arguments
 typedef struct {
@@ -21,9 +20,9 @@ typedef struct {
     Bivariate op;
 } BinaryArgs;
 
-// Dynamic operation array representation - used for autograd
 typedef enum { Map, Zip, Multiply, Broadcast, Reduce } OperationType;
 
+// Tensor operation representation - used for autograd
 typedef struct {
     OperationType type;
     Tensor out, A, B;
@@ -32,27 +31,16 @@ typedef struct {
     Entry initial; // initial value needed for reduce operation
 } Operation;
 
-typedef struct {
-    Operation *nodes;
-    int size;
-    int capacity;
-} OperationArray;
-
 // Kernel functions
 static void mapSubset(void *arg, int start, int end);
 static void zipSubset(void *arg, int start, int end);
 static void multiplySubset(void *arg, int start, int end);
 
 // Operation array functions
-static OperationArray *operationArrayGet(void);
-static void operationArrayPush(OperationArray *arr, Operation op);
-static void operationArrayClear(OperationArray *arr);
+static DynamicArray operationArrayGet(void);
+static void operationArrayPush(DynamicArray arr, Operation op);
+static void operationArrayClear(DynamicArray arr);
 
-
-
-/*
- * Tensor implementation
- */
 int TensorSize(Tensor A)
 {
     int size = 1;
@@ -220,11 +208,11 @@ Tensor TensorBroadcast(Tensor A, int n)
 
 void TensorBackward(Tensor loss)
 {
-    OperationArray *arr = operationArrayGet();
+    DynamicArray arr = operationArrayGet();
 
     // Zero all input gradients
-    for (int i = 0; i < arr->size; i++) {
-        Operation *node = &arr->nodes[i];
+    for (int i = 0; i < DynamicArraySize(arr); i++) {
+        Operation *node = DynamicArrayGet(arr, i);
         if (node->A.gradients) memset(node->A.gradients, 0, TensorSize(node->A) * sizeof(Entry));
         if (node->B.gradients) memset(node->B.gradients, 0, TensorSize(node->B) * sizeof(Entry));
     }
@@ -235,8 +223,8 @@ void TensorBackward(Tensor loss)
         loss.gradients[i] = 1.0f / lossSize;
 
     // Accumulate gradients backwards
-    for (int i = arr->size - 1; i >= 0; i--) {
-        Operation *op = &arr->nodes[i];
+    for (int i = DynamicArraySize(arr) - 1; i >= 0; i--) {
+        Operation *op = DynamicArrayGet(arr, i);
 
         switch (op->type) {
             case Map: {
@@ -665,37 +653,30 @@ static void multiplySubset(void *arg, int start, int end)
     }
 }
 
-
-/*
- * Operation array implementation
- */
-static OperationArray *operationArrayGet(void)
+static DynamicArray operationArrayGet(void)
 {
-    static OperationArray arr = {0};
-    return &arr;
+    static DynamicArray arr = NULL;
+    if (!arr) arr = DynamicArrayNew(sizeof(Operation));
+    return arr;
 }
 
-static void operationArrayPush(OperationArray *arr, Operation op)
+static void operationArrayPush(DynamicArray arr, Operation op)
 {
     if (op.out.refcount) (*op.out.refcount)++;
     if (op.A.refcount)   (*op.A.refcount)++;
     if (op.B.refcount)   (*op.B.refcount)++;
-    if (arr->size == arr->capacity) {
-        arr->capacity = arr->capacity ? arr->capacity * 2 : START_CAPACITY;
-        arr->nodes = realloc(arr->nodes, arr->capacity * sizeof(Operation));
-        if (!arr->nodes) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
-    }
-    arr->nodes[arr->size++] = op;
+    DynamicArrayPush(arr, &op);
 }
 
-static void operationArrayClear(OperationArray *arr)
+static void operationArrayClear(DynamicArray arr)
 {
-    for (int i = 0; i < arr->size; i++) {
-        TensorFree(arr->nodes[i].out);
-        TensorFree(arr->nodes[i].A);
-        TensorFree(arr->nodes[i].B);
+    for (int i = 0; i < DynamicArraySize(arr); i++) {
+        Operation *op = DynamicArrayGet(arr, i);
+        TensorFree(op->out);
+        TensorFree(op->A);
+        TensorFree(op->B);
     }
-    arr->size = 0;
+    DynamicArrayClear(arr);
 }
 
 
