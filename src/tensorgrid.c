@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
+#include <float.h>
 #include <stdint.h>
 #include "tensorgrid.h"
 #include "utility.h"
@@ -13,15 +13,15 @@
 // Univariate functions and derivatives
 static Entry relu(Entry a)     { return a > 0.0f ? a : 0.0f; }
 static Entry drelu(Entry a)    { return a > 0.0f ? 1.0f : 0.0f; }
-static Entry sigmoid(Entry a)  { return 1.0f / (1.0f + expf(-a)); }
+static Entry sigmoid(Entry a)  { return 1.0f / (1.0f + __builtin_expf(-a)); }
 static Entry dsigmoid(Entry a) { return sigmoid(a) * (1.0f - sigmoid(a)); }
-static Entry loge(Entry a)     { return logf(a); }
+static Entry loge(Entry a)     { return __builtin_logf(a); }
 static Entry dloge(Entry a)    { return 1.0f / a; }
 static Entry negate(Entry a)   { return -a; }
 static Entry identity(Entry a) { return a; }
 static Entry one(Entry a)      { (void)a; return  1.0f; }
 static Entry minusOne(Entry a) { (void)a; return -1.0f; }
-static Entry expe(Entry a)     { return expf(a); }
+static Entry expe(Entry a)     { return __builtin_expf(a); }
 
 // Bivariate functions and partial derivatives
 static Entry add(Entry a, Entry b)       { return a + b; }
@@ -406,7 +406,7 @@ Tensor TensorSoftmax(Tensor in, float temperature)
 {
     // Numerical stability trick
     Tensor inView       = TensorView(in, in.dimensions, in.shape, 0);
-    Tensor temp1        = TensorReduce(MAX, -INFINITY, inView, in.dimensions - 1);
+    Tensor temp1        = TensorReduce(MAX, -FLT_MAX, inView, in.dimensions - 1);
     Tensor temp2        = TensorBroadcast(temp1, in.shape[in.dimensions - 1]);
     Tensor stableLogits = TensorZip(SUBTRACT, in, temp2);
     TensorFree(temp1); TensorFree(temp2);
@@ -461,7 +461,7 @@ int TensorSample(Tensor output, float temperature)
 
 void TensorXavier(Tensor A)
 {
-    Entry bound = sqrtf(6.0f / (A.shape[A.dimensions - 2] + A.shape[A.dimensions - 1]));
+    Entry bound = __builtin_sqrtf(6.0f / (A.shape[A.dimensions - 2] + A.shape[A.dimensions - 1]));
     int size = TensorSize(A);
     for (int i = 0; i < size; i++)
         A.entries[i] = (Entry)randomFloat(-bound, bound);

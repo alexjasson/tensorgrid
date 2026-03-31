@@ -1,8 +1,6 @@
 #ifndef TENSORGRID_H
 #define TENSORGRID_H
 
-#include <math.h>
-
 #define MAX_DIMENSIONS 8
 #define TRUE 1
 #define FALSE 0

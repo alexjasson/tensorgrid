@@ -29,7 +29,7 @@ Include the header in your code:
 
 Then compile with:
 ```sh
-gcc main.c -ltensorgrid -lm -lpthread
+gcc main.c -ltensorgrid -lpthread
 ```
 
 ## Uninstall
