@@ -4,6 +4,7 @@ tensorgrid is a minimalist and easy-to-use tensor library written in C.
 
 ## Features
 - N-dimensional tensors
+- Basic tensor operations
 - Automatic differentiation
 - Multithreading
 - Load and save tensors as `.npy` files
