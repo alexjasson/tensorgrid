@@ -5,7 +5,7 @@ else
     $(error Compiler not found! Please install gcc)
 endif
 
-CFLAGS  = -Wall -Wextra -Werror -pedantic -Ofast -march=native -flto
+CFLAGS = -Wall -Wextra -Werror -pedantic -Ofast -march=native -flto
 
 LIBDIR     = /usr/local/lib
 INCLUDEDIR = /usr/local/include

@@ -191,7 +191,7 @@ Tensor TensorMap(Univariate op, Tensor A)
 {
     Tensor out = TensorNew(A.dimensions, A.shape, A.gradients != NULL);
     UnaryArgs args = {out, A, op};
-    threadPoolMap(threadPoolGet(), mapSubset, &args, TensorSize(A));
+    ThreadPoolMap(ThreadPoolGet(), mapSubset, &args, TensorSize(A));
 
     if (out.gradients && A.gradients)
         operationArrayPush(operationArrayGet(),(Operation){ .type=Map, .out=out, .A=A, .u=op });
@@ -203,7 +203,7 @@ Tensor TensorZip(Bivariate op, Tensor A, Tensor B)
     int autograd = A.gradients != NULL || B.gradients != NULL;
     Tensor out = TensorNew(A.dimensions, A.shape, autograd);
     BinaryArgs args = {out, A, B, op};
-    threadPoolMap(threadPoolGet(), zipSubset, &args, TensorSize(A));
+    ThreadPoolMap(ThreadPoolGet(), zipSubset, &args, TensorSize(A));
 
     if (out.gradients)
         operationArrayPush(operationArrayGet(),(Operation){ .type=Zip, .out=out, .A=A, .B=B, .b=op });
@@ -222,7 +222,7 @@ Tensor TensorMultiply(Tensor A, Tensor B)
     int k         = A.shape[A.dimensions - 1];
     int batchSize = TensorSize(A) / (m * k);
     BinaryArgs args = {out, A, B, {NULL, NULL, NULL}};
-    threadPoolMap(threadPoolGet(), multiplySubset, &args, batchSize * m);
+    ThreadPoolMap(ThreadPoolGet(), multiplySubset, &args, batchSize * m);
 
     if (out.gradients)
         operationArrayPush(operationArrayGet(),(Operation){ .type=Multiply, .out=out, .A=A, .B=B });

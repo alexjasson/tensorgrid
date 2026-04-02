@@ -8,10 +8,10 @@ tensorgrid is a minimalist and easy-to-use tensor library written in C.
 - Automatic differentiation
 - Multithreading
 - Load and save tensors as `.npy` files
-- Minimal dependencies, only needs POSIX threads library
+- No dependencies
 
 ## Prerequisites
-- A UNIX-like OS (Linux or macOS)
+- Linux
 - GCC
 - make
 
@@ -30,7 +30,7 @@ Include the header in your code:
 
 Then compile with:
 ```sh
-gcc main.c -ltensorgrid -lpthread
+gcc main.c -ltensorgrid
 ```
 
 ## Uninstall

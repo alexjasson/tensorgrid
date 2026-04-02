@@ -4,7 +4,7 @@
 typedef void (*KernelFn)(void *arg, int start, int end);
 typedef struct threadPool *ThreadPool;
 
-ThreadPool threadPoolGet(void);
-void threadPoolMap(ThreadPool pool, KernelFn f, void *arg, int total);
+ThreadPool ThreadPoolGet(void);
+void ThreadPoolMap(ThreadPool pool, KernelFn f, void *arg, int total);
 
 #endif
