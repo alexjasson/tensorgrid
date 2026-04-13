@@ -1,8 +1,27 @@
-# Detect compiler
-ifneq ($(shell which gcc 2>/dev/null),)
-    CC := gcc
+# Detect OS
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Linux)
+    ifneq ($(shell which gcc 2>/dev/null),)
+        CC := gcc
+        AR := gcc-ar
+    else ifneq ($(shell which clang 2>/dev/null),)
+        CC := clang
+        AR := llvm-ar
+    else
+        $(error Compiler not found! Please install gcc or clang)
+    endif
+else ifeq ($(UNAME_S),Darwin)
+    ifneq ($(shell which clang 2>/dev/null),)
+        CC := clang
+    else ifneq ($(shell which gcc 2>/dev/null),)
+        CC := gcc
+    else
+        $(error Compiler not found! Please install gcc or clang)
+    endif
+    AR := ar
 else
-    $(error Compiler not found! Please install gcc)
+    $(error Unsupported OS! Only linux and mac are supported)
 endif
 
 CFLAGS = -Wall -Wextra -Werror -pedantic -Ofast -march=native -flto
@@ -17,7 +36,7 @@ LIB = libtensorgrid.a
 .PHONY: install uninstall
 
 $(LIB): $(OBJ)
-	gcc-ar rcs $@ $^
+	$(AR) rcs $@ $^
 	rm -f $(OBJ)
 
 src/%.o: src/%.c

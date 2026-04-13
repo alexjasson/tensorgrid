@@ -1,30 +1,30 @@
 // https://github.com/alexjasson/tensorgrid
 
 #define _GNU_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdatomic.h>
+#include <unistd.h>
+#include "ThreadPool.h"
+
+// Linux specific
+#if defined(__linux__)
+
 #include <limits.h>
 #include <sched.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
-#include <unistd.h>
-#include "ThreadPool.h"
 
-#define FUTEX_WAIT     0
-#define FUTEX_WAKE     1
-#define FUTEX_PRIVATE  128
-#define GUARD_SIZE     4096
-#define STACK_SIZE     (2 * 1024 * 1024)
+#define FUTEX_WAIT    0
+#define FUTEX_WAKE    1
+#define FUTEX_PRIVATE 128
+#define GUARD_SIZE    4096
+#define STACK_SIZE    (2 * 1024 * 1024)
 
-typedef struct {
-    _Atomic int state;
-} Mutex;
-
-typedef struct {
-    _Atomic int seq;
-} CondVar;
+typedef struct { _Atomic int state; } Mutex;
+typedef struct { _Atomic int seq;   } CondVar;
 
 struct thread {
     _Atomic int  id;
@@ -32,34 +32,6 @@ struct thread {
     void        *(*fn)(void *);
     void        *arg;
 };
-
-struct threadPool {
-    struct thread **threads;
-    int numThreads;
-    Mutex mutex;
-    CondVar mapReady;
-    CondVar mapDone;
-    KernelFn f;
-    void *mapArgs;
-    int mapTotal;
-    int mapId;
-    int subsetsDone;
-    int shutdown;
-};
-
-static ThreadPool newThreadPool(int n);
-static void freeThreadPool(void);
-
-static void *threadFn(void *arg);
-static int threadEntry(void *arg);
-static struct thread *threadCreate(void *(*fn)(void *), void *arg);
-static void threadJoin(struct thread *t);
-
-static void mutexLock(Mutex *m);
-static void mutexUnlock(Mutex *m);
-static void condVarWait(CondVar *c, Mutex *m);
-static void condVarSignal(CondVar *c);
-static void condVarBroadcast(CondVar *c);
 
 static int threadEntry(void *arg)
 {
@@ -146,6 +118,65 @@ static void condVarBroadcast(CondVar *c)
     syscall(SYS_futex, (int *)&c->seq, FUTEX_WAKE | FUTEX_PRIVATE, INT_MAX, NULL, NULL, 0);
 }
 
+// Mac specific
+#elif defined(__APPLE__)
+
+#include <pthread.h>
+
+typedef struct { pthread_mutex_t m; } Mutex;
+typedef struct { pthread_cond_t c;  } CondVar;
+
+struct thread {
+    pthread_t tid;
+};
+
+static struct thread *threadCreate(void *(*fn)(void *), void *arg)
+{
+    struct thread *t = malloc(sizeof *t);
+    if (!t) return NULL;
+    if (pthread_create(&t->tid, NULL, fn, arg) != 0) {
+        free(t);
+        return NULL;
+    }
+    return t;
+}
+
+static void threadJoin(struct thread *t)
+{
+    pthread_join(t->tid, NULL);
+    free(t);
+}
+
+static void mutexLock(Mutex *m)               { pthread_mutex_lock(&m->m);       }
+static void mutexUnlock(Mutex *m)             { pthread_mutex_unlock(&m->m);     }
+static void condVarWait(CondVar *c, Mutex *m) { pthread_cond_wait(&c->c, &m->m); }
+static void condVarSignal(CondVar *c)         { pthread_cond_signal(&c->c);      }
+static void condVarBroadcast(CondVar *c)      { pthread_cond_broadcast(&c->c);   }
+
+#else
+#error "Unsupported OS! Only linux and mac are supported"
+#endif
+
+// Both
+
+static ThreadPool newThreadPool(int n);
+static void freeThreadPool(void);
+static void *threadFn(void *arg);
+
+struct threadPool {
+    struct thread **threads;
+    int numThreads;
+    Mutex mutex;
+    CondVar mapReady;
+    CondVar mapDone;
+    KernelFn f;
+    void *mapArgs;
+    int mapTotal;
+    int mapId;
+    int subsetsDone;
+    int shutdown;
+};
+
 static ThreadPool newThreadPool(int n)
 {
     ThreadPool pool = malloc(sizeof(*pool));
@@ -157,9 +188,16 @@ static ThreadPool newThreadPool(int n)
     pool->numThreads  = n;
     pool->mapId       = 0;
     pool->shutdown    = 0;
-    pool->mutex       = (Mutex){0};
-    pool->mapReady    = (CondVar){0};
-    pool->mapDone     = (CondVar){0};
+
+#if defined(__linux__)
+    pool->mutex    = (Mutex){0};
+    pool->mapReady = (CondVar){0};
+    pool->mapDone  = (CondVar){0};
+#elif defined(__APPLE__)
+    pthread_mutex_init(&pool->mutex.m, NULL);
+    pthread_cond_init(&pool->mapReady.c, NULL);
+    pthread_cond_init(&pool->mapDone.c, NULL);
+#endif
 
     pool->threads = malloc(n * sizeof(struct thread *));
     if (!pool->threads) {
@@ -181,6 +219,12 @@ static void freeThreadPool(void)
 
     for (int i = 0; i < pool->numThreads; i++)
         threadJoin(pool->threads[i]);
+
+#if defined(__APPLE__)
+    pthread_mutex_destroy(&pool->mutex.m);
+    pthread_cond_destroy(&pool->mapReady.c);
+    pthread_cond_destroy(&pool->mapDone.c);
+#endif
 
     free(pool->threads);
     free(pool);

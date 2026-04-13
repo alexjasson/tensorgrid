@@ -11,8 +11,8 @@ tensorgrid is a minimalist and easy-to-use tensor library written in C.
 - No dependencies
 
 ## Prerequisites
-- Linux
-- GCC
+- Linux or mac
+- GCC or Clang
 - make
 
 ## Installation
