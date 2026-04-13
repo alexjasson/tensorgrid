@@ -8,7 +8,7 @@ tensorgrid is a minimalist and easy-to-use tensor library written in C.
 - Automatic differentiation
 - Multithreading
 - Load and save tensors as `.npy` files
-- No dependencies
+- No external dependencies
 
 ## Prerequisites
 - Linux or mac
@@ -31,6 +31,8 @@ Include the header in your code:
 Then compile with:
 ```sh
 gcc main.c -ltensorgrid
+# or
+clang main.c -ltensorgrid
 ```
 
 ## Uninstall
