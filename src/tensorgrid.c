@@ -89,6 +89,12 @@ int TensorSize(Tensor A)
     return size;
 }
 
+int TensorShape(Tensor A, int axis)
+{
+    return A.shape[axis];
+}
+
+
 Tensor TensorNew(int dimensions, int *shape, int autograd)
 {
     Tensor t;
@@ -118,22 +124,24 @@ void TensorFree(Tensor A)
 }
 
 
-Tensor TensorSlice(Tensor A, int axis, int index)
+Tensor TensorSlice(Tensor A, int axis, int index, int length)
 {
-    Tensor t;
-    t.dimensions = A.dimensions - 1;
-    for (int i = 0; i < axis; i++) {
-        t.shape[i]   = A.shape[i];
-        t.strides[i] = A.strides[i];
-    }
-    for (int i = axis; i < t.dimensions; i++) {
-        t.shape[i]   = A.shape[i + 1];
-        t.strides[i] = A.strides[i + 1];
-    }
-    t.entries   = A.entries   + index * A.strides[axis];
-    t.gradients = A.gradients ? A.gradients + index * A.strides[axis] : NULL;
-    t.refcount  = NULL;
+    Tensor t         = A;
+    t.shape[axis]    = length;
+    t.entries        = A.entries   + index * A.strides[axis];
+    t.gradients      = A.gradients ? A.gradients + index * A.strides[axis] : NULL;
+    t.refcount       = NULL;
     return t;
+}
+
+Tensor TensorReshape(Tensor A, int dimensions, int *shape)
+{
+    A.dimensions = dimensions;
+    for (int i = 0; i < dimensions; i++) A.shape[i] = shape[i];
+    A.strides[dimensions - 1] = 1;
+    for (int i = dimensions - 2; i >= 0; i--)
+        A.strides[i] = A.strides[i + 1] * A.shape[i + 1];
+    return A;
 }
 
 Tensor TensorView(Tensor A, int dimensions, int *shape, int autograd)
@@ -229,6 +237,13 @@ Tensor TensorMultiply(Tensor A, Tensor B)
     return out;
 }
 
+void TensorScale(Tensor A, float scalar)
+{
+    int size = TensorSize(A);
+    for (int i = 0; i < size; i++)
+        A.entries[i] *= scalar;
+}
+
 Tensor TensorBroadcast(Tensor A, int n)
 {
     int outShape[MAX_DIMENSIONS];
@@ -300,36 +315,39 @@ void TensorBackward(Tensor loss)
                 break;
             }
 
-            case Multiply: { // out[m,n] = A[m,k] @ B[k,n]
-                Entry *A    = op->A.entries;
-                Entry *B    = op->B.entries;
-                Entry *dA   = op->A.gradients;
-                Entry *dB   = op->B.gradients;
-                Entry *dout = op->out.gradients;
+            case Multiply: { // out[...,m,n] = A[...,m,k] @ B[...,k,n]; batch dims need explicit handling unlike other ops
+                int m            = op->A.shape[op->A.dimensions - 2];
+                int k            = op->A.shape[op->A.dimensions - 1];
+                int n            = op->B.shape[op->B.dimensions - 1];
+                int batchSize    = TensorSize(op->out) / (m * n);
+                int batchStrideA = (op->A.dimensions >= 3) ? op->A.strides[op->A.dimensions - 3] : 0;
+                int batchStrideB = (op->B.dimensions >= 3) ? op->B.strides[op->B.dimensions - 3] : 0;
 
-                int m = op->A.shape[op->A.dimensions - 2];
-                int k = op->A.shape[op->A.dimensions - 1];
-                int n = op->B.shape[op->B.dimensions - 1];
+                for (int batch = 0; batch < batchSize; batch++) {
+                    Entry *A    = op->A.entries   + batch * batchStrideA;
+                    Entry *B    = op->B.entries   + batch * batchStrideB;
+                    Entry *dA   = op->A.gradients ? op->A.gradients + batch * batchStrideA : NULL;
+                    Entry *dB   = op->B.gradients ? op->B.gradients + batch * batchStrideB : NULL;
+                    Entry *dout = op->out.gradients + batch * m * n;
 
-                if (dA) { // dA[m,k] += dout[m,n] @ B^T[n,k]
-                    for (int row = 0; row < m; row++) {
-                        for (int col = 0; col < k; col++) {
-                            Entry sum = 0;
-                            for (int j = 0; j < n; j++)
-                                sum += dout[row * n + j] * B[col * n + j];
-                            dA[row * k + col] += sum;
-                        }
+                    if (dA) { // dA[m,k] += dout[m,n] @ B^T[n,k]
+                        for (int row = 0; row < m; row++)
+                            for (int col = 0; col < k; col++) {
+                                Entry sum = 0;
+                                for (int j = 0; j < n; j++)
+                                    sum += dout[row * n + j] * B[col * n + j];
+                                dA[row * k + col] += sum;
+                            }
                     }
-                }
 
-                if (dB) { // dB[k,n] += A^T[k,m] @ dout[m,n]
-                    for (int row = 0; row < k; row++) {
-                        for (int col = 0; col < n; col++) {
-                            Entry sum = 0;
-                            for (int j = 0; j < m; j++)
-                                sum += A[j * k + row] * dout[j * n + col];
-                            dB[row * n + col] += sum;
-                        }
+                    if (dB) { // dB[k,n] += A^T[k,m] @ dout[m,n]
+                        for (int row = 0; row < k; row++)
+                            for (int col = 0; col < n; col++) {
+                                Entry sum = 0;
+                                for (int j = 0; j < m; j++)
+                                    sum += A[j * k + row] * dout[j * n + col];
+                                dB[row * n + col] += sum;
+                            }
                     }
                 }
                 break;
@@ -412,25 +430,16 @@ Tensor TensorSoftmax(Tensor in, float temperature)
     TensorFree(temp1); TensorFree(temp2);
 
     // Temperature scaling
-    Tensor softmaxInput;
-    if (temperature != 1.0f) {
-        Tensor T = TensorNew(in.dimensions, in.shape, 0);
-        int size = TensorSize(in);
-        for (int i = 0; i < size; i++) T.entries[i] = temperature;
-        Tensor scaledLogits = TensorZip(DIVIDE, stableLogits, T);
-        TensorFree(stableLogits); TensorFree(T);
-        softmaxInput = scaledLogits;
-    } else {
-        softmaxInput = stableLogits;
-    }
+    if (temperature != 1.0f)
+        TensorScale(stableLogits, 1.0f / temperature);
 
-    // out = exp(softmaxInput) ⊘ sum(exp(softmaxInput))
-    Tensor A = TensorMap(EXP, softmaxInput);
+    // out = exp(stableLogits) ⊘ sum(exp(stableLogits))
+    Tensor A = TensorMap(EXP, stableLogits);
     Tensor B = TensorReduce(ADD, 0.0f, A, in.dimensions - 1);
     Tensor C = TensorBroadcast(B, in.shape[in.dimensions - 1]);
     Tensor result = TensorZip(DIVIDE, A, C);
 
-    TensorFree(softmaxInput);
+    TensorFree(stableLogits);
     TensorFree(A); TensorFree(B); TensorFree(C);
     return result;
 }
@@ -445,18 +454,79 @@ Tensor TensorCrossEntropyLoss(Tensor y, Tensor y_hat)
     return result;
 }
 
-int TensorSample(Tensor output, float temperature)
+Tensor TensorSample(Tensor logits, float temperature)
 {
-    Tensor P  = TensorSoftmax(output, temperature);
-    float r   = randomFloat(0.0f, 1.0f);
-    float cdf = 0.0f;
-    int n     = TensorSize(P);
-    for (int i = 0; i < n; i++) {
-        cdf += P.entries[i];
-        if (r <= cdf) { TensorFree(P); return i; }
+    int numClasses = logits.shape[logits.dimensions - 1];
+    int n          = TensorSize(logits) / numClasses;
+
+    int outDims    = logits.dimensions > 1 ? logits.dimensions - 1 : 1;
+    int outShape[MAX_DIMENSIONS];
+    if (logits.dimensions == 1) {
+        outShape[0] = 1;
+    } else {
+        for (int i = 0; i < outDims; i++) outShape[i] = logits.shape[i];
     }
-    TensorFree(P);
-    return n - 1;
+    Tensor out = TensorNew(outDims, outShape, 0);
+
+    if (temperature == 0.0f) {
+        for (int i = 0; i < n; i++) {
+            int best = 0;
+            for (int j = 1; j < numClasses; j++)
+                if (logits.entries[i * numClasses + j] > logits.entries[i * numClasses + best]) best = j;
+            out.entries[i] = (float)best;
+        }
+    } else {
+        Tensor P = TensorSoftmax(logits, temperature);
+        for (int i = 0; i < n; i++) {
+            float r   = randomFloat(0.0f, 1.0f);
+            float cdf = 0.0f;
+            out.entries[i] = (float)(numClasses - 1);
+            for (int j = 0; j < numClasses; j++) {
+                cdf += P.entries[i * numClasses + j];
+                if (r <= cdf) { out.entries[i] = (float)j; break; }
+            }
+        }
+        TensorFree(P);
+    }
+    return out;
+}
+
+float TensorEquality(Tensor A, Tensor B)
+{
+    int n = TensorSize(A);
+    int count = 0;
+    for (int i = 0; i < n; i++)
+        if (A.entries[i] == B.entries[i]) count++;
+    return (float)count / n;
+}
+
+
+Tensor TensorShuffle(Tensor A, unsigned int seed)
+{
+    int n = A.shape[0];
+    int *perm = malloc(n * sizeof(int));
+    if (!perm) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+    for (int i = 0; i < n; i++) perm[i] = i;
+    for (int i = n - 1; i > 0; i--) {
+        // xorshift
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        int j     = (int)(seed % (unsigned int)(i + 1));
+        int tmp   = perm[i];
+        perm[i]   = perm[j];
+        perm[j]   = tmp;
+    }
+
+    Tensor out = TensorNew(A.dimensions, A.shape, 0);
+    int rowSize = TensorSize(A) / n;
+    for (int i = 0; i < n; i++) {
+        memcpy(out.entries + i * rowSize,
+               A.entries + perm[i] * rowSize,
+               rowSize * sizeof(Entry));
+    }
+    free(perm);
+    return out;
 }
 
 void TensorXavier(Tensor A)
@@ -466,6 +536,22 @@ void TensorXavier(Tensor A)
     for (int i = 0; i < size; i++)
         A.entries[i] = (Entry)randomFloat(-bound, bound);
 }
+
+Tensor TensorOneHot(Tensor labels, int numClasses)
+{
+    int outShape[MAX_DIMENSIONS];
+    for (int i = 0; i < labels.dimensions; i++) outShape[i] = labels.shape[i];
+    outShape[labels.dimensions] = numClasses;
+
+    Tensor out = TensorNew(labels.dimensions + 1, outShape, 0);
+    int numLabels = TensorSize(labels);
+
+    for (int i = 0; i < numLabels; i++)
+        out.entries[i * numClasses + (int)labels.entries[i]] = 1.0f;
+
+    return out;
+}
+
 
 void TensorPrint(Tensor A)
 {
@@ -666,20 +752,22 @@ static void zipSubset(void *arg, int start, int end)
 static void multiplySubset(void *arg, int start, int end)
 {
     BinaryArgs *args = arg;
-    int m = args->A.shape[args->A.dimensions - 2];
-    int k = args->A.shape[args->A.dimensions - 1];
-    int n = args->B.shape[1];
-    int strideA_row = args->A.strides[args->A.dimensions - 2];
-    int strideA_col = args->A.strides[args->A.dimensions - 1];
-    int strideB_row = args->B.strides[0];
-    int strideB_col = args->B.strides[1];
-    int batchStride = (args->A.dimensions >= 3) ? args->A.strides[args->A.dimensions - 3] : 0;
+    int m            = args->A.shape[args->A.dimensions - 2];
+    int k            = args->A.shape[args->A.dimensions - 1];
+    int n            = args->B.shape[args->B.dimensions - 1];
+    int strideA_row  = args->A.strides[args->A.dimensions - 2];
+    int strideA_col  = args->A.strides[args->A.dimensions - 1];
+    int strideB_row  = args->B.strides[args->B.dimensions - 2];
+    int strideB_col  = args->B.strides[args->B.dimensions - 1];
+    int batchStrideA = (args->A.dimensions >= 3) ? args->A.strides[args->A.dimensions - 3] : 0;
+    int batchStrideB = (args->B.dimensions >= 3) ? args->B.strides[args->B.dimensions - 3] : 0;
 
     for (int i = start; i < end; i++) {
         int batch = i / m;
         int row   = i % m;
 
-        Entry *A_batch = args->A.entries + batch * batchStride;
+        Entry *A_batch = args->A.entries + batch * batchStrideA;
+        Entry *B_batch = args->B.entries + batch * batchStrideB;
         Entry *C_row   = args->out.entries + (batch * m + row) * n;
 
         for (int j = 0; j < n; j++)
@@ -688,7 +776,7 @@ static void multiplySubset(void *arg, int start, int end)
         for (int l = 0; l < k; l++) {
             Entry a = A_batch[row * strideA_row + l * strideA_col];
             for (int j = 0; j < n; j++)
-                C_row[j] += a * args->B.entries[l * strideB_row + j * strideB_col];
+                C_row[j] += a * B_batch[l * strideB_row + j * strideB_col];
         }
     }
 }

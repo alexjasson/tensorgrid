@@ -31,7 +31,9 @@ Include the header in your code:
 Then compile with:
 ```sh
 gcc main.c -ltensorgrid
-# or
+```
+or
+```sh
 clang main.c -ltensorgrid
 ```
 

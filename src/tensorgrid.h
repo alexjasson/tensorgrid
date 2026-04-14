@@ -71,15 +71,25 @@ void TensorWrite(Tensor A, char *path);
 int TensorSize(Tensor A);
 
 /*
+ * Returns the size of the tensor along the given axis.
+ */
+int TensorShape(Tensor A, int axis);
+
+/*
  * Returns a view with a new shape. Total size must be unchanged. Shares memory
  * with A, use with caution.
  */
 Tensor TensorView(Tensor A, int dimensions, int *shape, int autograd);
 
 /*
- * Returns a view of A[index] along the given axis (dimensions reduced by 1).
+ * Returns A with a new shape. Total size must be unchanged. Does not allocate memory.
  */
-Tensor TensorSlice(Tensor A, int axis, int index);
+Tensor TensorReshape(Tensor A, int dimensions, int *shape);
+
+/*
+ * Returns a view of length entries starting at index along the given axis.
+ */
+Tensor TensorSlice(Tensor A, int axis, int index, int length);
 
 /*
  * Returns a view with the last two dimensions transposed.
@@ -126,9 +136,9 @@ Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis);
 Tensor TensorBroadcast(Tensor A, int n);
 
 /*
- * Multiply A by B using A's last two dimensions as matrices.
+ * Multiply A by B using the last two dimensions as matrices.
  * A:   [..., m, k]
- * B:   [k, n]
+ * B:   [..., k, n]
  * out: [..., m, n]
  */
 Tensor TensorMultiply(Tensor A, Tensor B);
@@ -143,10 +153,29 @@ static inline Tensor TensorHadamard(Tensor A, Tensor B) { return TensorZip(MULTI
  *                                Utilities
  *========================================================================*/
 
+
+/*
+ * Returns a new tensor with rows shuffled via Fisher-Yates.
+ * The same seed always produces the same permutation, allowing multiple
+ * tensors to be shuffled in sync.
+ */
+Tensor TensorShuffle(Tensor A, unsigned int seed);
+
+/*
+ * Multiplies all entries of A by scalar in-place.
+ */
+void TensorScale(Tensor A, float scalar);
+
 /*
  * Xavier initialize a tensor using the last two dimensions as fan_in/fan_out.
  */
 void TensorXavier(Tensor A);
+
+/*
+ * Converts an integer label tensor of shape [...] into a one-hot tensor of
+ * shape [..., numClasses]. Labels must be non-negative integers in [0, numClasses)
+ */
+Tensor TensorOneHot(Tensor labels, int numClasses);
 
 /*
  * Prints a tensor to stdout. Tensors of size 1 are printed as scalars.
@@ -173,9 +202,18 @@ Tensor TensorSoftmax(Tensor in, float temperature);
 Tensor TensorCrossEntropyLoss(Tensor y, Tensor y_hat);
 
 /*
- * Applies softmax to output logits and samples an index using inverse CDF sampling.
+ * Samples an index along the last dimension of logits for each row.
+ * temperature == 0 is greedy, otherwise samples from softmax distribution.
+ * Assumes contiguous row-major layout - do not use on transposed tensors.
+ * logits: [..., numClasses]
+ * out:    [...]
  */
-int TensorSample(Tensor output, float temperature);
+Tensor TensorSample(Tensor logits, float temperature);
+
+/*
+ * Returns the fraction of entries that are equal between A and B, in [0, 1].
+ */
+float TensorEquality(Tensor A, Tensor B);
 
 /*
  * Starts with loss tensor, takes mean for each entry, then propogates gradients
