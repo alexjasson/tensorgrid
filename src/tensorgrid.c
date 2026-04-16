@@ -491,13 +491,13 @@ Tensor TensorSample(Tensor logits, float temperature)
     return out;
 }
 
-float TensorEquality(Tensor A, Tensor B)
+int TensorHammingDistance(Tensor A, Tensor B)
 {
     int n = TensorSize(A);
     int count = 0;
     for (int i = 0; i < n; i++)
-        if (A.entries[i] == B.entries[i]) count++;
-    return (float)count / n;
+        if (A.entries[i] != B.entries[i]) count++;
+    return count;
 }
 
 

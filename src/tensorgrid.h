@@ -186,8 +186,8 @@ void TensorPrint(Tensor A);
  * Softmax over the last dimension.
  * out = exp(in / T) ⊘ sum(exp(in / T))
  *
- * in:  Input logits    [..., n]
- * out: Probabilities   [..., n]
+ * in:  Input logits    [..., numClasses]
+ * out: Probabilities   [..., numClasses]
  */
 Tensor TensorSoftmax(Tensor in, float temperature);
 
@@ -195,8 +195,8 @@ Tensor TensorSoftmax(Tensor in, float temperature);
  * Cross entropy loss over the last dimension.
  * out = -sum(y ⊙ log(y_hat))
  *
- * y_hat: Predicted probabilities [..., n]
- * y:     Target distribution     [..., n]
+ * y_hat: Predicted probabilities [..., numClasses]
+ * y:     Target distribution     [..., numClasses]
  * out:   Cross entropy loss      [..., 1]
  */
 Tensor TensorCrossEntropyLoss(Tensor y, Tensor y_hat);
@@ -211,9 +211,9 @@ Tensor TensorCrossEntropyLoss(Tensor y, Tensor y_hat);
 Tensor TensorSample(Tensor logits, float temperature);
 
 /*
- * Returns the fraction of entries that are equal between A and B, in [0, 1].
+ * Returns the number of positions at which corresponding entries of A and B differ.
  */
-float TensorEquality(Tensor A, Tensor B);
+int TensorHammingDistance(Tensor A, Tensor B);
 
 /*
  * Starts with loss tensor, takes mean for each entry, then propogates gradients
