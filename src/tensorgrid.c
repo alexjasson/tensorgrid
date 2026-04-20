@@ -65,6 +65,16 @@ typedef struct {
     Tensor out, A, B;
     Bivariate op;
 } BinaryArgs;
+typedef struct {
+    Tensor out, A;
+    Bivariate op;
+    int axis;
+    Entry initial;
+} ReduceArgs;
+typedef struct {
+    Tensor out, A;
+    int n;
+} BroadcastArgs;
 
 typedef enum { Map, Zip, Multiply, Broadcast, Reduce } OperationType;
 
@@ -81,6 +91,8 @@ typedef struct {
 static void mapSubset(void *arg, int start, int end);
 static void zipSubset(void *arg, int start, int end);
 static void multiplySubset(void *arg, int start, int end);
+static void reduceSubset(void *arg, int start, int end);
+static void broadcastSubset(void *arg, int start, int end);
 
 // Operation array functions
 static DynamicArray operationArrayGet(void);
@@ -188,20 +200,8 @@ Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
     outShape[axis] = 1;
     Tensor out = TensorNew(A.dimensions, outShape, A.gradients != NULL);
 
-    int axisSize = A.shape[axis];
-    int outSize  = TensorSize(out);
-    for (int o = 0; o < outSize; o++) {
-        int base = 0, remainder = o;
-        for (int d = 0; d < A.dimensions; d++) {
-            int idx    = remainder / out.strides[d];
-            remainder -= idx * out.strides[d];
-            base      += idx * A.strides[d];
-        }
-        Entry result = initial;
-        for (int k = 0; k < axisSize; k++)
-            result = f.f(result, A.entries[base + k * A.strides[axis]]);
-        out.entries[o] = result;
-    }
+    ReduceArgs args = {out, A, f, axis, initial};
+    ThreadPoolMap(ThreadPoolGet(), reduceSubset, &args, TensorSize(out));
 
     if (out.gradients && A.gradients)
         operationArrayPush(operationArrayGet(), (Operation){ .type=Reduce, .out=out, .A=A, .axis=axis, .b=f, .initial=initial });
@@ -271,10 +271,8 @@ Tensor TensorBroadcast(Tensor A, int n)
     outShape[A.dimensions - 1] = n;
     Tensor out = TensorNew(A.dimensions, outShape, A.gradients != NULL);
 
-    int batch = TensorSize(A);
-    for (int i = 0; i < batch; i++)
-        for (int j = 0; j < n; j++)
-            out.entries[i * n + j] = A.entries[i];
+    BroadcastArgs args = {out, A, n};
+    ThreadPoolMap(ThreadPoolGet(), broadcastSubset, &args, TensorSize(A));
 
     if (out.gradients && A.gradients)
         operationArrayPush(operationArrayGet(),(Operation){ .type=Broadcast, .out=out, .A=A });
@@ -856,6 +854,35 @@ static void multiplySubset(void *arg, int start, int end)
                 C_row[j] += a * B_batch[l * strideB_row + j * strideB_col];
         }
     }
+}
+
+static void reduceSubset(void *arg, int start, int end)
+{
+    ReduceArgs *args = arg;
+    int axis     = args->axis;
+    int axisSize = args->A.shape[axis];
+    int aStride  = args->A.strides[axis];
+    for (int o = start; o < end; o++) {
+        int base = 0, remainder = o;
+        for (int d = 0; d < args->A.dimensions; d++) {
+            int idx    = remainder / args->out.strides[d];
+            remainder -= idx * args->out.strides[d];
+            base      += idx * args->A.strides[d];
+        }
+        Entry result = args->initial;
+        for (int k = 0; k < axisSize; k++)
+            result = args->op.f(result, args->A.entries[base + k * aStride]);
+        args->out.entries[o] = result;
+    }
+}
+
+static void broadcastSubset(void *arg, int start, int end)
+{
+    BroadcastArgs *args = arg;
+    int n = args->n;
+    for (int i = start; i < end; i++)
+        for (int j = 0; j < n; j++)
+            args->out.entries[i * n + j] = args->A.entries[i];
 }
 
 static DynamicArray operationArrayGet(void)
