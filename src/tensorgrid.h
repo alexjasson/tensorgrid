@@ -170,6 +170,11 @@ Tensor TensorShuffle(Tensor A, unsigned int seed);
 void TensorScale(Tensor A, float scalar);
 
 /*
+ * Sets all entries of A to the given value.
+ */
+void TensorFill(Tensor A, Entry value);
+
+/*
  * Xavier initialize a tensor using the last two dimensions as fan_in/fan_out.
  */
 void TensorXavier(Tensor A);
@@ -203,6 +208,16 @@ Tensor TensorSoftmax(Tensor in, float temperature);
  * out:   Cross entropy loss      [..., 1]
  */
 Tensor TensorCrossEntropyLoss(Tensor y, Tensor y_hat);
+
+/*
+ * Mean squared error over the last dimension.
+ * out = mean((y - y_hat)^2)
+ *
+ * y:     Target values    [..., numClasses]
+ * y_hat: Predicted values [..., numClasses]
+ * out:   MSE loss         [..., 1]
+ */
+Tensor TensorMSE(Tensor y, Tensor y_hat);
 
 /*
  * Samples an index along the last dimension of logits for each row.

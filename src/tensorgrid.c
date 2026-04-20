@@ -257,6 +257,13 @@ void TensorScale(Tensor A, float scalar)
         A.entries[i] *= scalar;
 }
 
+void TensorFill(Tensor A, Entry value)
+{
+    int size = TensorSize(A);
+    for (int i = 0; i < size; i++)
+        A.entries[i] = value;
+}
+
 Tensor TensorBroadcast(Tensor A, int n)
 {
     int outShape[MAX_DIMENSIONS];
@@ -508,6 +515,19 @@ Tensor TensorCrossEntropyLoss(Tensor y, Tensor y_hat)
     Tensor C = TensorReduce(ADD, 0.0f, B, y.dimensions - 1);
     Tensor result = TensorMap(NEGATE, C);
     TensorFree(A); TensorFree(B); TensorFree(C);
+    return result;
+}
+
+Tensor TensorMSE(Tensor y, Tensor y_hat)
+{
+    int numClasses = y.shape[y.dimensions - 1];
+    Tensor A = TensorZip(SUBTRACT, y, y_hat);
+    Tensor B = TensorZip(MULTIPLY, A, A);
+    Tensor C = TensorReduce(ADD, 0.0f, B, y.dimensions - 1);
+    Tensor n = TensorNew(C.dimensions, C.shape, FALSE);
+    TensorFill(n, (Entry)numClasses);
+    Tensor result = TensorZip(DIVIDE, C, n);
+    TensorFree(A); TensorFree(B); TensorFree(C); TensorFree(n);
     return result;
 }
 
