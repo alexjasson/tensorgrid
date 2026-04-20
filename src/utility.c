@@ -1,10 +1,11 @@
 // https://github.com/alexjasson/tensorgrid
 
 #include <stdint.h>
+#include <float.h>
 #include <time.h>
 #include "utility.h"
 
-static uint32_t xorshift(void)
+float randomFloat(float lower, float upper)
 {
     static uint32_t state = 0;
     static int seeded = 0;
@@ -14,16 +15,45 @@ static uint32_t xorshift(void)
         seeded = 1;
     }
 
-    uint32_t x = state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    state = x;
-    return x;
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+
+    float r = (state >> 8) / 16777216.0f;
+    return lower + r * (upper - lower);
 }
 
-float randomFloat(float lower, float upper)
+// exp(x) with ~1e-5 relative error
+float fastExp(float x)
 {
-    float r = (xorshift() >> 8) / 16777216.0f;
-    return lower + r * (upper - lower);
+    if (x >  88.7f) return FLT_MAX;
+    if (x < -87.3f) return 0.0f;
+
+    int   n = (int)(x * 1.4426950408889634f + (x >= 0.0f ? 0.5f : -0.5f));
+    float r = x - (float)n * 0.6931471805599453f;
+
+    // 5th-order Taylor: 1 + r + r^2/2 + r^3/6 + r^4/24 + r^5/120
+    float p = 1.0f + r + r * r * (0.5f + r * ((1.0f/6.0f) + r * ((1.0f/24.0f) + r * (1.0f/120.0f))));
+
+    union { float f; int32_t i; } u;
+    u.i = (127 + n) << 23;
+    return p * u.f;
+}
+
+// log(x) with ~1e-5 relative error
+float fastLog(float x)
+{
+    if (x <= 0.0f) return -FLT_MAX;
+
+    union { float f; int32_t i; } u;
+    u.f     = x;
+    int   e = ((u.i >> 23) & 0xFF) - 127;
+    u.i     = (u.i & 0x007FFFFF) | 0x3F800000;
+    float m = u.f;
+
+    float t  = (m - 1.0f) / (m + 1.0f);
+    float t2 = t * t;
+    float l  = 2.0f * t * (1.0f + t2 * ((1.0f/3.0f) + t2 * ((1.0f/5.0f) + t2 * (1.0f/7.0f))));
+
+    return l + (float)e * 0.6931471805599453f;
 }

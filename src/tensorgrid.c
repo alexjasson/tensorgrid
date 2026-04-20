@@ -13,15 +13,15 @@
 // Univariate functions and derivatives
 static Entry relu(Entry a)     { return a > 0.0f ? a : 0.0f; }
 static Entry drelu(Entry a)    { return a > 0.0f ? 1.0f : 0.0f; }
-static Entry sigmoid(Entry a)  { return 1.0f / (1.0f + __builtin_expf(-a)); }
+static Entry sigmoid(Entry a)  { return 1.0f / (1.0f + fastExp(-a)); }
 static Entry dsigmoid(Entry a) { return sigmoid(a) * (1.0f - sigmoid(a)); }
-static Entry loge(Entry a)     { return __builtin_logf(a); }
+static Entry loge(Entry a)     { return fastLog(a); }
 static Entry dloge(Entry a)    { return 1.0f / a; }
 static Entry negate(Entry a)   { return -a; }
 static Entry identity(Entry a) { return a; }
 static Entry one(Entry a)      { (void)a; return  1.0f; }
 static Entry minusOne(Entry a) { (void)a; return -1.0f; }
-static Entry expe(Entry a)     { return __builtin_expf(a); }
+static Entry expe(Entry a)     { return fastExp(a); }
 
 // Bivariate functions and partial derivatives
 static Entry add(Entry a, Entry b)       { return a + b; }

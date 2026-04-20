@@ -28,13 +28,15 @@ Include the header in your code:
 #include <tensorgrid.h>
 ```
 
-Then compile with:
+Then compile and run with:
 ```sh
-gcc main.c -ltensorgrid
+gcc main.c -o main -ltensorgrid
+./main
 ```
 or
 ```sh
-clang main.c -ltensorgrid
+clang main.c -o main -ltensorgrid
+./main
 ```
 
 ## Uninstall
