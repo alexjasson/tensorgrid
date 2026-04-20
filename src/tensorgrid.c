@@ -50,6 +50,17 @@ Bivariate  MULTIPLY = { multiply, second,    first     };
 Bivariate  DIVIDE   = { divide,   divideDa,  divideDb  };
 Bivariate  MAX      = { max,      maxDa,     maxDb     };
 
+typedef enum { Map, Zip, Multiply, Broadcast, Reduce } OperationType;
+
+// Tensor operation representation - used for autograd
+typedef struct {
+    OperationType type;
+    Tensor out, A, B;
+    union { Univariate u; Bivariate b; };
+    int axis;      // axis needed for reduce operation
+    Entry initial; // initial value needed for reduce operation
+} Operation;
+
 typedef struct optimizer {
     Entry *m;     // SGD momentum or Adam first moment
     Entry *v;     // Adam second moment
@@ -76,23 +87,18 @@ typedef struct {
     int n;
 } BroadcastArgs;
 
-typedef enum { Map, Zip, Multiply, Broadcast, Reduce } OperationType;
-
-// Tensor operation representation - used for autograd
-typedef struct {
-    OperationType type;
-    Tensor out, A, B;
-    union { Univariate u; Bivariate b; };
-    int axis;      // axis needed for reduce operation
-    Entry initial; // initial value needed for reduce operation
-} Operation;
-
 // Kernel functions
-static void mapSubset(void *arg, int start, int end);
-static void zipSubset(void *arg, int start, int end);
-static void multiplySubset(void *arg, int start, int end);
-static void reduceSubset(void *arg, int start, int end);
-static void broadcastSubset(void *arg, int start, int end);
+static void mapForward(void *arg, int start, int end);
+static void zipForward(void *arg, int start, int end);
+static void multiplyForward(void *arg, int start, int end);
+static void reduceForward(void *arg, int start, int end);
+static void broadcastForward(void *arg, int start, int end);
+static void mapBackward(void *arg, int start, int end);
+static void zipBackward(void *arg, int start, int end);
+static void multiplyBackwardDa(void *arg, int start, int end);
+static void multiplyBackwardDb(void *arg, int start, int end);
+static void broadcastBackward(void *arg, int start, int end);
+static void reduceBackward(void *arg, int start, int end);
 
 // Operation array functions
 static DynamicArray operationArrayGet(void);
@@ -111,7 +117,6 @@ int TensorShape(Tensor A, int axis)
 {
     return A.shape[axis];
 }
-
 
 Tensor TensorNew(int dimensions, int *shape, int autograd)
 {
@@ -201,7 +206,7 @@ Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
     Tensor out = TensorNew(A.dimensions, outShape, A.gradients != NULL);
 
     ReduceArgs args = {out, A, f, axis, initial};
-    ThreadPoolMap(ThreadPoolGet(), reduceSubset, &args, TensorSize(out));
+    ThreadPoolMap(ThreadPoolGet(), reduceForward, &args, TensorSize(out));
 
     if (out.gradients && A.gradients)
         operationArrayPush(operationArrayGet(), (Operation){ .type=Reduce, .out=out, .A=A, .axis=axis, .b=f, .initial=initial });
@@ -212,7 +217,7 @@ Tensor TensorMap(Univariate op, Tensor A)
 {
     Tensor out = TensorNew(A.dimensions, A.shape, A.gradients != NULL);
     UnaryArgs args = {out, A, op};
-    ThreadPoolMap(ThreadPoolGet(), mapSubset, &args, TensorSize(A));
+    ThreadPoolMap(ThreadPoolGet(), mapForward, &args, TensorSize(A));
 
     if (out.gradients && A.gradients)
         operationArrayPush(operationArrayGet(),(Operation){ .type=Map, .out=out, .A=A, .u=op });
@@ -224,7 +229,7 @@ Tensor TensorZip(Bivariate op, Tensor A, Tensor B)
     int autograd = A.gradients != NULL || B.gradients != NULL;
     Tensor out = TensorNew(A.dimensions, A.shape, autograd);
     BinaryArgs args = {out, A, B, op};
-    ThreadPoolMap(ThreadPoolGet(), zipSubset, &args, TensorSize(A));
+    ThreadPoolMap(ThreadPoolGet(), zipForward, &args, TensorSize(A));
 
     if (out.gradients)
         operationArrayPush(operationArrayGet(),(Operation){ .type=Zip, .out=out, .A=A, .B=B, .b=op });
@@ -243,7 +248,7 @@ Tensor TensorMultiply(Tensor A, Tensor B)
     int k         = A.shape[A.dimensions - 1];
     int batchSize = TensorSize(A) / (m * k);
     BinaryArgs args = {out, A, B, {NULL, NULL, NULL}};
-    ThreadPoolMap(ThreadPoolGet(), multiplySubset, &args, batchSize * m);
+    ThreadPoolMap(ThreadPoolGet(), multiplyForward, &args, batchSize * m);
 
     if (out.gradients)
         operationArrayPush(operationArrayGet(),(Operation){ .type=Multiply, .out=out, .A=A, .B=B });
@@ -272,7 +277,7 @@ Tensor TensorBroadcast(Tensor A, int n)
     Tensor out = TensorNew(A.dimensions, outShape, A.gradients != NULL);
 
     BroadcastArgs args = {out, A, n};
-    ThreadPoolMap(ThreadPoolGet(), broadcastSubset, &args, TensorSize(A));
+    ThreadPoolMap(ThreadPoolGet(), broadcastForward, &args, TensorSize(A));
 
     if (out.gradients && A.gradients)
         operationArrayPush(operationArrayGet(),(Operation){ .type=Broadcast, .out=out, .A=A });
@@ -292,48 +297,27 @@ void TensorBackward(Tensor loss)
 
     // Take mean over all loss entries
     int lossSize = TensorSize(loss);
-    for (int i = 0; i < lossSize; i++)
-        loss.gradients[i] = 1.0f / lossSize;
+    TensorScale(loss, 1.0f / lossSize);
 
     // Accumulate gradients backwards
+    ThreadPool pool = ThreadPoolGet();
     for (int i = DynamicArraySize(arr) - 1; i >= 0; i--) {
         Operation *op = DynamicArrayGet(arr, i);
 
         switch (op->type) {
             case Map: {
-                Entry *A    = op->A.entries;
-                Entry *dA   = op->A.gradients;
-                Entry *dout = op->out.gradients;
-                int n       = TensorSize(op->out);
-
-                if (dA) {
-                    for (int j = 0; j < n; j++)
-                        dA[j] += dout[j] * op->u.da(A[j]);
-                }
+                if (op->A.gradients)
+                    ThreadPoolMap(pool, mapBackward, op, TensorSize(op->out));
                 break;
             }
 
             case Zip: {
-                Entry *A    = op->A.entries;
-                Entry *B    = op->B.entries;
-                Entry *dA   = op->A.gradients;
-                Entry *dB   = op->B.gradients;
-                Entry *dout = op->out.gradients;
-                int n       = TensorSize(op->out);
-
-                if (dA) {
-                    for (int j = 0; j < n; j++)
-                        dA[j] += dout[j] * op->b.da(A[j], B[j]);
-                }
-
-                if (dB) {
-                    for (int j = 0; j < n; j++)
-                        dB[j] += dout[j] * op->b.db(A[j], B[j]);
-                }
+                if (op->A.gradients || op->B.gradients)
+                    ThreadPoolMap(pool, zipBackward, op, TensorSize(op->out));
                 break;
             }
 
-            case Multiply: { // out[...,m,n] = A[...,m,k] @ B[...,k,n]; batch dims need explicit handling unlike other ops
+            case Multiply: { // out[...,m,n] = A[...,m,k] @ B[...,k,n]
                 int m            = op->A.shape[op->A.dimensions - 2];
                 int k            = op->A.shape[op->A.dimensions - 1];
                 int n            = op->B.shape[op->B.dimensions - 1];
@@ -341,89 +325,29 @@ void TensorBackward(Tensor loss)
                 int batchStrideA = (op->A.dimensions >= 3) ? op->A.strides[op->A.dimensions - 3] : 0;
                 int batchStrideB = (op->B.dimensions >= 3) ? op->B.strides[op->B.dimensions - 3] : 0;
 
-                for (int batch = 0; batch < batchSize; batch++) {
-                    Entry *A    = op->A.entries   + batch * batchStrideA;
-                    Entry *B    = op->B.entries   + batch * batchStrideB;
-                    Entry *dA   = op->A.gradients ? op->A.gradients + batch * batchStrideA : NULL;
-                    Entry *dB   = op->B.gradients ? op->B.gradients + batch * batchStrideB : NULL;
-                    Entry *dout = op->out.gradients + batch * m * n;
-
-                    if (dA) { // dA[m,k] += dout[m,n] @ B^T[n,k]
-                        for (int row = 0; row < m; row++)
-                            for (int col = 0; col < k; col++) {
-                                Entry sum = 0;
-                                for (int j = 0; j < n; j++)
-                                    sum += dout[row * n + j] * B[col * n + j];
-                                dA[row * k + col] += sum;
-                            }
-                    }
-
-                    if (dB) { // dB[k,n] += A^T[k,m] @ dout[m,n]
-                        for (int row = 0; row < k; row++)
-                            for (int col = 0; col < n; col++) {
-                                Entry sum = 0;
-                                for (int j = 0; j < m; j++)
-                                    sum += A[j * k + row] * dout[j * n + col];
-                                dB[row * n + col] += sum;
-                            }
-                    }
+                if (op->A.gradients) {
+                    int total = batchStrideA ? batchSize * m : m;
+                    ThreadPoolMap(pool, multiplyBackwardDa, op, total);
+                }
+                if (op->B.gradients) {
+                    int total = batchStrideB ? batchSize * k : k;
+                    ThreadPoolMap(pool, multiplyBackwardDb, op, total);
                 }
                 break;
             }
 
             case Broadcast: { // out[rows,n] = broadcast(A[rows,1])
-                Entry *dA   = op->A.gradients;
-                Entry *dout = op->out.gradients;
-
-                int n    = op->out.shape[op->out.dimensions - 1];
-                int rows = TensorSize(op->out) / n;
-
-                if (dA) { // dA[rows,1] += sum(dout[rows,n], axis=last)
-                    for (int r = 0; r < rows; r++) {
-                        Entry sum = 0;
-                        for (int j = 0; j < n; j++)
-                            sum += dout[r * n + j];
-                        dA[r] += sum;
-                    }
+                if (op->A.gradients) {
+                    int n    = op->out.shape[op->out.dimensions - 1];
+                    int rows = TensorSize(op->out) / n;
+                    ThreadPoolMap(pool, broadcastBackward, op, rows);
                 }
                 break;
             }
 
             case Reduce: { // out[...,1,...] = reduce(f, A[...,k,...], axis)
-                Entry *dA   = op->A.gradients;
-                Entry *dout = op->out.gradients;
-                int outSize = TensorSize(op->out);
-
-                if (dA) {
-                    int axisSize   = op->A.shape[op->axis];
-                    int axisStride = op->A.strides[op->axis];
-
-                    Entry *result = malloc(axisSize * sizeof(Entry));
-                    if (!result) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
-
-                    for (int o = 0; o < outSize; o++) {
-                        int base = 0, remainder = o;
-                        for (int d = 0; d < op->A.dimensions; d++) {
-                            int idx = remainder / op->out.strides[d];
-                            remainder    -= idx * op->out.strides[d];
-                            base   += idx * op->A.strides[d];
-                        }
-
-                        result[0] = op->initial;
-                        for (int k = 0; k < axisSize - 1; k++)
-                            result[k + 1] = op->b.f(result[k], op->A.entries[base + k * axisStride]);
-
-                        // dA[...,k,...] += dresult * db(result[...,k,...], A[...,k,...])
-                        // dresult       *= da(result[...,k,...], A[...,k,...])
-                        Entry dresult = dout[o];
-                        for (int k = axisSize - 1; k >= 0; k--) {
-                            Entry Ak = op->A.entries[base + k * axisStride];
-                            dA[base + k * axisStride] += dresult * op->b.db(result[k], Ak);
-                            dresult *= op->b.da(result[k], Ak);
-                        }
-                    }
-                    free(result);
-                }
+                if (op->A.gradients)
+                    ThreadPoolMap(pool, reduceBackward, op, TensorSize(op->out));
                 break;
             }
         }
@@ -810,21 +734,21 @@ void TensorSet(Tensor A, int *indices, Entry value)
     A.entries[idx] = value;
 }
 
-static void mapSubset(void *arg, int start, int end)
+static void mapForward(void *arg, int start, int end)
 {
     UnaryArgs *args = arg;
     for (int i = start; i < end; i++)
         args->out.entries[i] = args->op.f(args->A.entries[i]);
 }
 
-static void zipSubset(void *arg, int start, int end)
+static void zipForward(void *arg, int start, int end)
 {
     BinaryArgs *args = arg;
     for (int i = start; i < end; i++)
         args->out.entries[i] = args->op.f(args->A.entries[i], args->B.entries[i]);
 }
 
-static void multiplySubset(void *arg, int start, int end)
+static void multiplyForward(void *arg, int start, int end)
 {
     BinaryArgs *args = arg;
     int m            = args->A.shape[args->A.dimensions - 2];
@@ -856,7 +780,7 @@ static void multiplySubset(void *arg, int start, int end)
     }
 }
 
-static void reduceSubset(void *arg, int start, int end)
+static void reduceForward(void *arg, int start, int end)
 {
     ReduceArgs *args = arg;
     int axis     = args->axis;
@@ -876,13 +800,150 @@ static void reduceSubset(void *arg, int start, int end)
     }
 }
 
-static void broadcastSubset(void *arg, int start, int end)
+static void broadcastForward(void *arg, int start, int end)
 {
     BroadcastArgs *args = arg;
     int n = args->n;
     for (int i = start; i < end; i++)
         for (int j = 0; j < n; j++)
             args->out.entries[i * n + j] = args->A.entries[i];
+}
+
+static void mapBackward(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    Entry *A    = op->A.entries;
+    Entry *dA   = op->A.gradients;
+    Entry *dout = op->out.gradients;
+    for (int j = start; j < end; j++)
+        dA[j] += dout[j] * op->u.da(A[j]);
+}
+
+static void zipBackward(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    Entry *A    = op->A.entries;
+    Entry *B    = op->B.entries;
+    Entry *dA   = op->A.gradients;
+    Entry *dB   = op->B.gradients;
+    Entry *dout = op->out.gradients;
+    if (dA && dB) {
+        for (int j = start; j < end; j++) {
+            Entry g = dout[j];
+            dA[j] += g * op->b.da(A[j], B[j]);
+            dB[j] += g * op->b.db(A[j], B[j]);
+        }
+    } else if (dA) {
+        for (int j = start; j < end; j++)
+            dA[j] += dout[j] * op->b.da(A[j], B[j]);
+    } else if (dB) {
+        for (int j = start; j < end; j++)
+            dB[j] += dout[j] * op->b.db(A[j], B[j]);
+    }
+}
+
+static void multiplyBackwardDa(void *arg, int start, int end)
+{
+    // dA[m,k] += dout[m,n] @ B^T[n,k]
+    Operation *op    = arg;
+    int m            = op->A.shape[op->A.dimensions - 2];
+    int k            = op->A.shape[op->A.dimensions - 1];
+    int n            = op->B.shape[op->B.dimensions - 1];
+    int batchSize    = TensorSize(op->out) / (m * n);
+    int batchStrideA = (op->A.dimensions >= 3) ? op->A.strides[op->A.dimensions - 3] : 0;
+    int batchStrideB = (op->B.dimensions >= 3) ? op->B.strides[op->B.dimensions - 3] : 0;
+
+    for (int i = start; i < end; i++) {
+        int batchFrom, batchTo, row;
+        if (batchStrideA) { batchFrom = i / m; batchTo = batchFrom + 1; row = i % m; }
+        else              { batchFrom = 0;     batchTo = batchSize;     row = i;     }
+
+        Entry *dA = op->A.gradients + batchFrom * batchStrideA;
+        for (int col = 0; col < k; col++) {
+            Entry sum = 0;
+            for (int batch = batchFrom; batch < batchTo; batch++) {
+                Entry *B    = op->B.entries    + batch * batchStrideB;
+                Entry *dout = op->out.gradients + batch * m * n;
+                for (int j = 0; j < n; j++)
+                    sum += dout[row * n + j] * B[col * n + j];
+            }
+            dA[row * k + col] += sum;
+        }
+    }
+}
+
+static void multiplyBackwardDb(void *arg, int start, int end)
+{
+    // dB[k,n] += A^T[k,m] @ dout[m,n]
+    Operation *op    = arg;
+    int m            = op->A.shape[op->A.dimensions - 2];
+    int k            = op->A.shape[op->A.dimensions - 1];
+    int n            = op->B.shape[op->B.dimensions - 1];
+    int batchSize    = TensorSize(op->out) / (m * n);
+    int batchStrideA = (op->A.dimensions >= 3) ? op->A.strides[op->A.dimensions - 3] : 0;
+    int batchStrideB = (op->B.dimensions >= 3) ? op->B.strides[op->B.dimensions - 3] : 0;
+
+    for (int i = start; i < end; i++) {
+        int batchFrom, batchTo, row;
+        if (batchStrideB) { batchFrom = i / k; batchTo = batchFrom + 1; row = i % k; }
+        else              { batchFrom = 0;     batchTo = batchSize;     row = i;     }
+
+        Entry *dB = op->B.gradients + batchFrom * batchStrideB;
+        for (int col = 0; col < n; col++) {
+            Entry sum = 0;
+            for (int batch = batchFrom; batch < batchTo; batch++) {
+                Entry *A    = op->A.entries    + batch * batchStrideA;
+                Entry *dout = op->out.gradients + batch * m * n;
+                for (int j = 0; j < m; j++)
+                    sum += A[j * k + row] * dout[j * n + col];
+            }
+            dB[row * n + col] += sum;
+        }
+    }
+}
+
+static void broadcastBackward(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    Entry *dA     = op->A.gradients;
+    Entry *dout   = op->out.gradients;
+    int n         = op->out.shape[op->out.dimensions - 1];
+    for (int r = start; r < end; r++) {
+        Entry sum = 0;
+        for (int j = 0; j < n; j++)
+            sum += dout[r * n + j];
+        dA[r] += sum;
+    }
+}
+
+static void reduceBackward(void *arg, int start, int end)
+{
+    Operation *op  = arg;
+    Entry *dA      = op->A.gradients;
+    Entry *dout    = op->out.gradients;
+    int axisSize   = op->A.shape[op->axis];
+    int axisStride = op->A.strides[op->axis];
+    Entry result[axisSize];
+
+    for (int o = start; o < end; o++) {
+        int base = 0, remainder = o;
+        for (int d = 0; d < op->A.dimensions; d++) {
+            int idx    = remainder / op->out.strides[d];
+            remainder -= idx * op->out.strides[d];
+            base      += idx * op->A.strides[d];
+        }
+
+        result[0] = op->initial;
+        for (int k = 0; k < axisSize - 1; k++)
+            result[k + 1] = op->b.f(result[k], op->A.entries[base + k * axisStride]);
+
+        Entry dresult = dout[o];
+        for (int k = axisSize - 1; k >= 0; k--) {
+            Entry Ak = op->A.entries[base + k * axisStride];
+            dA[base + k * axisStride] += dresult * op->b.db(result[k], Ak);
+            dresult *= op->b.da(result[k], Ak);
+        }
+    }
 }
 
 static DynamicArray operationArrayGet(void)
