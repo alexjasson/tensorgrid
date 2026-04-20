@@ -11,14 +11,17 @@ typedef Entry (*BivariateFn)(Entry, Entry); // y = f(a,b) on entries in A and B
 typedef struct { UnivariateFn f; UnivariateFn da; } Univariate;              // y = f(a) and dy/da
 typedef struct { BivariateFn f; BivariateFn da; BivariateFn db; } Bivariate; // y = f(a,b), dy/da and dy/db
 
+typedef struct optimizer Optimizer;
+
 // Tensor representation
 typedef struct {
     int dimensions;
     int shape[MAX_DIMENSIONS];
     int strides[MAX_DIMENSIONS];
     Entry *entries;
-    Entry *gradients; // NULL if no autograd
-    int   *refcount;  // Number of references, NULL for views
+    Entry *gradients;      // NULL if no autograd
+    Optimizer *optimizer;  // Optimizer state, NULL if no autograd
+    int   *refcount;       // Number of references, NULL for views
 } Tensor;
 
 // Univariate/Bivariate functions to be applied to tensors
@@ -223,8 +226,23 @@ int TensorHammingDistance(Tensor A, Tensor B);
 void TensorBackward(Tensor loss);
 
 /*
- * A -= lr * gradients. Must be called after TensorBackward.
+ * Stochastic gradient descent with optional momentum. Set momentum to 0 for
+ * standard SGD. Must be called after
+ * TensorBackward.
+ *
+ * momentum == 0: A -= lr * gradients.
+ * momentum != 0: m = momentum * m + gradients; A -= lr * m.
  */
-void TensorSGD(Tensor A, float lr);
+void TensorSGD(Tensor A, float lr, float momentum);
+
+/*
+ * Adam optimizer with optional weight decay. Set weightDecay to 0 for Adam
+ * and weightDecay > 0 for AdamW. Must be called after TensorBackward.
+ *
+ * m = beta1 * m + (1 - beta1) * gradients
+ * v = beta2 * v + (1 - beta2) * gradients^2
+ * A -= lr * (m_hat / (sqrt(v_hat) + epsilon) + weightDecay * A)
+ */
+void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, float weightDecay);
 
 #endif

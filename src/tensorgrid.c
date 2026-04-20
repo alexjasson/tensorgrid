@@ -50,6 +50,12 @@ Bivariate  MULTIPLY = { multiply, second,    first     };
 Bivariate  DIVIDE   = { divide,   divideDa,  divideDb  };
 Bivariate  MAX      = { max,      maxDa,     maxDb     };
 
+typedef struct optimizer {
+    Entry *m;     // SGD momentum or Adam first moment
+    Entry *v;     // Adam second moment
+    int    t;     // Adam timestep
+} optimizer;
+
 // Kernel function arguments
 typedef struct {
     Tensor out, A;
@@ -106,8 +112,9 @@ Tensor TensorNew(int dimensions, int *shape, int autograd)
     int size    = TensorSize(t);
     t.entries   = calloc(size, sizeof(Entry));
     t.gradients = autograd ? calloc(size, sizeof(Entry)) : NULL;
+    t.optimizer = autograd ? calloc(1, sizeof(optimizer)) : NULL;
     t.refcount  = malloc(sizeof(int));
-    if (!t.entries || (autograd && !t.gradients) || !t.refcount) {
+    if (!t.entries || (autograd && (!t.gradients || !t.optimizer)) || !t.refcount) {
         fprintf(stderr, "Insufficient memory!\n");
         exit(EXIT_FAILURE);
     }
@@ -120,6 +127,11 @@ void TensorFree(Tensor A)
     if (!A.refcount || --(*A.refcount) > 0) return;
     free(A.entries);
     free(A.gradients);
+    if (A.optimizer) {
+        free(A.optimizer->m);
+        free(A.optimizer->v);
+        free(A.optimizer);
+    }
     free(A.refcount);
 }
 
@@ -154,6 +166,7 @@ Tensor TensorView(Tensor A, int dimensions, int *shape, int autograd)
         t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
     t.entries   = A.entries;
     t.gradients = autograd ? A.gradients : NULL;
+    t.optimizer = autograd ? A.optimizer : NULL;
     t.refcount  = NULL;
     return t;
 }
@@ -413,11 +426,55 @@ void TensorBackward(Tensor loss)
     operationArrayClear(arr);
 }
 
-void TensorSGD(Tensor A, float lr)
+void TensorSGD(Tensor A, float lr, float momentum)
 {
     int size = TensorSize(A);
-    for (int i = 0; i < size; i++)
-        A.entries[i] -= lr * A.gradients[i];
+
+    if (momentum == 0.0f) {
+        for (int i = 0; i < size; i++)
+            A.entries[i] -= lr * A.gradients[i];
+        return;
+    }
+
+    if (!A.optimizer->m) {
+        A.optimizer->m = calloc(size, sizeof(Entry));
+        if (!A.optimizer->m) {
+            fprintf(stderr, "Insufficient memory!\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    Entry *m = A.optimizer->m;
+    for (int i = 0; i < size; i++) {
+        m[i] = momentum * m[i] + A.gradients[i];
+        A.entries[i] -= lr * m[i];
+    }
+}
+
+void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, float weightDecay)
+{
+    int size = TensorSize(A);
+
+    if (!A.optimizer->m) {
+        A.optimizer->m = calloc(size, sizeof(Entry));
+        A.optimizer->v = calloc(size, sizeof(Entry));
+        if (!A.optimizer->m || !A.optimizer->v) {
+            fprintf(stderr, "Insufficient memory!\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    A.optimizer->t++;
+    Entry *m = A.optimizer->m;
+    Entry *v = A.optimizer->v;
+    float biasM = 1.0f - __builtin_powf(beta1, A.optimizer->t);
+    float biasV = 1.0f - __builtin_powf(beta2, A.optimizer->t);
+    for (int i = 0; i < size; i++) {
+        Entry g = A.gradients[i];
+        m[i] = beta1 * m[i] + (1.0f - beta1) * g;
+        v[i] = beta2 * v[i] + (1.0f - beta2) * g * g;
+        float mHat = m[i] / biasM;
+        float vHat = v[i] / biasV;
+        A.entries[i] -= lr * (mHat / (__builtin_sqrtf(vHat) + epsilon) + weightDecay * A.entries[i]);
+    }
 }
 
 Tensor TensorSoftmax(Tensor in, float temperature)
