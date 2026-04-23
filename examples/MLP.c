@@ -12,6 +12,29 @@
 #define LR           0.01f
 #define MOMENTUM     0.9f
 
+/*
+ * MLP with a single hidden layer. Let N = batch size
+ * [N, 784]
+ * -> Linear [784, 256]
+ * -> ReLU
+ * -> [N, 256]
+ * -> Linear [256, 10]
+ * -> [N, 10]
+ */
+typedef struct {
+    Tensor W1, W2; // Hidden and output layer weights
+} Model;
+
+static Tensor forward(Tensor X, Model *m)
+{
+    Tensor Z1 = TensorMultiply(X,  m->W1); // [N, 256]
+    Tensor A1 = TensorMap(RELU, Z1);       // [N, 256]
+    Tensor Z2 = TensorMultiply(A1, m->W2); // [N, 10]
+
+    TensorFree(Z1); TensorFree(A1);
+    return Z2;
+}
+
 int main(void)
 {
     // Read data into Tensors from .npy files
@@ -33,11 +56,11 @@ int main(void)
     TensorScale(xTrain, 1.0f / 255.0f);
     TensorScale(xTest,  1.0f / 255.0f);
 
-    // Create and initialize weight matrices of model
-    Tensor W1 = TensorNew(2, (int[]){IMAGE_SIZE,  HIDDEN_SIZE}, 1); // [784, 256]
-    Tensor W2 = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, 1); // [256, 10]
-    TensorXavier(W1);
-    TensorXavier(W2);
+    // Create and initialize hidden and output layer weights
+    Model m;
+    m.W1 = TensorNew(2, (int[]){IMAGE_SIZE,  HIDDEN_SIZE}, 1); // [784, 256]
+    m.W2 = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, 1); // [256, 10]
+    TensorXavier(m.W1); TensorXavier(m.W2);
 
     // One-hot encoding of yTrain needed to compute cross entropy loss
     Tensor oneHot = TensorOneHot(yTrain, NUM_CLASSES); // [60000, 10]
@@ -52,26 +75,23 @@ int main(void)
             Tensor X = TensorSlice(xShuffled, 0, (b - 1) * BATCH_SIZE, BATCH_SIZE); // [64, 784]
             Tensor Y = TensorSlice(yShuffled, 0, (b - 1) * BATCH_SIZE, BATCH_SIZE); // [64, 10]
 
-            Tensor Z1   = TensorMultiply(X, W1);          // [64, 256]
-            Tensor A1   = TensorMap(RELU, Z1);            // [64, 256]
-            Tensor Z2   = TensorMultiply(A1, W2);         // [64, 10]
-            Tensor P    = TensorSoftmax(Z2, 1.0f);        // [64, 10]
-            Tensor CE   = TensorCrossEntropyLoss(Y, P);   // [64, 1]
-            
-            TensorBackward(CE);
-            TensorSGD(W1, LR, MOMENTUM);
-            TensorSGD(W2, LR, MOMENTUM);
-            
+            Tensor Z    = forward(X, &m);               // [64, 10]
+            Tensor P    = TensorSoftmax(Z, 1.0f);       // [64, 10]
+            Tensor loss = TensorCrossEntropyLoss(Y, P); // [64, 1]
+
+            TensorBackward(loss);
+            TensorSGD(m.W1, LR, MOMENTUM);
+            TensorSGD(m.W2, LR, MOMENTUM);
+
             if ((b % LOG == 0) || (b == trainBatches)) {
                 printf("Epoch %2d | Batch %3d/%d | Loss: ", epoch, b, trainBatches);
-                Tensor loss = TensorReduce(ADD, 0.0f, CE, 0); // [1, 1]
-                TensorScale(loss, 1.0f / BATCH_SIZE);
-                TensorPrint(loss);
-                TensorFree(loss);
+                Tensor meanLoss = TensorReduce(ADD, 0.0f, loss, 0); // [1, 1]
+                TensorScale(meanLoss, 1.0f / BATCH_SIZE);
+                TensorPrint(meanLoss);
+                TensorFree(meanLoss);
             }
 
-            TensorFree(Z1); TensorFree(A1); TensorFree(Z2);
-            TensorFree(P);  TensorFree(CE);
+            TensorFree(Z); TensorFree(P); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
 
@@ -80,21 +100,18 @@ int main(void)
             Tensor X = TensorSlice(xTest, 0, (b - 1) * BATCH_SIZE, BATCH_SIZE); // [64, 784]
             Tensor Y = TensorSlice(yTest, 0, (b - 1) * BATCH_SIZE, BATCH_SIZE); // [64]
 
-            Tensor Z1          = TensorMultiply(X, W1);   // [64, 256]
-            Tensor A1          = TensorMap(RELU, Z1);     // [64, 256]
-            Tensor Z2          = TensorMultiply(A1, W2);  // [64, 10]
-            Tensor predictions = TensorSample(Z2, 0);     // [64]
+            Tensor Z           = forward(X, &m);     // [64, 10]
+            Tensor predictions = TensorSample(Z, 0); // [64]
 
             totalErrors  += TensorHammingDistance(predictions, Y);
             totalSamples += TensorSize(predictions);
 
-            TensorFree(Z1); TensorFree(A1); TensorFree(Z2);
-            TensorFree(predictions);
+            TensorFree(Z); TensorFree(predictions);
         }
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
     }
 
-    TensorFree(W1); TensorFree(W2);
+    TensorFree(m.W1); TensorFree(m.W2);
     TensorFree(oneHot);
     TensorFree(xTrain); TensorFree(yTrain);
     TensorFree(xTest);  TensorFree(yTest);
