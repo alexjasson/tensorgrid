@@ -50,7 +50,7 @@ Bivariate  MULTIPLY = { multiply, second,    first     };
 Bivariate  DIVIDE   = { divide,   divideDa,  divideDb  };
 Bivariate  MAX      = { max,      maxDa,     maxDb     };
 
-typedef enum { Map, Zip, Multiply, Broadcast, Reduce } OperationType;
+typedef enum { Map, Zip, Multiply, Unfold, Broadcast, Reduce } OperationType;
 
 // Tensor operation representation - used for autograd
 typedef struct {
@@ -59,6 +59,9 @@ typedef struct {
     union { Univariate u; Bivariate b; };
     int axis;      // axis needed for reduce operation
     Entry initial; // initial value needed for reduce operation
+    int stride;    // stride needed for unfold operation
+    int padding;   // padding needed for unfold operation
+    int fH, fW;    // filter spatial dimensions needed for fold operation
 } Operation;
 
 typedef struct optimizer {
@@ -67,36 +70,18 @@ typedef struct optimizer {
     int    t;     // Adam timestep
 } optimizer;
 
-// Kernel function arguments
-typedef struct {
-    Tensor out, A;
-    Univariate op;
-} UnaryArgs;
-typedef struct {
-    Tensor out, A, B;
-    Bivariate op;
-} BinaryArgs;
-typedef struct {
-    Tensor out, A;
-    Bivariate op;
-    int axis;
-    Entry initial;
-} ReduceArgs;
-typedef struct {
-    Tensor out, A;
-    int n;
-} BroadcastArgs;
-
 // Kernel functions
 static void mapForward(void *arg, int start, int end);
 static void zipForward(void *arg, int start, int end);
 static void multiplyForward(void *arg, int start, int end);
+static void unfold(void *arg, int start, int end);
 static void reduceForward(void *arg, int start, int end);
 static void broadcastForward(void *arg, int start, int end);
 static void mapBackward(void *arg, int start, int end);
 static void zipBackward(void *arg, int start, int end);
 static void multiplyBackwardDa(void *arg, int start, int end);
 static void multiplyBackwardDb(void *arg, int start, int end);
+static void fold(void *arg, int start, int end);
 static void broadcastBackward(void *arg, int start, int end);
 static void reduceBackward(void *arg, int start, int end);
 
@@ -205,54 +190,100 @@ Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
     outShape[axis] = 1;
     Tensor out = TensorNew(A.dimensions, outShape, A.gradients != NULL);
 
-    ReduceArgs args = {out, A, f, axis, initial};
-    ThreadPoolMap(ThreadPoolGet(), reduceForward, &args, TensorSize(out));
+    Operation op = { .type=Reduce, .out=out, .A=A, .axis=axis, .b=f, .initial=initial };
+    ThreadPoolMap(ThreadPoolGet(), reduceForward, &op, TensorSize(out));
 
-    if (out.gradients && A.gradients)
-        operationArrayPush(operationArrayGet(), (Operation){ .type=Reduce, .out=out, .A=A, .axis=axis, .b=f, .initial=initial });
+    if (out.gradients && A.gradients) operationArrayPush(operationArrayGet(), op);
     return out;
 }
 
-Tensor TensorMap(Univariate op, Tensor A)
+Tensor TensorMap(Univariate f, Tensor A)
 {
     Tensor out = TensorNew(A.dimensions, A.shape, A.gradients != NULL);
-    UnaryArgs args = {out, A, op};
-    ThreadPoolMap(ThreadPoolGet(), mapForward, &args, TensorSize(A));
 
-    if (out.gradients && A.gradients)
-        operationArrayPush(operationArrayGet(),(Operation){ .type=Map, .out=out, .A=A, .u=op });
+    Operation op = { .type=Map, .out=out, .A=A, .u=f };
+    ThreadPoolMap(ThreadPoolGet(), mapForward, &op, TensorSize(A));
+
+    if (out.gradients && A.gradients) operationArrayPush(operationArrayGet(), op);
     return out;
 }
 
-Tensor TensorZip(Bivariate op, Tensor A, Tensor B)
+Tensor TensorZip(Bivariate f, Tensor A, Tensor B)
 {
     int autograd = A.gradients != NULL || B.gradients != NULL;
     Tensor out = TensorNew(A.dimensions, A.shape, autograd);
-    BinaryArgs args = {out, A, B, op};
-    ThreadPoolMap(ThreadPoolGet(), zipForward, &args, TensorSize(A));
 
-    if (out.gradients)
-        operationArrayPush(operationArrayGet(),(Operation){ .type=Zip, .out=out, .A=A, .B=B, .b=op });
+    Operation op = { .type=Zip, .out=out, .A=A, .B=B, .b=f };
+    ThreadPoolMap(ThreadPoolGet(), zipForward, &op, TensorSize(A));
+
+    if (out.gradients) operationArrayPush(operationArrayGet(), op);
     return out;
 }
 
 Tensor TensorMultiply(Tensor A, Tensor B)
 {
+    int dimsA   = A.dimensions;
+    int dimsB   = B.dimensions;
+    int dimsOut = dimsA >= dimsB ? dimsA : dimsB;
     int outShape[MAX_DIMENSIONS];
-    for (int i = 0; i < A.dimensions; i++) outShape[i] = A.shape[i];
-    outShape[A.dimensions - 1] = B.shape[B.dimensions - 1];
+    for (int i = 0; i < dimsOut - 2; i++)
+        outShape[i] = (dimsA >= dimsB) ? A.shape[i] : B.shape[i];
+    outShape[dimsOut - 2] = A.shape[dimsA - 2];
+    outShape[dimsOut - 1] = B.shape[dimsB - 1];
     int autograd = A.gradients != NULL || B.gradients != NULL;
-    Tensor out = TensorNew(A.dimensions, outShape, autograd);
+    Tensor out = TensorNew(dimsOut, outShape, autograd);
 
-    int m         = A.shape[A.dimensions - 2];
-    int k         = A.shape[A.dimensions - 1];
-    int batchSize = TensorSize(A) / (m * k);
-    BinaryArgs args = {out, A, B, {NULL, NULL, NULL}};
-    ThreadPoolMap(ThreadPoolGet(), multiplyForward, &args, batchSize * m);
+    int m         = A.shape[dimsA - 2];
+    int n         = B.shape[dimsB - 1];
+    int batchSize = TensorSize(out) / (m * n);
+    Operation op  = { .type=Multiply, .out=out, .A=A, .B=B };
+    ThreadPoolMap(ThreadPoolGet(), multiplyForward, &op, batchSize * m);
 
-    if (out.gradients)
-        operationArrayPush(operationArrayGet(),(Operation){ .type=Multiply, .out=out, .A=A, .B=B });
+    if (out.gradients) operationArrayPush(operationArrayGet(), op);
     return out;
+}
+
+// windows[N, K, S] = unfold(input)
+static Tensor tensorUnfold(Tensor input, int fH, int fW, int stride, int padding)
+{
+    int N    = input.shape[0];
+    int Cin  = input.shape[1];
+    int H    = input.shape[2];
+    int W    = input.shape[3];
+    int Hout = (H + 2 * padding - fH) / stride + 1;
+    int Wout = (W + 2 * padding - fW) / stride + 1;
+    int K    = Cin * fH * fW;
+    int S    = Hout * Wout;
+
+    Tensor windows = TensorNew(3, (int[]){N, K, S}, input.gradients != NULL);
+
+    Operation op = { .type=Unfold, .out=windows, .A=input,
+                     .stride=stride, .padding=padding, .fH=fH, .fW=fW };
+    ThreadPoolMap(ThreadPoolGet(), unfold, &op, N * K);
+
+    if (windows.gradients) operationArrayPush(operationArrayGet(), op);
+    return windows;
+}
+
+Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding)
+{
+    int N    = input.shape[0];
+    int H    = input.shape[2];
+    int W    = input.shape[3];
+    int Cout = filter.shape[0];
+    int Cin  = filter.shape[1];
+    int fH   = filter.shape[2];
+    int fW   = filter.shape[3];
+    int Hout = (H + 2 * padding - fH) / stride + 1;
+    int Wout = (W + 2 * padding - fW) / stride + 1;
+    int K    = Cin * fH * fW;
+
+    Tensor windows     = tensorUnfold(input, fH, fW, stride, padding);
+    Tensor matrixInput = TensorReshape(filter, 2, (int[]){Cout, K});
+    Tensor output      = TensorMultiply(matrixInput, windows);  // [N, Cout, S]
+    TensorFree(windows);
+
+    return TensorReshape(output, 4, (int[]){N, Cout, Hout, Wout});
 }
 
 void TensorScale(Tensor A, float scalar)
@@ -276,11 +307,10 @@ Tensor TensorBroadcast(Tensor A, int n)
     outShape[A.dimensions - 1] = n;
     Tensor out = TensorNew(A.dimensions, outShape, A.gradients != NULL);
 
-    BroadcastArgs args = {out, A, n};
-    ThreadPoolMap(ThreadPoolGet(), broadcastForward, &args, TensorSize(A));
+    Operation op = { .type=Broadcast, .out=out, .A=A };
+    ThreadPoolMap(ThreadPoolGet(), broadcastForward, &op, TensorSize(A));
 
-    if (out.gradients && A.gradients)
-        operationArrayPush(operationArrayGet(),(Operation){ .type=Broadcast, .out=out, .A=A });
+    if (out.gradients && A.gradients) operationArrayPush(operationArrayGet(), op);
     return out;
 }
 
@@ -297,7 +327,8 @@ void TensorBackward(Tensor loss)
 
     // Take mean over all loss entries
     int lossSize = TensorSize(loss);
-    TensorScale(loss, 1.0f / lossSize);
+    for (int i = 0; i < lossSize; i++)
+        loss.gradients[i] = 1.0f / lossSize;
 
     // Accumulate gradients backwards
     ThreadPool pool = ThreadPoolGet();
@@ -333,6 +364,12 @@ void TensorBackward(Tensor loss)
                     int total = batchStrideB ? batchSize * k : k;
                     ThreadPoolMap(pool, multiplyBackwardDb, op, total);
                 }
+                break;
+            }
+
+            case Unfold: { // out[N, K, S] = unfold(A[N, Cin, H, W])
+                if (op->A.gradients)
+                    ThreadPoolMap(pool, fold, op, TensorSize(op->A));
                 break;
             }
 
@@ -394,8 +431,8 @@ void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, flo
     A.optimizer->t++;
     Entry *m = A.optimizer->m;
     Entry *v = A.optimizer->v;
-    float biasM = 1.0f - __builtin_powf(beta1, A.optimizer->t);
-    float biasV = 1.0f - __builtin_powf(beta2, A.optimizer->t);
+    float biasM = 1.0f - fastPow(beta1, A.optimizer->t);
+    float biasV = 1.0f - fastPow(beta2, A.optimizer->t);
     for (int i = 0; i < size; i++) {
         Entry g = A.gradients[i];
         m[i] = beta1 * m[i] + (1.0f - beta1) * g;
@@ -530,7 +567,10 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
 
 void TensorXavier(Tensor A)
 {
-    Entry bound = __builtin_sqrtf(6.0f / (A.shape[A.dimensions - 2] + A.shape[A.dimensions - 1]));
+    int receptive = 1;
+    for (int i = 2; i < A.dimensions; i++) receptive *= A.shape[i];
+    int fanSum = (A.shape[0] + (A.dimensions > 1 ? A.shape[1] : 0)) * receptive;
+    Entry bound = __builtin_sqrtf(6.0f / fanSum);
     int size = TensorSize(A);
     for (int i = 0; i < size; i++)
         A.entries[i] = (Entry)randomFloat(-bound, bound);
@@ -736,38 +776,38 @@ void TensorSet(Tensor A, int *indices, Entry value)
 
 static void mapForward(void *arg, int start, int end)
 {
-    UnaryArgs *args = arg;
+    Operation *op = arg;
     for (int i = start; i < end; i++)
-        args->out.entries[i] = args->op.f(args->A.entries[i]);
+        op->out.entries[i] = op->u.f(op->A.entries[i]);
 }
 
 static void zipForward(void *arg, int start, int end)
 {
-    BinaryArgs *args = arg;
+    Operation *op = arg;
     for (int i = start; i < end; i++)
-        args->out.entries[i] = args->op.f(args->A.entries[i], args->B.entries[i]);
+        op->out.entries[i] = op->b.f(op->A.entries[i], op->B.entries[i]);
 }
 
 static void multiplyForward(void *arg, int start, int end)
 {
-    BinaryArgs *args = arg;
-    int m            = args->A.shape[args->A.dimensions - 2];
-    int k            = args->A.shape[args->A.dimensions - 1];
-    int n            = args->B.shape[args->B.dimensions - 1];
-    int strideA_row  = args->A.strides[args->A.dimensions - 2];
-    int strideA_col  = args->A.strides[args->A.dimensions - 1];
-    int strideB_row  = args->B.strides[args->B.dimensions - 2];
-    int strideB_col  = args->B.strides[args->B.dimensions - 1];
-    int batchStrideA = (args->A.dimensions >= 3) ? args->A.strides[args->A.dimensions - 3] : 0;
-    int batchStrideB = (args->B.dimensions >= 3) ? args->B.strides[args->B.dimensions - 3] : 0;
+    Operation *op    = arg;
+    int m            = op->A.shape[op->A.dimensions - 2];
+    int k            = op->A.shape[op->A.dimensions - 1];
+    int n            = op->B.shape[op->B.dimensions - 1];
+    int strideA_row  = op->A.strides[op->A.dimensions - 2];
+    int strideA_col  = op->A.strides[op->A.dimensions - 1];
+    int strideB_row  = op->B.strides[op->B.dimensions - 2];
+    int strideB_col  = op->B.strides[op->B.dimensions - 1];
+    int batchStrideA = (op->A.dimensions >= 3) ? op->A.strides[op->A.dimensions - 3] : 0;
+    int batchStrideB = (op->B.dimensions >= 3) ? op->B.strides[op->B.dimensions - 3] : 0;
 
     for (int i = start; i < end; i++) {
         int batch = i / m;
         int row   = i % m;
 
-        Entry *A_batch = args->A.entries + batch * batchStrideA;
-        Entry *B_batch = args->B.entries + batch * batchStrideB;
-        Entry *C_row   = args->out.entries + (batch * m + row) * n;
+        Entry *A_batch = op->A.entries + batch * batchStrideA;
+        Entry *B_batch = op->B.entries + batch * batchStrideB;
+        Entry *C_row   = op->out.entries + (batch * m + row) * n;
 
         for (int j = 0; j < n; j++)
             C_row[j] = 0.0f;
@@ -782,31 +822,31 @@ static void multiplyForward(void *arg, int start, int end)
 
 static void reduceForward(void *arg, int start, int end)
 {
-    ReduceArgs *args = arg;
-    int axis     = args->axis;
-    int axisSize = args->A.shape[axis];
-    int aStride  = args->A.strides[axis];
+    Operation *op = arg;
+    int axis     = op->axis;
+    int axisSize = op->A.shape[axis];
+    int aStride  = op->A.strides[axis];
     for (int o = start; o < end; o++) {
         int base = 0, remainder = o;
-        for (int d = 0; d < args->A.dimensions; d++) {
-            int idx    = remainder / args->out.strides[d];
-            remainder -= idx * args->out.strides[d];
-            base      += idx * args->A.strides[d];
+        for (int d = 0; d < op->A.dimensions; d++) {
+            int idx    = remainder / op->out.strides[d];
+            remainder -= idx * op->out.strides[d];
+            base      += idx * op->A.strides[d];
         }
-        Entry result = args->initial;
+        Entry result = op->initial;
         for (int k = 0; k < axisSize; k++)
-            result = args->op.f(result, args->A.entries[base + k * aStride]);
-        args->out.entries[o] = result;
+            result = op->b.f(result, op->A.entries[base + k * aStride]);
+        op->out.entries[o] = result;
     }
 }
 
 static void broadcastForward(void *arg, int start, int end)
 {
-    BroadcastArgs *args = arg;
-    int n = args->n;
+    Operation *op = arg;
+    int n = op->out.shape[op->out.dimensions - 1];
     for (int i = start; i < end; i++)
         for (int j = 0; j < n; j++)
-            args->out.entries[i * n + j] = args->A.entries[i];
+            op->out.entries[i * n + j] = op->A.entries[i];
 }
 
 static void mapBackward(void *arg, int start, int end)
@@ -902,6 +942,87 @@ static void multiplyBackwardDb(void *arg, int start, int end)
     }
 }
 
+static void unfold(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    int Cin    = op->A.shape[1];
+    int H      = op->A.shape[2];
+    int W      = op->A.shape[3];
+    int fH     = op->fH,     fW      = op->fW;
+    int stride = op->stride, padding = op->padding;
+    int Hout   = (H + 2 * padding - fH) / stride + 1;
+    int Wout   = (W + 2 * padding - fW) / stride + 1;
+    int S      = Hout * Wout;
+    int K      = Cin * fH * fW;
+    const Entry *input   = op->A.entries;
+    Entry       *windows = op->out.entries;
+
+    for (int i = start; i < end; i++) {
+        int n  = i / K;
+        int k  = i % K;
+        int ci = k / (fH * fW);
+        int fh = (k / fW) % fH;
+        int fw = k % fW;
+        Entry       *windowRow = windows + (n * K + k) * S;
+        const Entry *inPlane  = input + (n * Cin + ci) * H * W;
+
+        for (int oh = 0; oh < Hout; oh++) {
+            int ih = oh * stride - padding + fh;
+            if (ih < 0 || ih >= H) {
+                for (int ow = 0; ow < Wout; ow++)
+                    windowRow[oh * Wout + ow] = 0;
+            } else {
+                const Entry *row = inPlane + ih * W;
+                for (int ow = 0; ow < Wout; ow++) {
+                    int iw = ow * stride - padding + fw;
+                    windowRow[oh * Wout + ow] = (iw >= 0 && iw < W) ? row[iw] : 0;
+                }
+            }
+        }
+    }
+}
+
+static void fold(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    int Cin    = op->A.shape[1];
+    int H      = op->A.shape[2];
+    int W      = op->A.shape[3];
+    int fH     = op->fH,     fW      = op->fW;
+    int stride = op->stride, padding = op->padding;
+    int Hout   = (H + 2 * padding - fH) / stride + 1;
+    int Wout   = (W + 2 * padding - fW) / stride + 1;
+    int S      = Hout * Wout;
+    int K      = Cin * fH * fW;
+    Entry       *dInput   = op->A.gradients;
+    const Entry *dWindow = op->out.gradients;
+
+    for (int i = start; i < end; i++) {
+        int n  = i / (Cin * H * W);
+        int ci = (i / (H * W)) % Cin;
+        int ih = (i / W) % H;
+        int iw = i % W;
+        const Entry *dP_n = dWindow + n * K * S;
+
+        Entry sum = 0;
+        for (int fh = 0; fh < fH; fh++) {
+            int numH = ih + padding - fh;
+            if (numH < 0 || numH % stride) continue;
+            int oh = numH / stride;
+            if (oh >= Hout) continue;
+            for (int fw = 0; fw < fW; fw++) {
+                int numW = iw + padding - fw;
+                if (numW < 0 || numW % stride) continue;
+                int ow = numW / stride;
+                if (ow >= Wout) continue;
+                int k = (ci * fH + fh) * fW + fw;
+                sum += dP_n[k * S + oh * Wout + ow];
+            }
+        }
+        dInput[i] += sum;
+    }
+}
+
 static void broadcastBackward(void *arg, int start, int end)
 {
     Operation *op = arg;
@@ -955,6 +1076,15 @@ static DynamicArray operationArrayGet(void)
 
 static void operationArrayPush(DynamicArray arr, Operation op)
 {
+    // Clears the array if the last operation is only referenced by the operation array
+    // itself - meaning the user finished a forward pass without calling TensorBackward
+    int size = DynamicArraySize(arr);
+    if (size > 0) {
+        Operation *last = DynamicArrayGet(arr, size - 1);
+        if (last->out.refcount && *last->out.refcount == 1)
+            operationArrayClear(arr);
+    }
+    
     if (op.out.refcount) (*op.out.refcount)++;
     if (op.A.refcount)   (*op.A.refcount)++;
     if (op.B.refcount)   (*op.B.refcount)++;
