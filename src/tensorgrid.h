@@ -146,6 +146,19 @@ Tensor TensorBroadcast(Tensor A, int n);
  */
 Tensor TensorMultiply(Tensor A, Tensor B);
 
+/*
+ * Apply each filter across the height and width of each input. Each filter
+ * produces one output feature map.
+ *
+ * input  = [batch size, input channels, height, width]
+ * filter = [number of filters, input channels, filter height, filter width]
+ * output = [batch size, number of filters, output height, output width]
+ *
+ * output height = (input height + 2*padding - filter height) / stride + 1
+ * output width  = (input width  + 2*padding - filter width)  / stride + 1
+ */
+Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding);
+
 static inline Tensor TensorCopy(Tensor in)              { return TensorMap(IDENTITY, in); }
 static inline Tensor TensorAdd(Tensor A, Tensor B)      { return TensorZip(ADD,      A, B); }
 static inline Tensor TensorSubtract(Tensor A, Tensor B) { return TensorZip(SUBTRACT, A, B); }

@@ -4,5 +4,6 @@
 float randomFloat(float lower, float upper);
 float fastExp(float x);
 float fastLog(float x);
+float fastPow(float base, int exp);
 
 #endif

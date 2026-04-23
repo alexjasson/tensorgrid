@@ -57,3 +57,14 @@ float fastLog(float x)
 
     return l + (float)e * 0.6931471805599453f;
 }
+
+float fastPow(float base, int exp)
+{
+    float result = 1.0f;
+    while (exp > 0) {
+        if (exp & 1) result *= base;
+        base *= base;
+        exp >>= 1;
+    }
+    return result;
+}
