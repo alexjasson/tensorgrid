@@ -300,14 +300,14 @@ void TensorFill(Tensor A, Entry value)
         A.entries[i] = value;
 }
 
-Tensor TensorBroadcast(Tensor A, int n)
+Tensor TensorBroadcast(Tensor A, int axis, int n)
 {
     int outShape[MAX_DIMENSIONS];
     for (int i = 0; i < A.dimensions; i++) outShape[i] = A.shape[i];
-    outShape[A.dimensions - 1] = n;
+    outShape[axis] = n;
     Tensor out = TensorNew(A.dimensions, outShape, A.gradients != NULL);
 
-    Operation op = { .type=Broadcast, .out=out, .A=A };
+    Operation op = { .type=Broadcast, .out=out, .A=A, .axis=axis };
     ThreadPoolMap(ThreadPoolGet(), broadcastForward, &op, TensorSize(A));
 
     if (out.gradients && A.gradients) operationArrayPush(operationArrayGet(), op);
@@ -373,12 +373,9 @@ void TensorBackward(Tensor loss)
                 break;
             }
 
-            case Broadcast: { // out[rows,n] = broadcast(A[rows,1])
-                if (op->A.gradients) {
-                    int n    = op->out.shape[op->out.dimensions - 1];
-                    int rows = TensorSize(op->out) / n;
-                    ThreadPoolMap(pool, broadcastBackward, op, rows);
-                }
+            case Broadcast: { // out[..., n, ...] = broadcast(A[..., 1, ...], axis)
+                if (op->A.gradients)
+                    ThreadPoolMap(pool, broadcastBackward, op, TensorSize(op->A));
                 break;
             }
 
@@ -448,7 +445,7 @@ Tensor TensorSoftmax(Tensor in, float temperature)
     // Numerical stability trick
     Tensor inView       = TensorView(in, in.dimensions, in.shape, 0);
     Tensor temp1        = TensorReduce(MAX, -FLT_MAX, inView, in.dimensions - 1);
-    Tensor temp2        = TensorBroadcast(temp1, in.shape[in.dimensions - 1]);
+    Tensor temp2        = TensorBroadcast(temp1, in.dimensions - 1, in.shape[in.dimensions - 1]);
     Tensor stableLogits = TensorZip(SUBTRACT, in, temp2);
     TensorFree(temp1); TensorFree(temp2);
 
@@ -459,7 +456,7 @@ Tensor TensorSoftmax(Tensor in, float temperature)
     // out = exp(stableLogits) ⊘ sum(exp(stableLogits))
     Tensor A = TensorMap(EXP, stableLogits);
     Tensor B = TensorReduce(ADD, 0.0f, A, in.dimensions - 1);
-    Tensor C = TensorBroadcast(B, in.shape[in.dimensions - 1]);
+    Tensor C = TensorBroadcast(B, in.dimensions - 1, in.shape[in.dimensions - 1]);
     Tensor result = TensorZip(DIVIDE, A, C);
 
     TensorFree(stableLogits);
@@ -843,10 +840,17 @@ static void reduceForward(void *arg, int start, int end)
 static void broadcastForward(void *arg, int start, int end)
 {
     Operation *op = arg;
-    int n = op->out.shape[op->out.dimensions - 1];
-    for (int i = start; i < end; i++)
+    int axis  = op->axis;
+    int n     = op->out.shape[axis];
+    int inner = 1;
+    for (int d = axis + 1; d < op->out.dimensions; d++) inner *= op->out.shape[d];
+    for (int i = start; i < end; i++) {
+        int outerIdx = i / inner;
+        int innerIdx = i % inner;
+        Entry src  = op->A.entries[i];
         for (int j = 0; j < n; j++)
-            op->out.entries[i * n + j] = op->A.entries[i];
+            op->out.entries[outerIdx * n * inner + j * inner + innerIdx] = src;
+    }
 }
 
 static void mapBackward(void *arg, int start, int end)
@@ -1028,12 +1032,17 @@ static void broadcastBackward(void *arg, int start, int end)
     Operation *op = arg;
     Entry *dA     = op->A.gradients;
     Entry *dout   = op->out.gradients;
-    int n         = op->out.shape[op->out.dimensions - 1];
-    for (int r = start; r < end; r++) {
-        Entry sum = 0;
+    int axis      = op->axis;
+    int n         = op->out.shape[axis];
+    int inner     = 1;
+    for (int d = axis + 1; d < op->out.dimensions; d++) inner *= op->out.shape[d];
+    for (int i = start; i < end; i++) {
+        int outerIdx = i / inner;
+        int innerIdx = i % inner;
+        Entry acc  = 0;
         for (int j = 0; j < n; j++)
-            sum += dout[r * n + j];
-        dA[r] += sum;
+            acc += dout[outerIdx * n * inner + j * inner + innerIdx];
+        dA[i] += acc;
     }
 }
 

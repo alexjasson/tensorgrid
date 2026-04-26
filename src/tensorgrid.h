@@ -132,11 +132,11 @@ Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
 Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis);
 
 /*
- * Broadcasts the last dimension of A from 1 to n.
- * A:   [..., 1]
- * out: [..., n]
+ * Broadcasts A along the given axis from 1 to n. The size of that axis must be 1
+ * A:   [..., 1, ...]
+ * out: [..., n, ...]
  */
-Tensor TensorBroadcast(Tensor A, int n);
+Tensor TensorBroadcast(Tensor A, int axis, int n);
 
 /*
  * Multiply A by B using the last two dimensions as matrices.
