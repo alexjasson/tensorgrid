@@ -213,14 +213,24 @@ void TensorPrint(Tensor A);
 Tensor TensorSoftmax(Tensor in, float temperature);
 
 /*
- * Cross entropy loss over the last dimension.
- * out = -sum(y ⊙ log(y_hat))
+ * Log-softmax over the last dimension.
  *
- * y_hat: Predicted probabilities [..., numClasses]
- * y:     Target distribution     [..., numClasses]
- * out:   Cross entropy loss      [..., 1]
+ * in:  Input logits        [..., numClasses]
+ * out: Log-probabilities   [..., numClasses]
  */
-Tensor TensorCrossEntropyLoss(Tensor y, Tensor y_hat);
+Tensor TensorLogSoftmax(Tensor in, float temperature);
+
+/*
+ * Negative log-likelihood over the last dimension.
+ * Note: NLL(y, LogSoftmax(z)) ≡ CrossEntropy(y, softmax(z)), but leaving y_hat
+ * in log space avoids floating point errors.
+ * out = -sum(y ⊙ y_hat)
+ *
+ * y:     Target probability distribution        [..., numClasses]
+ * y_hat: Predicted log-probability distribution [..., numClasses]
+ * out:   NLL loss                               [..., 1]
+ */
+Tensor TensorNLL(Tensor y, Tensor y_hat);
 
 /*
  * Mean squared error over the last dimension.

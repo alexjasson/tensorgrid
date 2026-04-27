@@ -464,13 +464,37 @@ Tensor TensorSoftmax(Tensor in, float temperature)
     return result;
 }
 
-Tensor TensorCrossEntropyLoss(Tensor y, Tensor y_hat)
+Tensor TensorLogSoftmax(Tensor in, float temperature)
 {
-    Tensor A = TensorMap(LOG, y_hat);
-    Tensor B = TensorZip(MULTIPLY, y, A);
-    Tensor C = TensorReduce(ADD, 0.0f, B, y.dimensions - 1);
-    Tensor result = TensorMap(NEGATE, C);
-    TensorFree(A); TensorFree(B); TensorFree(C);
+    // Numerical stability trick
+    Tensor inView       = TensorView(in, in.dimensions, in.shape, 0);
+    Tensor temp1        = TensorReduce(MAX, -FLT_MAX, inView, in.dimensions - 1);
+    Tensor temp2        = TensorBroadcast(temp1, in.dimensions - 1, in.shape[in.dimensions - 1]);
+    Tensor stableLogits = TensorZip(SUBTRACT, in, temp2);
+    TensorFree(temp1); TensorFree(temp2);
+
+    // Temperature scaling
+    if (temperature != 1.0f)
+        TensorScale(stableLogits, 1.0f / temperature);
+
+    // out = stableLogits - log(sum(exp(stableLogits)))
+    Tensor A = TensorMap(EXP, stableLogits);
+    Tensor B = TensorReduce(ADD, 0.0f, A, in.dimensions - 1);
+    Tensor C = TensorMap(LOG, B);
+    Tensor D = TensorBroadcast(C, in.dimensions - 1, in.shape[in.dimensions - 1]);
+    Tensor result = TensorZip(SUBTRACT, stableLogits, D);
+
+    TensorFree(stableLogits);
+    TensorFree(A); TensorFree(B); TensorFree(C); TensorFree(D);
+    return result;
+}
+
+Tensor TensorNLL(Tensor y, Tensor logP)
+{
+    Tensor A = TensorZip(MULTIPLY, y, logP);
+    Tensor B = TensorReduce(ADD, 0.0f, A, y.dimensions - 1);
+    Tensor result = TensorMap(NEGATE, B);
+    TensorFree(A); TensorFree(B);
     return result;
 }
 
