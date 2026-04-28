@@ -44,6 +44,7 @@ extern Bivariate  MAX;
 
 /*
  * Allocates a new tensor with all entries as 0.
+ * Note: for a 0-dimensional tensor (scalar), pass shape = NULL.
  */
 Tensor TensorNew(int dimensions, int *shape, int autograd);
 
@@ -126,14 +127,15 @@ Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
 
 /*
  * Reduces A along the given axis using f, starting from initial.
+ * The reduced axis is dropped from the output.
  * A:   [..., m, ...]
- * out: [..., 1, ...]
+ * out: [..., ...]
  */
 Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis);
 
 /*
- * Broadcasts A along the given axis from 1 to n. The size of that axis must be 1
- * A:   [..., 1, ...]
+ * Inserts a new axis of size n at the given position, replicating A along it.
+ * A:   [...]
  * out: [..., n, ...]
  */
 Tensor TensorBroadcast(Tensor A, int axis, int n);
@@ -228,17 +230,17 @@ Tensor TensorLogSoftmax(Tensor in, float temperature);
  *
  * y:     Target probability distribution        [..., numClasses]
  * y_hat: Predicted log-probability distribution [..., numClasses]
- * out:   NLL loss                               [..., 1]
+ * out:   Mean NLL loss                          [] (Scalar)
  */
 Tensor TensorNLL(Tensor y, Tensor y_hat);
 
 /*
- * Mean squared error over the last dimension.
+ * Mean squared error across all entries.
  * out = mean((y - y_hat)^2)
  *
  * y:     Target values    [..., numClasses]
  * y_hat: Predicted values [..., numClasses]
- * out:   MSE loss         [..., 1]
+ * out:   Mean MSE loss    [] (Scalar)
  */
 Tensor TensorMSE(Tensor y, Tensor y_hat);
 
@@ -265,8 +267,7 @@ void TensorBackward(Tensor loss);
 
 /*
  * Stochastic gradient descent with optional momentum. Set momentum to 0 for
- * standard SGD. Must be called after
- * TensorBackward.
+ * standard SGD. Must be called after TensorBackward.
  *
  * momentum == 0: A -= lr * gradients.
  * momentum != 0: m = momentum * m + gradients; A -= lr * m.

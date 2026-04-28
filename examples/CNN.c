@@ -90,7 +90,7 @@ int main(void)
             // Computes cross-entropy loss, NLL(y, LogSoftmax(z)) ≡ CrossEntropy(y, softmax(z))
             Tensor Z    = forward(X, &m);             // [64, 10]
             Tensor logP = TensorLogSoftmax(Z, 1.0f);  // [64, 10]
-            Tensor loss = TensorNLL(Y, logP);         // [64, 1]
+            Tensor loss = TensorNLL(Y, logP);         // scalar
 
             TensorBackward(loss);
             TensorSGD(m.F1, LR, MOMENTUM);
@@ -99,10 +99,7 @@ int main(void)
 
             if ((b % LOG == 0) || (b == trainBatches)) {
                 printf("Epoch %2d | Batch %3d/%d | Loss: ", epoch, b, trainBatches);
-                Tensor meanLoss = TensorReduce(ADD, 0.0f, loss, 0); // [1, 1]
-                TensorScale(meanLoss, 1.0f / BATCH_SIZE);
-                TensorPrint(meanLoss);
-                TensorFree(meanLoss);
+                TensorPrint(loss);
             }
 
             TensorFree(Z); TensorFree(logP); TensorFree(loss);

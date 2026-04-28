@@ -105,12 +105,14 @@ int TensorShape(Tensor A, int axis)
 
 Tensor TensorNew(int dimensions, int *shape, int autograd)
 {
-    Tensor t;
+    Tensor t = {0};
     t.dimensions = dimensions;
     for (int i = 0; i < dimensions; i++) t.shape[i] = shape[i];
-    t.strides[dimensions - 1] = 1;
-    for (int i = dimensions - 2; i >= 0; i--)
-        t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
+    if (dimensions > 0) {
+        t.strides[dimensions - 1] = 1;
+        for (int i = dimensions - 2; i >= 0; i--)
+            t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
+    }
     int size    = TensorSize(t);
     t.entries   = calloc(size, sizeof(Entry));
     t.gradients = autograd ? calloc(size, sizeof(Entry)) : NULL;
@@ -152,20 +154,24 @@ Tensor TensorReshape(Tensor A, int dimensions, int *shape)
 {
     A.dimensions = dimensions;
     for (int i = 0; i < dimensions; i++) A.shape[i] = shape[i];
-    A.strides[dimensions - 1] = 1;
-    for (int i = dimensions - 2; i >= 0; i--)
-        A.strides[i] = A.strides[i + 1] * A.shape[i + 1];
+    if (dimensions > 0) {
+        A.strides[dimensions - 1] = 1;
+        for (int i = dimensions - 2; i >= 0; i--)
+            A.strides[i] = A.strides[i + 1] * A.shape[i + 1];
+    }
     return A;
 }
 
 Tensor TensorView(Tensor A, int dimensions, int *shape, int autograd)
 {
-    Tensor t;
+    Tensor t = {0};
     t.dimensions = dimensions;
     for (int i = 0; i < dimensions; i++) t.shape[i] = shape[i];
-    t.strides[dimensions - 1] = 1;
-    for (int i = dimensions - 2; i >= 0; i--)
-        t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
+    if (dimensions > 0) {
+        t.strides[dimensions - 1] = 1;
+        for (int i = dimensions - 2; i >= 0; i--)
+            t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
+    }
     t.entries   = A.entries;
     t.gradients = autograd ? A.gradients : NULL;
     t.optimizer = autograd ? A.optimizer : NULL;
@@ -185,10 +191,13 @@ Tensor TensorTranspose(Tensor A)
 
 Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
 {
+    int outDims = A.dimensions - 1;
     int outShape[MAX_DIMENSIONS];
-    for (int i = 0; i < A.dimensions; i++) outShape[i] = A.shape[i];
-    outShape[axis] = 1;
-    Tensor out = TensorNew(A.dimensions, outShape, A.gradients != NULL);
+    for (int i = 0, j = 0; i < A.dimensions; i++) {
+        if (i == axis) continue;
+        outShape[j++] = A.shape[i];
+    }
+    Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
 
     Operation op = { .type=Reduce, .out=out, .A=A, .axis=axis, .b=f, .initial=initial };
     ThreadPoolMap(ThreadPoolGet(), reduceForward, &op, TensorSize(out));
@@ -302,10 +311,13 @@ void TensorFill(Tensor A, Entry value)
 
 Tensor TensorBroadcast(Tensor A, int axis, int n)
 {
+    int outDims = A.dimensions + 1;
     int outShape[MAX_DIMENSIONS];
-    for (int i = 0; i < A.dimensions; i++) outShape[i] = A.shape[i];
-    outShape[axis] = n;
-    Tensor out = TensorNew(A.dimensions, outShape, A.gradients != NULL);
+    for (int i = 0, j = 0; i < outDims; i++) {
+        if (i == axis) outShape[i] = n;
+        else outShape[i] = A.shape[j++];
+    }
+    Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
 
     Operation op = { .type=Broadcast, .out=out, .A=A, .axis=axis };
     ThreadPoolMap(ThreadPoolGet(), broadcastForward, &op, TensorSize(A));
@@ -491,23 +503,44 @@ Tensor TensorLogSoftmax(Tensor in, float temperature)
 
 Tensor TensorNLL(Tensor y, Tensor logP)
 {
-    Tensor A = TensorZip(MULTIPLY, y, logP);
-    Tensor B = TensorReduce(ADD, 0.0f, A, y.dimensions - 1);
-    Tensor result = TensorMap(NEGATE, B);
-    TensorFree(A); TensorFree(B);
+    int N = TensorSize(y) / y.shape[y.dimensions - 1];
+
+    Tensor A   = TensorZip(MULTIPLY, y, logP);
+    Tensor B   = TensorReduce(ADD, 0.0f, A, y.dimensions - 1);
+    Tensor sum = TensorMap(NEGATE, B);
+
+    while (sum.dimensions > 0) {
+        Tensor next = TensorReduce(ADD, 0.0f, sum, 0);
+        TensorFree(sum);
+        sum = next;
+    }
+
+    Tensor n = TensorNew(0, NULL, FALSE);
+    TensorFill(n, (Entry)N);
+    Tensor result = TensorZip(DIVIDE, sum, n);
+
+    TensorFree(A); TensorFree(B); TensorFree(sum); TensorFree(n);
     return result;
 }
 
 Tensor TensorMSE(Tensor y, Tensor y_hat)
 {
-    int numClasses = y.shape[y.dimensions - 1];
-    Tensor A = TensorZip(SUBTRACT, y, y_hat);
-    Tensor B = TensorZip(MULTIPLY, A, A);
-    Tensor C = TensorReduce(ADD, 0.0f, B, y.dimensions - 1);
-    Tensor n = TensorNew(C.dimensions, C.shape, FALSE);
-    TensorFill(n, (Entry)numClasses);
-    Tensor result = TensorZip(DIVIDE, C, n);
-    TensorFree(A); TensorFree(B); TensorFree(C); TensorFree(n);
+    int total = TensorSize(y);
+
+    Tensor A   = TensorZip(SUBTRACT, y, y_hat);
+    Tensor sum = TensorZip(MULTIPLY, A, A);
+
+    while (sum.dimensions > 0) {
+        Tensor next = TensorReduce(ADD, 0.0f, sum, 0);
+        TensorFree(sum);
+        sum = next;
+    }
+
+    Tensor n = TensorNew(0, NULL, FALSE);
+    TensorFill(n, (Entry)total);
+    Tensor result = TensorZip(DIVIDE, sum, n);
+
+    TensorFree(A); TensorFree(sum); TensorFree(n);
     return result;
 }
 
@@ -516,13 +549,9 @@ Tensor TensorSample(Tensor logits, float temperature)
     int numClasses = logits.shape[logits.dimensions - 1];
     int n          = TensorSize(logits) / numClasses;
 
-    int outDims    = logits.dimensions > 1 ? logits.dimensions - 1 : 1;
+    int outDims = logits.dimensions - 1;
     int outShape[MAX_DIMENSIONS];
-    if (logits.dimensions == 1) {
-        outShape[0] = 1;
-    } else {
-        for (int i = 0; i < outDims; i++) outShape[i] = logits.shape[i];
-    }
+    for (int i = 0; i < outDims; i++) outShape[i] = logits.shape[i];
     Tensor out = TensorNew(outDims, outShape, 0);
 
     if (temperature == 0.0f) {
@@ -849,10 +878,12 @@ static void reduceForward(void *arg, int start, int end)
     int aStride  = op->A.strides[axis];
     for (int o = start; o < end; o++) {
         int base = 0, remainder = o;
-        for (int d = 0; d < op->A.dimensions; d++) {
-            int idx    = remainder / op->out.strides[d];
-            remainder -= idx * op->out.strides[d];
+        for (int d = 0, dOut = 0; d < op->A.dimensions; d++) {
+            if (d == axis) continue;
+            int idx    = remainder / op->out.strides[dOut];
+            remainder -= idx * op->out.strides[dOut];
             base      += idx * op->A.strides[d];
+            dOut++;
         }
         Entry result = op->initial;
         for (int k = 0; k < axisSize; k++)
@@ -1081,10 +1112,12 @@ static void reduceBackward(void *arg, int start, int end)
 
     for (int o = start; o < end; o++) {
         int base = 0, remainder = o;
-        for (int d = 0; d < op->A.dimensions; d++) {
-            int idx    = remainder / op->out.strides[d];
-            remainder -= idx * op->out.strides[d];
+        for (int d = 0, dOut = 0; d < op->A.dimensions; d++) {
+            if (d == op->axis) continue;
+            int idx    = remainder / op->out.strides[dOut];
+            remainder -= idx * op->out.strides[dOut];
             base      += idx * op->A.strides[d];
+            dOut++;
         }
 
         result[0] = op->initial;

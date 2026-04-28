@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include "tensorgrid.h"
 
 #define NUM_CLASSES  10
@@ -66,19 +65,18 @@ int main(void)
     Tensor oneHot = TensorOneHot(yTrain, NUM_CLASSES); // [60000, 10]
 
     for (int epoch = 1; epoch <= EPOCHS; epoch++) {
-        // Shuffle training data
-        unsigned int seed = (unsigned int)time(NULL);
-        Tensor xShuffled = TensorShuffle(xTrain, seed); // [60000, 784]
-        Tensor yShuffled = TensorShuffle(oneHot, seed); // [60000, 10]
+        // Shuffle training data using epoch as seed
+        Tensor xShuffled = TensorShuffle(xTrain, epoch); // [60000, 784]
+        Tensor yShuffled = TensorShuffle(oneHot, epoch); // [60000, 10]
 
         for (int b = 1; b <= trainBatches; b++) {
             Tensor X = TensorSlice(xShuffled, 0, (b - 1) * BATCH_SIZE, BATCH_SIZE); // [64, 784]
             Tensor Y = TensorSlice(yShuffled, 0, (b - 1) * BATCH_SIZE, BATCH_SIZE); // [64, 10]
 
-            // Computes cross-entropy loss, NLL(y, LogSoftmax(z)) ≡ CrossEntropy(y, softmax(z))
+            // Cross entropy loss implemented as NLL(y, logSoftmax(z))
             Tensor Z    = forward(X, &m);            // [64, 10]
             Tensor logP = TensorLogSoftmax(Z, 1.0f); // [64, 10]
-            Tensor loss = TensorNLL(Y, logP);        // [64, 1]
+            Tensor loss = TensorNLL(Y, logP);        // [] (Scalar)
 
             TensorBackward(loss);
             TensorSGD(m.W1, LR, MOMENTUM);
@@ -86,10 +84,7 @@ int main(void)
 
             if ((b % LOG == 0) || (b == trainBatches)) {
                 printf("Epoch %2d | Batch %3d/%d | Loss: ", epoch, b, trainBatches);
-                Tensor meanLoss = TensorReduce(ADD, 0.0f, loss, 0); // [1, 1]
-                TensorScale(meanLoss, 1.0f / BATCH_SIZE);
-                TensorPrint(meanLoss);
-                TensorFree(meanLoss);
+                TensorPrint(loss);
             }
 
             TensorFree(Z); TensorFree(logP); TensorFree(loss);
