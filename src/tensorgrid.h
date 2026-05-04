@@ -4,6 +4,7 @@
 #define MAX_DIMENSIONS 8
 #define TRUE 1
 #define FALSE 0
+#define INFINITE 1e+38
 
 typedef float Entry;                        // Change data type of entry as needed
 typedef Entry (*UnivariateFn)(Entry);       // y = f(a) on an entry in A
@@ -160,6 +161,18 @@ Tensor TensorMultiply(Tensor A, Tensor B);
  * output width  = (input width  + 2*padding - filter width)  / stride + 1
  */
 Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding);
+
+/*
+ * Moves a size x size window across height and width, and reduces each window
+ * with a bivariate function like max or sum.
+ *
+ * input  = [batch size, channels, height, width]
+ * output = [batch size, channels, output height, output width]
+ *
+ * output height = (input height + 2*padding - size) / stride + 1
+ * output width  = (input width  + 2*padding - size) / stride + 1
+ */
+Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride, int padding);
 
 static inline Tensor TensorCopy(Tensor in)              { return TensorMap(IDENTITY, in); }
 static inline Tensor TensorAdd(Tensor A, Tensor B)      { return TensorZip(ADD,      A, B); }

@@ -1,49 +1,59 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include "tensorgrid.h"
 
-#define NUM_CLASSES  10
-#define BATCH_SIZE   64
-#define C1_CHANNELS  16
-#define C2_CHANNELS  32
-#define FEATURES     14*14*C2_CHANNELS
-#define EPOCHS       10
-#define LOG          100
-#define LR           0.01f
-#define MOMENTUM     0.9f
+#define NUM_CLASSES 10
+#define BATCH_SIZE  64
+#define C1_CHANNELS 16
+#define C2_CHANNELS 32
+#define FEATURES    7*7*C2_CHANNELS
+#define HIDDEN_SIZE 128
+#define EPOCHS      10
+#define LOG         100
+#define LR          0.01f
+#define MOMENTUM    0.9f
 
 /*
- * CNN with two convolution layers and no pooling. Let N = batch size
+ * CNN with two convolution layers with max-pooling, one
+ * hidden layer and an output layer. Let N = batch size.
  * [N, 1, 28, 28]
  * -> Conv [16, 1, 3, 3], stride 1, padding 1
  * -> ReLU
- * -> [N, 16, 28, 28]
- * -> Conv [32, 16, 3, 3], stride 2, padding 1
+ * -> MaxPool 2x2, stride 2
+ * -> [N, 16, 14, 14]
+ * -> Conv [32, 16, 3, 3], stride 1, padding 1
  * -> ReLU
- * -> [N, 32, 14, 14]
- * -> Reshape -> [N, 32*14*14]
- * -> Linear  [32*14*14, 10]
+ * -> MaxPool 2x2, stride 2
+ * -> [N, 32, 7, 7]
+ * -> Reshape -> [N, 32*7*7]
+ * -> Linear [32*7*7, 128]
+ * -> ReLU
+ * -> Linear [128, 10]
  * -> [N, 10]
  */
 typedef struct {
     Tensor F1, F2; // Convolution filters
-    Tensor W;      // Output layer weights
+    Tensor W1, W2; // Hidden and output layer weights
 } Model;
 
 static Tensor forward(Tensor X, Model *m)
 {
     Tensor C1 = TensorConvolution(X,  m->F1, 1, 1);                    // [N, 16, 28, 28]
     Tensor A1 = TensorMap(RELU, C1);                                   // [N, 16, 28, 28]
-    Tensor C2 = TensorConvolution(A1, m->F2, 2, 1);                    // [N, 32, 14, 14]
+    Tensor P1 = TensorPool(MAX, -INFINITE, A1, 2, 2, 0);               // [N, 16, 14, 14]
+    Tensor C2 = TensorConvolution(P1, m->F2, 1, 1);                    // [N, 32, 14, 14]
     Tensor A2 = TensorMap(RELU, C2);                                   // [N, 32, 14, 14]
+    Tensor P2 = TensorPool(MAX, -INFINITE, A2, 2, 2, 0);               // [N, 32, 7, 7]
 
-    Tensor flat = TensorReshape(A2, 2, (int[]){BATCH_SIZE, FEATURES}); // [N, FEATURES]
-    Tensor Z    = TensorMultiply(flat, m->W);                          // [N, 10]
+    Tensor flat = TensorReshape(P2, 2, (int[]){BATCH_SIZE, FEATURES}); // [N, FEATURES]
+    Tensor Z1   = TensorMultiply(flat, m->W1);                         // [N, 128]
+    Tensor H1   = TensorMap(RELU, Z1);                                 // [N, 128]
+    Tensor Z2   = TensorMultiply(H1, m->W2);                           // [N, 10]
 
-    TensorFree(C1); TensorFree(A1);
-    TensorFree(C2); TensorFree(A2);
-    return Z;
+    TensorFree(C1);   TensorFree(A1); TensorFree(P1);
+    TensorFree(C2);   TensorFree(A2); TensorFree(P2);
+    TensorFree(Z1);   TensorFree(H1);
+    return Z2;
 }
 
 int main(void)
@@ -67,21 +77,22 @@ int main(void)
     TensorScale(xTrain, 1.0f / 255.0f);
     TensorScale(xTest,  1.0f / 255.0f);
 
-    // Create and initialize convolution filters and output layer weights
+    // Create and initialize convolution filters, hidden and output layer weights
     Model m;
     m.F1 = TensorNew(4, (int[]){C1_CHANNELS,  1, 3, 3}, 1);          // [16, 1, 3, 3]
     m.F2 = TensorNew(4, (int[]){C2_CHANNELS, C1_CHANNELS, 3, 3}, 1); // [32, 16, 3, 3]
-    m.W  = TensorNew(2, (int[]){FEATURES, NUM_CLASSES}, 1);          // [32*14*14, 10]
-    TensorXavier(m.F1); TensorXavier(m.F2); TensorXavier(m.W);
+    m.W1 = TensorNew(2, (int[]){FEATURES, HIDDEN_SIZE}, 1);          // [32*7*7, 128]
+    m.W2 = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, 1);       // [128, 10]
+    TensorXavier(m.F1); TensorXavier(m.F2);
+    TensorXavier(m.W1); TensorXavier(m.W2);
 
     // One-hot encoding of yTrain needed to compute cross entropy loss
     Tensor oneHot = TensorOneHot(yTrain, NUM_CLASSES); // [60000, 10]
 
     for (int epoch = 1; epoch <= EPOCHS; epoch++) {
-        // Shuffle training data
-        unsigned int seed = (unsigned int)time(NULL);
-        Tensor xShuffled = TensorShuffle(xTrain, seed); // [60000, 1, 28, 28]
-        Tensor yShuffled = TensorShuffle(oneHot, seed); // [60000, 10]
+        // Shuffle training data using epoch as seed
+        Tensor xShuffled = TensorShuffle(xTrain, epoch); // [60000, 1, 28, 28]
+        Tensor yShuffled = TensorShuffle(oneHot, epoch); // [60000, 10]
 
         for (int b = 1; b <= trainBatches; b++) {
             Tensor X = TensorSlice(xShuffled, 0, (b - 1) * BATCH_SIZE, BATCH_SIZE); // [64, 1, 28, 28]
@@ -95,7 +106,8 @@ int main(void)
             TensorBackward(loss);
             TensorSGD(m.F1, LR, MOMENTUM);
             TensorSGD(m.F2, LR, MOMENTUM);
-            TensorSGD(m.W,  LR, MOMENTUM);
+            TensorSGD(m.W1, LR, MOMENTUM);
+            TensorSGD(m.W2, LR, MOMENTUM);
 
             if ((b % LOG == 0) || (b == trainBatches)) {
                 printf("Epoch %2d | Batch %3d/%d | Loss: ", epoch, b, trainBatches);
@@ -122,7 +134,8 @@ int main(void)
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
     }
 
-    TensorFree(m.F1); TensorFree(m.F2); TensorFree(m.W);
+    TensorFree(m.F1); TensorFree(m.F2);
+    TensorFree(m.W1); TensorFree(m.W2);
     TensorFree(oneHot);
     TensorFree(xTrain); TensorFree(yTrain);
     TensorFree(xTest);  TensorFree(yTest);

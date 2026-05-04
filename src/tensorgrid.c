@@ -253,7 +253,7 @@ Tensor TensorMultiply(Tensor A, Tensor B)
 }
 
 // windows[N, K, S] = unfold(input)
-static Tensor tensorUnfold(Tensor input, int fH, int fW, int stride, int padding)
+static Tensor tensorUnfold(Tensor input, int fH, int fW, int stride, int padding, Entry fill)
 {
     int N    = input.shape[0];
     int Cin  = input.shape[1];
@@ -267,7 +267,7 @@ static Tensor tensorUnfold(Tensor input, int fH, int fW, int stride, int padding
     Tensor windows = TensorNew(3, (int[]){N, K, S}, input.gradients != NULL);
 
     Operation op = { .type=Unfold, .out=windows, .A=input,
-                     .stride=stride, .padding=padding, .fH=fH, .fW=fW };
+                     .stride=stride, .padding=padding, .fH=fH, .fW=fW, .initial=fill };
     ThreadPoolMap(ThreadPoolGet(), unfold, &op, N * K);
 
     if (windows.gradients) operationArrayPush(operationArrayGet(), op);
@@ -287,12 +287,29 @@ Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding)
     int Wout = (W + 2 * padding - fW) / stride + 1;
     int K    = Cin * fH * fW;
 
-    Tensor windows     = tensorUnfold(input, fH, fW, stride, padding);
+    Tensor windows     = tensorUnfold(input, fH, fW, stride, padding, 0.0f);
     Tensor matrixInput = TensorReshape(filter, 2, (int[]){Cout, K});
     Tensor output      = TensorMultiply(matrixInput, windows);  // [N, Cout, S]
     TensorFree(windows);
 
     return TensorReshape(output, 4, (int[]){N, Cout, Hout, Wout});
+}
+
+Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride, int padding)
+{
+    int N    = input.shape[0];
+    int C    = input.shape[1];
+    int H    = input.shape[2];
+    int W    = input.shape[3];
+    int Hout = (H + 2 * padding - size) / stride + 1;
+    int Wout = (W + 2 * padding - size) / stride + 1;
+
+    Tensor flat   = TensorReshape(input, 4, (int[]){N * C, 1, H, W});
+    Tensor cols   = tensorUnfold(flat, size, size, stride, padding, initial);  // [N*C, size*size, Hout*Wout]
+    Tensor pooled = TensorReduce(f, initial, cols, 1);                         // [N*C, Hout*Wout]
+    Tensor out    = TensorReshape(pooled, 4, (int[]){N, C, Hout, Wout});
+    TensorFree(cols);
+    return out;
 }
 
 void TensorScale(Tensor A, float scalar)
@@ -1013,6 +1030,7 @@ static void unfold(void *arg, int start, int end)
     int Wout   = (W + 2 * padding - fW) / stride + 1;
     int S      = Hout * Wout;
     int K      = Cin * fH * fW;
+    Entry        fill    = op->initial;
     const Entry *input   = op->A.entries;
     Entry       *windows = op->out.entries;
 
@@ -1029,12 +1047,12 @@ static void unfold(void *arg, int start, int end)
             int ih = oh * stride - padding + fh;
             if (ih < 0 || ih >= H) {
                 for (int ow = 0; ow < Wout; ow++)
-                    windowRow[oh * Wout + ow] = 0;
+                    windowRow[oh * Wout + ow] = fill;
             } else {
                 const Entry *row = inPlane + ih * W;
                 for (int ow = 0; ow < Wout; ow++) {
                     int iw = ow * stride - padding + fw;
-                    windowRow[oh * Wout + ow] = (iw >= 0 && iw < W) ? row[iw] : 0;
+                    windowRow[oh * Wout + ow] = (iw >= 0 && iw < W) ? row[iw] : fill;
                 }
             }
         }
@@ -1167,5 +1185,3 @@ static void operationArrayClear(DynamicArray arr)
     }
     DynamicArrayClear(arr);
 }
-
-

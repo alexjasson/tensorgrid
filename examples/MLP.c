@@ -2,22 +2,22 @@
 #include <stdlib.h>
 #include "tensorgrid.h"
 
-#define NUM_CLASSES  10
-#define IMAGE_SIZE   784
-#define HIDDEN_SIZE  256
-#define BATCH_SIZE   64
-#define EPOCHS       10
-#define LOG          100
-#define LR           0.01f
-#define MOMENTUM     0.9f
+#define NUM_CLASSES 10
+#define IMAGE_SIZE  784
+#define HIDDEN_SIZE 128
+#define BATCH_SIZE  64
+#define EPOCHS      10
+#define LOG         100
+#define LR          0.01f
+#define MOMENTUM    0.9f
 
 /*
  * MLP with a single hidden layer. Let N = batch size
  * [N, 784]
- * -> Linear [784, 256]
+ * -> Linear [784, 128]
  * -> ReLU
- * -> [N, 256]
- * -> Linear [256, 10]
+ * -> [N, 128]
+ * -> Linear [128, 10]
  * -> [N, 10]
  */
 typedef struct {
@@ -26,8 +26,8 @@ typedef struct {
 
 static Tensor forward(Tensor X, Model *m)
 {
-    Tensor Z1 = TensorMultiply(X,  m->W1); // [N, 256]
-    Tensor A1 = TensorMap(RELU, Z1);       // [N, 256]
+    Tensor Z1 = TensorMultiply(X,  m->W1); // [N, 128]
+    Tensor A1 = TensorMap(RELU, Z1);       // [N, 128]
     Tensor Z2 = TensorMultiply(A1, m->W2); // [N, 10]
 
     TensorFree(Z1); TensorFree(A1);
@@ -57,8 +57,8 @@ int main(void)
 
     // Create and initialize hidden and output layer weights
     Model m;
-    m.W1 = TensorNew(2, (int[]){IMAGE_SIZE,  HIDDEN_SIZE}, 1); // [784, 256]
-    m.W2 = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, 1); // [256, 10]
+    m.W1 = TensorNew(2, (int[]){IMAGE_SIZE,  HIDDEN_SIZE}, 1); // [784, 128]
+    m.W2 = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, 1); // [128, 10]
     TensorXavier(m.W1); TensorXavier(m.W2);
 
     // One-hot encoding of yTrain needed to compute cross entropy loss
