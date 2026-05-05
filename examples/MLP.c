@@ -43,8 +43,8 @@ int main(void)
     // Compute number of training/test samples and number of batches
     int nTrain = TensorShape(xTrain, 0);
     int nTest  = TensorShape(xTest, 0);
-    int trainBatches = nTrain / BATCH_SIZE;
-    int testBatches  = nTest  / BATCH_SIZE;
+    int trainBatches = (nTrain + BATCH_SIZE - 1) / BATCH_SIZE;
+    int testBatches  = (nTest  + BATCH_SIZE - 1) / BATCH_SIZE;
     printf("Train: %d  Test: %d\n\n", nTrain, nTest);
 
     // Reshape data Tensors from [..., 28, 28] to [..., 784] and scale entries from [0, 255] to [0, 1]
@@ -69,13 +69,16 @@ int main(void)
         Tensor xShuffled = TensorShuffle(xTrain, epoch); // [60000, 784]
         Tensor yShuffled = TensorShuffle(oneHot, epoch); // [60000, 10]
 
-        for (int b = 0; b < trainBatches; b++) {
-            Tensor X = TensorSlice(xShuffled, 0, b * BATCH_SIZE, BATCH_SIZE); // [64, 784]
-            Tensor Y = TensorSlice(yShuffled, 0, b * BATCH_SIZE, BATCH_SIZE); // [64, 10]
+        for (int batch = 0; batch < trainBatches; batch++) {
+            // Cap final batch size so we don't slice past the end of dataset
+            int N = nTrain - batch * BATCH_SIZE;
+            if (N > BATCH_SIZE) N = BATCH_SIZE;
+            Tensor X = TensorSlice(xShuffled, 0, batch * BATCH_SIZE, N); // [N, 784]
+            Tensor Y = TensorSlice(yShuffled, 0, batch * BATCH_SIZE, N); // [N, 10]
 
             // Cross entropy loss implemented as NLL(y, logSoftmax(z))
-            Tensor Z    = forward(X, &m);            // [64, 10]
-            Tensor logP = TensorLogSoftmax(Z, 1.0f); // [64, 10]
+            Tensor Z    = forward(X, &m);            // [N, 10]
+            Tensor logP = TensorLogSoftmax(Z, 1.0f); // [N, 10]
             Tensor loss = TensorNLL(Y, logP);        // [] (Scalar)
 
             TensorBackward(loss);
@@ -84,27 +87,30 @@ int main(void)
             TensorSGD(m.W2, LR, MOMENTUM);
             TensorSGD(m.b2, LR, MOMENTUM);
             
-            int batchNumber = b + 1;
-            if ((batchNumber % LOG == 0) || (batchNumber == trainBatches)) {
-                printf("Epoch %2d | Batch %3d/%d | Loss: ", epoch, batchNumber, trainBatches);
+            if (((batch + 1) % LOG == 0) || (batch + 1 == trainBatches)) {
+                printf("Epoch %2d | Batch %3d/%d | Loss: ", epoch, batch + 1, trainBatches);
                 TensorPrint(loss);
             }
 
+            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(logP); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
 
         int totalSamples = 0, totalErrors = 0;
-        for (int b = 0; b < testBatches; b++) {
-            Tensor X = TensorSlice(xTest, 0, b * BATCH_SIZE, BATCH_SIZE); // [64, 784]
-            Tensor Y = TensorSlice(yTest, 0, b * BATCH_SIZE, BATCH_SIZE); // [64]
+        for (int batch = 0; batch < testBatches; batch++) {
+            int N = nTest - batch * BATCH_SIZE;
+            if (N > BATCH_SIZE) N = BATCH_SIZE;
+            Tensor X = TensorSlice(xTest, 0, batch * BATCH_SIZE, N); // [N, 784]
+            Tensor Y = TensorSlice(yTest, 0, batch * BATCH_SIZE, N); // [N]
 
-            Tensor Z           = forward(X, &m);     // [64, 10]
-            Tensor predictions = TensorSample(Z, 0); // [64]
+            Tensor Z           = forward(X, &m);     // [N, 10]
+            Tensor predictions = TensorSample(Z, 0); // [N]
 
             totalErrors  += TensorHammingDistance(predictions, Y);
             totalSamples += TensorSize(predictions);
 
+            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(predictions);
         }
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
