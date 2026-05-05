@@ -191,11 +191,10 @@ Tensor TensorTranspose(Tensor A)
 
 Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
 {
-    int outDims = A.dimensions - 1;
+    int outDims = A.dimensions;
     int outShape[MAX_DIMENSIONS];
-    for (int i = 0, j = 0; i < A.dimensions; i++) {
-        if (i == axis) continue;
-        outShape[j++] = A.shape[i];
+    for (int i = 0; i < A.dimensions; i++) {
+        outShape[i] = (i == axis) ? 1 : A.shape[i];
     }
     Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
 
@@ -219,13 +218,52 @@ Tensor TensorMap(Univariate f, Tensor A)
 
 Tensor TensorZip(Bivariate f, Tensor A, Tensor B)
 {
-    int autograd = A.gradients != NULL || B.gradients != NULL;
-    Tensor out = TensorNew(A.dimensions, A.shape, autograd);
+    Tensor zipA = A;
+    Tensor zipB = B;
+    int freeA = FALSE;
+    int freeB = FALSE;
 
-    Operation op = { .type=Zip, .out=out, .A=A, .B=B, .b=f };
-    ThreadPoolMap(ThreadPoolGet(), zipForward, &op, TensorSize(A));
+    if (A.dimensions != B.dimensions) {
+        fprintf(stderr, "TensorZip inputs must have the same number of dimensions!\n");
+        exit(EXIT_FAILURE);
+    }
+
+    int outDims = A.dimensions;
+    int outShape[MAX_DIMENSIONS];
+    for (int axis = 0; axis < outDims; axis++) {
+        int aSize = A.shape[axis];
+        int bSize = B.shape[axis];
+        if (aSize != bSize && aSize != 1 && bSize != 1) {
+            fprintf(stderr, "TensorZip shapes are not compatible!\n");
+            exit(EXIT_FAILURE);
+        }
+        outShape[axis] = aSize >= bSize ? aSize : bSize;
+    }
+
+    for (int axis = 0; axis < outDims; axis++) {
+        if (zipA.shape[axis] != outShape[axis]) {
+            Tensor next = TensorBroadcast(zipA, axis, outShape[axis]);
+            if (freeA) TensorFree(zipA);
+            zipA = next;
+            freeA = TRUE;
+        }
+        if (zipB.shape[axis] != outShape[axis]) {
+            Tensor next = TensorBroadcast(zipB, axis, outShape[axis]);
+            if (freeB) TensorFree(zipB);
+            zipB = next;
+            freeB = TRUE;
+        }
+    }
+
+    int autograd = zipA.gradients != NULL || zipB.gradients != NULL;
+    Tensor out = TensorNew(outDims, outShape, autograd);
+
+    Operation op = { .type=Zip, .out=out, .A=zipA, .B=zipB, .b=f };
+    ThreadPoolMap(ThreadPoolGet(), zipForward, &op, TensorSize(out));
 
     if (out.gradients) operationArrayPush(operationArrayGet(), op);
+    if (freeA) TensorFree(zipA);
+    if (freeB) TensorFree(zipB);
     return out;
 }
 
@@ -306,7 +344,7 @@ Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride
 
     Tensor flat   = TensorReshape(input, 4, (int[]){N * C, 1, H, W});
     Tensor cols   = tensorUnfold(flat, size, size, stride, padding, initial);  // [N*C, size*size, Hout*Wout]
-    Tensor pooled = TensorReduce(f, initial, cols, 1);                         // [N*C, Hout*Wout]
+    Tensor pooled = TensorReduce(f, initial, cols, 1);                         // [N*C, 1, Hout*Wout]
     Tensor out    = TensorReshape(pooled, 4, (int[]){N, C, Hout, Wout});
     TensorFree(cols);
     return out;
@@ -328,12 +366,19 @@ void TensorFill(Tensor A, Entry value)
 
 Tensor TensorBroadcast(Tensor A, int axis, int n)
 {
-    int outDims = A.dimensions + 1;
-    int outShape[MAX_DIMENSIONS];
-    for (int i = 0, j = 0; i < outDims; i++) {
-        if (i == axis) outShape[i] = n;
-        else outShape[i] = A.shape[j++];
+    if (axis < 0 || axis >= A.dimensions) {
+        fprintf(stderr, "TensorBroadcast axis out of range!\n");
+        exit(EXIT_FAILURE);
     }
+    if (A.shape[axis] != 1) {
+        fprintf(stderr, "TensorBroadcast axis must have size 1!\n");
+        exit(EXIT_FAILURE);
+    }
+
+    int outDims = A.dimensions;
+    int outShape[MAX_DIMENSIONS];
+    for (int i = 0; i < outDims; i++) outShape[i] = A.shape[i];
+    outShape[axis] = n;
     Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
 
     Operation op = { .type=Broadcast, .out=out, .A=A, .axis=axis };
@@ -526,11 +571,14 @@ Tensor TensorNLL(Tensor y, Tensor logP)
     Tensor B   = TensorReduce(ADD, 0.0f, A, y.dimensions - 1);
     Tensor sum = TensorMap(NEGATE, B);
 
-    while (sum.dimensions > 0) {
-        Tensor next = TensorReduce(ADD, 0.0f, sum, 0);
+    while (TensorSize(sum) > 1) {
+        int axis = 0;
+        while (sum.shape[axis] == 1) axis++;
+        Tensor next = TensorReduce(ADD, 0.0f, sum, axis);
         TensorFree(sum);
         sum = next;
     }
+    sum = TensorReshape(sum, 0, NULL);
 
     Tensor n = TensorNew(0, NULL, FALSE);
     TensorFill(n, (Entry)N);
@@ -547,11 +595,14 @@ Tensor TensorMSE(Tensor y, Tensor y_hat)
     Tensor A   = TensorZip(SUBTRACT, y, y_hat);
     Tensor sum = TensorZip(MULTIPLY, A, A);
 
-    while (sum.dimensions > 0) {
-        Tensor next = TensorReduce(ADD, 0.0f, sum, 0);
+    while (TensorSize(sum) > 1) {
+        int axis = 0;
+        while (sum.shape[axis] == 1) axis++;
+        Tensor next = TensorReduce(ADD, 0.0f, sum, axis);
         TensorFree(sum);
         sum = next;
     }
+    sum = TensorReshape(sum, 0, NULL);
 
     Tensor n = TensorNew(0, NULL, FALSE);
     TensorFill(n, (Entry)total);
@@ -895,12 +946,10 @@ static void reduceForward(void *arg, int start, int end)
     int aStride  = op->A.strides[axis];
     for (int o = start; o < end; o++) {
         int base = 0, remainder = o;
-        for (int d = 0, dOut = 0; d < op->A.dimensions; d++) {
-            if (d == axis) continue;
-            int idx    = remainder / op->out.strides[dOut];
-            remainder -= idx * op->out.strides[dOut];
-            base      += idx * op->A.strides[d];
-            dOut++;
+        for (int d = 0; d < op->A.dimensions; d++) {
+            int idx    = remainder / op->out.strides[d];
+            remainder -= idx * op->out.strides[d];
+            if (d != axis) base += idx * op->A.strides[d];
         }
         Entry result = op->initial;
         for (int k = 0; k < axisSize; k++)
@@ -1130,12 +1179,10 @@ static void reduceBackward(void *arg, int start, int end)
 
     for (int o = start; o < end; o++) {
         int base = 0, remainder = o;
-        for (int d = 0, dOut = 0; d < op->A.dimensions; d++) {
-            if (d == op->axis) continue;
-            int idx    = remainder / op->out.strides[dOut];
-            remainder -= idx * op->out.strides[dOut];
-            base      += idx * op->A.strides[d];
-            dOut++;
+        for (int d = 0; d < op->A.dimensions; d++) {
+            int idx    = remainder / op->out.strides[d];
+            remainder -= idx * op->out.strides[d];
+            if (d != op->axis) base += idx * op->A.strides[d];
         }
 
         result[0] = op->initial;

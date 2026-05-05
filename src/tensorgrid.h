@@ -25,7 +25,7 @@ typedef struct {
     int   *refcount;       // Number of references, NULL for views
 } Tensor;
 
-// Univariate/Bivariate functions to be applied to tensors
+// Univariate/Bivariate functions to be applied to tensors - add more as needed
 extern Univariate RELU;
 extern Univariate SIGMOID;
 extern Univariate LOG;
@@ -39,12 +39,13 @@ extern Bivariate  DIVIDE;
 extern Bivariate  MAX;
 
 
-/*========================================================================
- *                         Memory management
- *========================================================================*/
+/*=============================================================================================
+ *                                      Memory management
+ *=============================================================================================*/
 
 /*
- * Allocates a new tensor with all entries as 0.
+ * Allocates a new tensor with all entries as 0. If autograd is nonzero,
+ * the tensor also allocates gradient storage and optimizer state.
  * Note: for a 0-dimensional tensor (scalar), pass shape = NULL.
  */
 Tensor TensorNew(int dimensions, int *shape, int autograd);
@@ -66,9 +67,9 @@ Tensor TensorRead(char *path);
 void TensorWrite(Tensor A, char *path);
 
 
-/*========================================================================
- *                         Shape, views and access
- *========================================================================*/
+/*=============================================================================================
+ *                                  Shape, views and access
+ *=============================================================================================*/
 
 /*
  * Returns the total number of entries in the tensor.
@@ -112,9 +113,9 @@ Entry TensorGet(Tensor A, int *indices);
 void TensorSet(Tensor A, int *indices, Entry value);
 
 
-/*========================================================================
- *                              Operations
- *========================================================================*/
+/*=============================================================================================
+ *                                         Operations
+ *=============================================================================================*/
 
 /*
  * out = f(A).
@@ -122,21 +123,22 @@ void TensorSet(Tensor A, int *indices, Entry value);
 Tensor TensorMap(Univariate f, Tensor A);
 
 /*
- * out = f(A, B).
+ * out = f(A, B). Shapes must match, except axes of size 1, which are broadcasted
+ * to the other tensor's size.
  */
 Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
 
 /*
  * Reduces A along the given axis using f, starting from initial.
- * The reduced axis is dropped from the output.
  * A:   [..., m, ...]
- * out: [..., ...]
+ * out: [..., 1, ...]
  */
 Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis);
 
 /*
- * Inserts a new axis of size n at the given position, replicating A along it.
- * A:   [...]
+ * broadcasts the given axis from size 1 to size n, all entries are replicated
+ * along that axis.
+ * A:   [..., 1, ...]
  * out: [..., n, ...]
  */
 Tensor TensorBroadcast(Tensor A, int axis, int n);
@@ -174,15 +176,10 @@ Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding);
  */
 Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride, int padding);
 
-static inline Tensor TensorCopy(Tensor in)              { return TensorMap(IDENTITY, in); }
-static inline Tensor TensorAdd(Tensor A, Tensor B)      { return TensorZip(ADD,      A, B); }
-static inline Tensor TensorSubtract(Tensor A, Tensor B) { return TensorZip(SUBTRACT, A, B); }
-static inline Tensor TensorHadamard(Tensor A, Tensor B) { return TensorZip(MULTIPLY, A, B); }
 
-
-/*========================================================================
- *                                Utilities
- *========================================================================*/
+/*=============================================================================================
+ *                                          Utilities
+ *=============================================================================================*/
 
 
 /*
