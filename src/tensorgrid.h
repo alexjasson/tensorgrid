@@ -194,6 +194,11 @@ Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Univariate f);
 Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Univariate f);
 
 /*
+ * Max-pooling over the spatial dimensions.
+ */
+Tensor TensorMaxPool(Tensor input, int size, int stride, int padding);
+
+/*
  * Softmax over the last dimension.
  * out = exp(in / T) ⊘ sum(exp(in / T))
  *
@@ -209,6 +214,16 @@ Tensor TensorSoftmax(Tensor in, float temperature);
  * out: Log-probabilities   [..., numClasses]
  */
 Tensor TensorLogSoftmax(Tensor in, float temperature);
+
+/*
+ * Cross-entropy loss over the last dimension.
+ * out = NLL(y, LogSoftmax(logits))
+ *
+ * y:      Target probability distribution [..., numClasses]
+ * logits: Predicted logits                [..., numClasses]
+ * out:    Mean cross-entropy loss         [] (Scalar)
+ */
+Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, float temperature);
 
 /*
  * Negative log-likelihood over the last dimension.

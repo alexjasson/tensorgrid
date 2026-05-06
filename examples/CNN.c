@@ -27,9 +27,9 @@ static Tensor forward(Tensor X, Model *m)
 {
     int N     = TensorShape(X, 0);
     Tensor A1 = TensorConvolutionLayer(X,  m->K1, m->b1, 1, 1, RELU); // [N, 16, 28, 28]
-    Tensor P1 = TensorPool(MAX, -INFINITE, A1, 2, 2, 0);              // [N, 16, 14, 14]
+    Tensor P1 = TensorMaxPool(A1, 2, 2, 0);                           // [N, 16, 14, 14]
     Tensor A2 = TensorConvolutionLayer(P1, m->K2, m->b2, 1, 1, RELU); // [N, 32, 14, 14]
-    Tensor P2 = TensorPool(MAX, -INFINITE, A2, 2, 2, 0);              // [N, 32, 7, 7]
+    Tensor P2 = TensorMaxPool(A2, 2, 2, 0);                           // [N, 32, 7, 7]
     Tensor F  = TensorReshape(P2, 2, (int[]){N, FEATURES});           // [N, FEATURES]
     Tensor H  = TensorLinearLayer(F, m->W1, m->b3, RELU);             // [N, 128]
     Tensor Z  = TensorLinearLayer(H, m->W2, m->b4, IDENTITY);         // [N, 10]
@@ -89,10 +89,8 @@ int main(void)
             Tensor X = TensorSlice(xShuffled, 0, batch * BATCH_SIZE, N); // [N, 1, 28, 28]
             Tensor Y = TensorSlice(yShuffled, 0, batch * BATCH_SIZE, N); // [N, 10]
 
-            // Computes cross-entropy loss, NLL(y, LogSoftmax(z)) ≡ CrossEntropy(y, softmax(z))
-            Tensor Z    = forward(X, &m);             // [N, 10]
-            Tensor logP = TensorLogSoftmax(Z, 1.0f);  // [N, 10]
-            Tensor loss = TensorNLL(Y, logP);         // [] (Scalar)
+            Tensor Z    = forward(X, &m);                     // [N, 10]
+            Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f); // [] (Scalar)
 
             TensorBackward(loss);
             TensorSGD(m.K1, LR, MOMENTUM);
@@ -109,7 +107,7 @@ int main(void)
                 TensorPrint(loss);
             }
 
-            TensorFree(Z); TensorFree(logP); TensorFree(loss);
+            TensorFree(Z); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
 

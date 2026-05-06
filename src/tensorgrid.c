@@ -356,6 +356,11 @@ Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride,
     return activated;
 }
 
+Tensor TensorMaxPool(Tensor input, int size, int stride, int padding)
+{
+    return TensorPool(MAX, -INFINITE, input, size, stride, padding);
+}
+
 Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride, int padding)
 {
     int N    = input.shape[0];
@@ -584,6 +589,14 @@ Tensor TensorLogSoftmax(Tensor in, float temperature)
     TensorFree(stableLogits);
     TensorFree(A); TensorFree(B); TensorFree(C); TensorFree(D);
     return result;
+}
+
+Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, float temperature)
+{
+    Tensor logP = TensorLogSoftmax(logits, temperature);
+    Tensor loss = TensorNLL(y, logP);
+    TensorFree(logP);
+    return loss;
 }
 
 Tensor TensorNLL(Tensor y, Tensor logP)

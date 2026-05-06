@@ -72,10 +72,8 @@ int main(void)
             Tensor X = TensorSlice(xShuffled, 0, batch * BATCH_SIZE, N); // [N, 784]
             Tensor Y = TensorSlice(yShuffled, 0, batch * BATCH_SIZE, N); // [N, 10]
 
-            // Cross entropy loss implemented as NLL(y, logSoftmax(z))
-            Tensor Z    = forward(X, &m);            // [N, 10]
-            Tensor logP = TensorLogSoftmax(Z, 1.0f); // [N, 10]
-            Tensor loss = TensorNLL(Y, logP);        // [] (Scalar)
+            Tensor Z    = forward(X, &m);                     // [N, 10]
+            Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f); // [] (Scalar)
 
             TensorBackward(loss);
             TensorSGD(m.W1, LR, MOMENTUM);
@@ -88,7 +86,7 @@ int main(void)
                 TensorPrint(loss);
             }
 
-            TensorFree(Z); TensorFree(logP); TensorFree(loss);
+            TensorFree(Z); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
 
