@@ -25,28 +25,19 @@ typedef struct {
 // X: [N, 1, 28, 28]
 static Tensor forward(Tensor X, Model *m)
 {
-    int N       = TensorShape(X, 0);
-    Tensor XK1  = TensorConvolution(X,  m->K1, 1, 1);         // [N, 16, 28, 28]
-    Tensor C1   = TensorZip(ADD, XK1, m->b1);                 // [N, 16, 28, 28]
-    Tensor A1   = TensorMap(RELU, C1);                        // [N, 16, 28, 28]
-    Tensor P1   = TensorPool(MAX, -INFINITE, A1, 2, 2, 0);    // [N, 16, 14, 14]
-    Tensor P1K2 = TensorConvolution(P1, m->K2, 1, 1);         // [N, 32, 14, 14]
-    Tensor C2   = TensorZip(ADD, P1K2, m->b2);                // [N, 32, 14, 14]
-    Tensor A2   = TensorMap(RELU, C2);                        // [N, 32, 14, 14]
-    Tensor P2   = TensorPool(MAX, -INFINITE, A2, 2, 2, 0);    // [N, 32, 7, 7]
+    int N     = TensorShape(X, 0);
+    Tensor A1 = TensorConvolutionLayer(X,  m->K1, m->b1, 1, 1, RELU); // [N, 16, 28, 28]
+    Tensor P1 = TensorPool(MAX, -INFINITE, A1, 2, 2, 0);              // [N, 16, 14, 14]
+    Tensor A2 = TensorConvolutionLayer(P1, m->K2, m->b2, 1, 1, RELU); // [N, 32, 14, 14]
+    Tensor P2 = TensorPool(MAX, -INFINITE, A2, 2, 2, 0);              // [N, 32, 7, 7]
+    Tensor F  = TensorReshape(P2, 2, (int[]){N, FEATURES});           // [N, FEATURES]
+    Tensor H  = TensorLinearLayer(F, m->W1, m->b3, RELU);             // [N, 128]
+    Tensor Z  = TensorLinearLayer(H, m->W2, m->b4, IDENTITY);         // [N, 10]
 
-    Tensor F    = TensorReshape(P2, 2, (int[]){N, FEATURES}); // [N, FEATURES]
-    Tensor FW1  = TensorMultiply(F, m->W1);                   // [N, 128]
-    Tensor Z1   = TensorZip(ADD, FW1, m->b3);                 // [N, 128]
-    Tensor H1   = TensorMap(RELU, Z1);                        // [N, 128]
-    Tensor H1W2 = TensorMultiply(H1, m->W2);                  // [N, 10]
-    Tensor Z2   = TensorZip(ADD, H1W2, m->b4);                // [N, 10]
-
-    TensorFree(XK1); TensorFree(P1K2); TensorFree(H1W2);
-    TensorFree(C1); TensorFree(A1); TensorFree(P1);
-    TensorFree(C2); TensorFree(A2); TensorFree(P2);
-    TensorFree(FW1); TensorFree(Z1); TensorFree(H1);
-    return Z2;
+    TensorFree(A1); TensorFree(P1);
+    TensorFree(A2); TensorFree(P2);
+    TensorFree(H);
+    return Z;
 }
 
 int main(void)
@@ -118,7 +109,6 @@ int main(void)
                 TensorPrint(loss);
             }
 
-            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(logP); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
@@ -136,7 +126,6 @@ int main(void)
             totalErrors  += TensorHammingDistance(predictions, Y);
             totalSamples += TensorSize(predictions);
 
-            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(predictions);
         }
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);

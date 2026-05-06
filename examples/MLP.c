@@ -21,15 +21,11 @@ typedef struct {
 // X: [N, 784]
 static Tensor forward(Tensor X, Model *m)
 {
-    Tensor XW1  = TensorMultiply(X,  m->W1);   // [N, 128]
-    Tensor Z1   = TensorZip(ADD, XW1, m->b1);  // [N, 128]
-    Tensor A1   = TensorMap(RELU, Z1);         // [N, 128]
-    Tensor A1W2 = TensorMultiply(A1, m->W2);   // [N, 10]
-    Tensor Z2   = TensorZip(ADD, A1W2, m->b2); // [N, 10]
+    Tensor A = TensorLinearLayer(X, m->W1, m->b1, RELU);     // [N, 128]
+    Tensor Z = TensorLinearLayer(A, m->W2, m->b2, IDENTITY); // [N, 10]
 
-    TensorFree(XW1); TensorFree(A1W2);
-    TensorFree(Z1); TensorFree(A1);
-    return Z2;
+    TensorFree(A);
+    return Z;
 }
 
 int main(void)
@@ -92,7 +88,6 @@ int main(void)
                 TensorPrint(loss);
             }
 
-            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(logP); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
@@ -110,7 +105,6 @@ int main(void)
             totalErrors  += TensorHammingDistance(predictions, Y);
             totalSamples += TensorSize(predictions);
 
-            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(predictions);
         }
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);

@@ -114,7 +114,7 @@ void TensorSet(Tensor A, int *indices, Entry value);
 
 
 /*=============================================================================================
- *                                         Operations
+ *                                   Primitive Operations
  *=============================================================================================*/
 
 /*
@@ -178,42 +178,20 @@ Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride
 
 
 /*=============================================================================================
- *                                          Utilities
+ *                                   Composite Operations
  *=============================================================================================*/
 
+/*
+ * Dense layer with optional activation function. Pass IDENTITY for no activation.
+ * out = f(in @ weight + bias)
+ */
+Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Univariate f);
 
 /*
- * Returns a new tensor with rows shuffled via Fisher-Yates.
- * The same seed always produces the same permutation, allowing multiple
- * tensors to be shuffled in sync.
+ * Convolution layer with optional activation function. Pass IDENTITY for no activation.
+ * out = f(conv(in, filter) + bias)
  */
-Tensor TensorShuffle(Tensor A, unsigned int seed);
-
-/*
- * Multiplies all entries of A by scalar in-place.
- */
-void TensorScale(Tensor A, float scalar);
-
-/*
- * Sets all entries of A to the given value.
- */
-void TensorFill(Tensor A, Entry value);
-
-/*
- * Xavier initialize a tensor using the last two dimensions as fan_in/fan_out.
- */
-void TensorXavier(Tensor A);
-
-/*
- * Converts an integer label tensor of shape [...] into a one-hot tensor of
- * shape [..., numClasses]. Labels must be non-negative integers in [0, numClasses)
- */
-Tensor TensorOneHot(Tensor labels, int numClasses);
-
-/*
- * Prints a tensor to stdout. Tensors of size 1 are printed as scalars.
- */
-void TensorPrint(Tensor A);
+Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Univariate f);
 
 /*
  * Softmax over the last dimension.
@@ -253,6 +231,45 @@ Tensor TensorNLL(Tensor y, Tensor y_hat);
  * out:   Mean MSE loss    [] (Scalar)
  */
 Tensor TensorMSE(Tensor y, Tensor y_hat);
+
+
+/*=============================================================================================
+ *                                          Utilities
+ *=============================================================================================*/
+
+
+/*
+ * Returns a new tensor with rows shuffled via Fisher-Yates.
+ * The same seed always produces the same permutation, allowing multiple
+ * tensors to be shuffled in sync.
+ */
+Tensor TensorShuffle(Tensor A, unsigned int seed);
+
+/*
+ * Multiplies all entries of A by scalar in-place.
+ */
+void TensorScale(Tensor A, float scalar);
+
+/*
+ * Sets all entries of A to the given value.
+ */
+void TensorFill(Tensor A, Entry value);
+
+/*
+ * Xavier initialize a tensor using the last two dimensions as fan_in/fan_out.
+ */
+void TensorXavier(Tensor A);
+
+/*
+ * Converts an integer label tensor of shape [...] into a one-hot tensor of
+ * shape [..., numClasses]. Labels must be non-negative integers in [0, numClasses)
+ */
+Tensor TensorOneHot(Tensor labels, int numClasses);
+
+/*
+ * Prints a tensor to stdout. Tensors of size 1 are printed as scalars.
+ */
+void TensorPrint(Tensor A);
 
 /*
  * Samples an index along the last dimension of logits for each row.

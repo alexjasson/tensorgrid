@@ -139,7 +139,6 @@ void TensorFree(Tensor A)
     free(A.refcount);
 }
 
-
 Tensor TensorSlice(Tensor A, int axis, int index, int length)
 {
     Tensor t         = A;
@@ -290,6 +289,18 @@ Tensor TensorMultiply(Tensor A, Tensor B)
     return out;
 }
 
+Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Univariate f)
+{
+    Tensor product = TensorMultiply(in, weight);
+    Tensor out = TensorZip(ADD, product, bias);
+    TensorFree(product);
+    if (f.f == IDENTITY.f && f.da == IDENTITY.da) return out;
+
+    Tensor activated = TensorMap(f, out);
+    TensorFree(out);
+    return activated;
+}
+
 // windows[N, K, S] = unfold(input)
 static Tensor tensorUnfold(Tensor input, int fH, int fW, int stride, int padding, Entry fill)
 {
@@ -331,6 +342,18 @@ Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding)
     TensorFree(windows);
 
     return TensorReshape(output, 4, (int[]){N, Cout, Hout, Wout});
+}
+
+Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Univariate f)
+{
+    Tensor conv = TensorConvolution(in, filter, stride, padding);
+    Tensor out = TensorZip(ADD, conv, bias);
+    TensorFree(conv);
+    if (f.f == IDENTITY.f && f.da == IDENTITY.da) return out;
+
+    Tensor activated = TensorMap(f, out);
+    TensorFree(out);
+    return activated;
 }
 
 Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride, int padding)
