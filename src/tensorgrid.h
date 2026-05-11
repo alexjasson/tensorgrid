@@ -192,6 +192,14 @@ Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride
  *=============================================================================================*/
 
 /*
+ * Embedding lookup. Each integer index selects a row of the embedding table.
+ * table:   [numClasses, embeddingSize]
+ * indices: [...]                       (integer values in [0, numClasses), encoded as Entry)
+ * out:     [..., embeddingSize]
+ */
+Tensor TensorEmbedding(Tensor table, Tensor indices);
+
+/*
  * Dense layer with optional activation function. Pass IDENTITY for no activation.
  * out = f(in @ weight + bias)
  */

@@ -329,6 +329,11 @@ Tensor TensorScatter(Bivariate f, Entry initial, Tensor A, int axis, Tensor indi
     return out;
 }
 
+Tensor TensorEmbedding(Tensor table, Tensor indices)
+{
+    return TensorGather(table, 0, indices);
+}
+
 Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Univariate f)
 {
     Tensor product = TensorMultiply(in, weight);
