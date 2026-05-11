@@ -22,6 +22,8 @@ static Entry identity(Entry a) { return a; }
 static Entry one(Entry a)      { (void)a; return  1.0f; }
 static Entry minusOne(Entry a) { (void)a; return -1.0f; }
 static Entry expe(Entry a)     { return fastExp(a); }
+static Entry tanhe(Entry a)    { return 2.0f / (1.0f + fastExp(-2.0f * a)) - 1.0f; }
+static Entry dtanhe(Entry a)   { return 1.0f - tanhe(a) * tanhe(a); }
 
 // Bivariate functions and partial derivatives
 static Entry add(Entry a, Entry b)       { return a + b; }
@@ -40,6 +42,7 @@ static Entry maxDb(Entry a, Entry b)     { return b > a ? 1.0f : 0.0f; }
 
 Univariate RELU     = { relu,     drelu    };
 Univariate SIGMOID  = { sigmoid,  dsigmoid };
+Univariate TANH     = { tanhe,    dtanhe   };
 Univariate LOG      = { loge,     dloge    };
 Univariate EXP      = { expe,     expe     };
 Univariate NEGATE   = { negate,   minusOne };
@@ -50,7 +53,7 @@ Bivariate  MULTIPLY = { multiply, second,    first     };
 Bivariate  DIVIDE   = { divide,   divideDa,  divideDb  };
 Bivariate  MAX      = { max,      maxDa,     maxDb     };
 
-typedef enum { Map, Zip, Multiply, Unfold, Broadcast, Reduce } OperationType;
+typedef enum { Map, Zip, Multiply, Unfold, Gather, Scatter } OperationType;
 
 // Tensor operation representation - used for autograd
 typedef struct {
@@ -75,15 +78,15 @@ static void mapForward(void *arg, int start, int end);
 static void zipForward(void *arg, int start, int end);
 static void multiplyForward(void *arg, int start, int end);
 static void unfold(void *arg, int start, int end);
-static void reduceForward(void *arg, int start, int end);
-static void broadcastForward(void *arg, int start, int end);
 static void mapBackward(void *arg, int start, int end);
 static void zipBackward(void *arg, int start, int end);
 static void multiplyBackwardDa(void *arg, int start, int end);
 static void multiplyBackwardDb(void *arg, int start, int end);
 static void fold(void *arg, int start, int end);
-static void broadcastBackward(void *arg, int start, int end);
-static void reduceBackward(void *arg, int start, int end);
+static void gatherForward(void *arg, int start, int end);
+static void gatherBackward(void *arg, int start, int end);
+static void scatterForward(void *arg, int start, int end);
+static void scatterBackward(void *arg, int start, int end);
 
 // Operation array functions
 static DynamicArray operationArrayGet(void);
@@ -188,19 +191,28 @@ Tensor TensorTranspose(Tensor A)
     return t;
 }
 
+Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides)
+{
+    Tensor out = TensorNew(dimensions, shape, FALSE);
+    int size = TensorSize(out);
+    for (int i = 0; i < size; i++) {
+        int rem = i;
+        int srcOffset = 0;
+        for (int d = dimensions - 1; d >= 0; d--) {
+            int idx = rem % shape[d];
+            rem /= shape[d];
+            srcOffset += idx * strides[d];
+        }
+        out.entries[i] = A.entries[srcOffset];
+    }
+    return out;
+}
+
 Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
 {
-    int outDims = A.dimensions;
-    int outShape[MAX_DIMENSIONS];
-    for (int i = 0; i < A.dimensions; i++) {
-        outShape[i] = (i == axis) ? 1 : A.shape[i];
-    }
-    Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
-
-    Operation op = { .type=Reduce, .out=out, .A=A, .axis=axis, .b=f, .initial=initial };
-    ThreadPoolMap(ThreadPoolGet(), reduceForward, &op, TensorSize(out));
-
-    if (out.gradients && A.gradients) operationArrayPush(operationArrayGet(), op);
+    Tensor indices = TensorNew(1, (int[]){A.shape[axis]}, FALSE);
+    Tensor out     = TensorScatter(f, initial, A, axis, indices, 1);
+    TensorFree(indices);
     return out;
 }
 
@@ -284,6 +296,42 @@ Tensor TensorMultiply(Tensor A, Tensor B)
     int batchSize = TensorSize(out) / (m * n);
     Operation op  = { .type=Multiply, .out=out, .A=A, .B=B };
     ThreadPoolMap(ThreadPoolGet(), multiplyForward, &op, batchSize * m);
+
+    if (out.gradients) operationArrayPush(operationArrayGet(), op);
+    return out;
+}
+
+Tensor TensorGather(Tensor A, int axis, Tensor indices)
+{
+    int outDims = A.dimensions - 1 + indices.dimensions;
+    int outShape[MAX_DIMENSIONS];
+    int p = 0;
+    for (int d = 0; d < axis; d++) outShape[p++] = A.shape[d];
+    for (int d = 0; d < indices.dimensions; d++) outShape[p++] = indices.shape[d];
+    for (int d = axis + 1; d < A.dimensions; d++) outShape[p++] = A.shape[d];
+
+    Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
+
+    Operation op = { .type=Gather, .out=out, .A=A, .B=indices, .axis=axis };
+    ThreadPoolMap(ThreadPoolGet(), gatherForward, &op, TensorSize(out));
+
+    if (out.gradients) operationArrayPush(operationArrayGet(), op);
+    return out;
+}
+
+Tensor TensorScatter(Bivariate f, Entry initial, Tensor A, int axis, Tensor indices, int n)
+{
+    int outDims = A.dimensions - indices.dimensions + 1;
+    int outShape[MAX_DIMENSIONS];
+    int p = 0;
+    for (int d = 0; d < axis; d++) outShape[p++] = A.shape[d];
+    outShape[p++] = n;
+    for (int d = axis + indices.dimensions; d < A.dimensions; d++) outShape[p++] = A.shape[d];
+
+    Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
+
+    Operation op = { .type=Scatter, .out=out, .A=A, .B=indices, .axis=axis, .initial=initial, .b=f };
+    ThreadPoolMap(ThreadPoolGet(), scatterForward, &op, TensorSize(out));
 
     if (out.gradients) operationArrayPush(operationArrayGet(), op);
     return out;
@@ -402,17 +450,9 @@ Tensor TensorBroadcast(Tensor A, int axis, int n)
         fprintf(stderr, "TensorBroadcast axis must have size 1!\n");
         exit(EXIT_FAILURE);
     }
-
-    int outDims = A.dimensions;
-    int outShape[MAX_DIMENSIONS];
-    for (int i = 0; i < outDims; i++) outShape[i] = A.shape[i];
-    outShape[axis] = n;
-    Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
-
-    Operation op = { .type=Broadcast, .out=out, .A=A, .axis=axis };
-    ThreadPoolMap(ThreadPoolGet(), broadcastForward, &op, TensorSize(A));
-
-    if (out.gradients && A.gradients) operationArrayPush(operationArrayGet(), op);
+    Tensor indices = TensorNew(1, (int[]){n}, FALSE);
+    Tensor out     = TensorGather(A, axis, indices);
+    TensorFree(indices);
     return out;
 }
 
@@ -475,15 +515,15 @@ void TensorBackward(Tensor loss)
                 break;
             }
 
-            case Broadcast: { // out[..., n, ...] = broadcast(A[..., 1, ...], axis)
+            case Gather: {
                 if (op->A.gradients)
-                    ThreadPoolMap(pool, broadcastBackward, op, TensorSize(op->A));
+                    ThreadPoolMap(pool, gatherBackward, op, TensorSize(op->A));
                 break;
             }
 
-            case Reduce: { // out[...,1,...] = reduce(f, A[...,k,...], axis)
+            case Scatter: {
                 if (op->A.gradients)
-                    ThreadPoolMap(pool, reduceBackward, op, TensorSize(op->out));
+                    ThreadPoolMap(pool, scatterBackward, op, TensorSize(op->out));
                 break;
             }
         }
@@ -745,6 +785,17 @@ Tensor TensorOneHot(Tensor labels, int numClasses)
     return out;
 }
 
+int TensorNumberOfClasses(Tensor labels)
+{
+    int size = TensorSize(labels);
+    int max = 0;
+    for (int i = 0; i < size; i++) {
+        int v = (int)labels.entries[i];
+        if (v > max) max = v;
+    }
+    return max + 1;
+}
+
 
 void TensorPrint(Tensor A)
 {
@@ -974,42 +1025,6 @@ static void multiplyForward(void *arg, int start, int end)
     }
 }
 
-static void reduceForward(void *arg, int start, int end)
-{
-    Operation *op = arg;
-    int axis     = op->axis;
-    int axisSize = op->A.shape[axis];
-    int aStride  = op->A.strides[axis];
-    for (int o = start; o < end; o++) {
-        int base = 0, remainder = o;
-        for (int d = 0; d < op->A.dimensions; d++) {
-            int idx    = remainder / op->out.strides[d];
-            remainder -= idx * op->out.strides[d];
-            if (d != axis) base += idx * op->A.strides[d];
-        }
-        Entry result = op->initial;
-        for (int k = 0; k < axisSize; k++)
-            result = op->b.f(result, op->A.entries[base + k * aStride]);
-        op->out.entries[o] = result;
-    }
-}
-
-static void broadcastForward(void *arg, int start, int end)
-{
-    Operation *op = arg;
-    int axis  = op->axis;
-    int n     = op->out.shape[axis];
-    int inner = 1;
-    for (int d = axis + 1; d < op->out.dimensions; d++) inner *= op->out.shape[d];
-    for (int i = start; i < end; i++) {
-        int outerIdx = i / inner;
-        int innerIdx = i % inner;
-        Entry src  = op->A.entries[i];
-        for (int j = 0; j < n; j++)
-            op->out.entries[outerIdx * n * inner + j * inner + innerIdx] = src;
-    }
-}
-
 static void mapBackward(void *arg, int start, int end)
 {
     Operation *op = arg;
@@ -1185,51 +1200,117 @@ static void fold(void *arg, int start, int end)
     }
 }
 
-static void broadcastBackward(void *arg, int start, int end)
+static void gatherForward(void *arg, int start, int end)
 {
     Operation *op = arg;
-    Entry *dA     = op->A.gradients;
-    Entry *dout   = op->out.gradients;
+    Tensor A      = op->A;
+    Tensor I      = op->B;
     int axis      = op->axis;
-    int n         = op->out.shape[axis];
-    int inner     = 1;
-    for (int d = axis + 1; d < op->out.dimensions; d++) inner *= op->out.shape[d];
+    int axisSize  = A.shape[axis];
+    int idxSize   = TensorSize(I);
+    int innerSize = 1;
+    for (int d = axis + 1; d < A.dimensions; d++) innerSize *= A.shape[d];
+
     for (int i = start; i < end; i++) {
-        int outerIdx = i / inner;
-        int innerIdx = i % inner;
-        Entry acc  = 0;
-        for (int j = 0; j < n; j++)
-            acc += dout[outerIdx * n * inner + j * inner + innerIdx];
-        dA[i] += acc;
+        int inner = i % innerSize;
+        int rem   = i / innerSize;
+        int ix    = rem % idxSize;
+        int outer = rem / idxSize;
+        int k     = (int)I.entries[ix];
+        op->out.entries[i] = A.entries[(outer * axisSize + k) * innerSize + inner];
     }
 }
 
-static void reduceBackward(void *arg, int start, int end)
+static void gatherBackward(void *arg, int start, int end)
 {
-    Operation *op  = arg;
-    Entry *dA      = op->A.gradients;
-    Entry *dout    = op->out.gradients;
-    int axisSize   = op->A.shape[op->axis];
-    int axisStride = op->A.strides[op->axis];
-    Entry result[axisSize];
+    Operation *op = arg;
+    Tensor A      = op->A;
+    Tensor I      = op->B;
+    int axis      = op->axis;
+    int axisSize  = A.shape[axis];
+    int idxSize   = TensorSize(I);
+    int innerSize = 1;
+    for (int d = axis + 1; d < A.dimensions; d++) innerSize *= A.shape[d];
 
-    for (int o = start; o < end; o++) {
-        int base = 0, remainder = o;
-        for (int d = 0; d < op->A.dimensions; d++) {
-            int idx    = remainder / op->out.strides[d];
-            remainder -= idx * op->out.strides[d];
-            if (d != op->axis) base += idx * op->A.strides[d];
+    for (int i = start; i < end; i++) {
+        int inner    = i % innerSize;
+        int rem      = i / innerSize;
+        int kTarget  = rem % axisSize;
+        int outer    = rem / axisSize;
+
+        Entry sum = 0;
+        for (int ix = 0; ix < idxSize; ix++) {
+            if ((int)I.entries[ix] == kTarget)
+                sum += op->out.gradients[(outer * idxSize + ix) * innerSize + inner];
+        }
+        A.gradients[(outer * axisSize + kTarget) * innerSize + inner] += sum;
+    }
+}
+
+static void scatterForward(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    Tensor A      = op->A;
+    Tensor I      = op->B;
+    int axis      = op->axis;
+    int n         = op->out.shape[axis];
+    int idxSize   = TensorSize(I);
+    int innerSize = 1;
+    for (int d = axis + 1; d < op->out.dimensions; d++) innerSize *= op->out.shape[d];
+
+    for (int i = start; i < end; i++) {
+        int inner   = i % innerSize;
+        int rem     = i / innerSize;
+        int kTarget = rem % n;
+        int outer   = rem / n;
+
+        Entry acc = op->initial;
+        for (int ix = 0; ix < idxSize; ix++) {
+            if ((int)I.entries[ix] == kTarget)
+                acc = op->b.f(acc, A.entries[(outer * idxSize + ix) * innerSize + inner]);
+        }
+        op->out.entries[i] = acc;
+    }
+}
+
+static void scatterBackward(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    Tensor A      = op->A;
+    Tensor I      = op->B;
+    int axis      = op->axis;
+    int n         = op->out.shape[axis];
+    int idxSize   = TensorSize(I);
+    int innerSize = 1;
+    for (int d = axis + 1; d < op->out.dimensions; d++) innerSize *= op->out.shape[d];
+
+    for (int i = start; i < end; i++) {
+        int inner   = i % innerSize;
+        int rem     = i / innerSize;
+        int kTarget = rem % n;
+        int outer   = rem / n;
+
+        Entry chain[idxSize + 1];
+        chain[0] = op->initial;
+        int count = 0;
+        for (int ix = 0; ix < idxSize; ix++) {
+            if ((int)I.entries[ix] == kTarget) {
+                Entry Av = A.entries[(outer * idxSize + ix) * innerSize + inner];
+                chain[count + 1] = op->b.f(chain[count], Av);
+                count++;
+            }
         }
 
-        result[0] = op->initial;
-        for (int k = 0; k < axisSize - 1; k++)
-            result[k + 1] = op->b.f(result[k], op->A.entries[base + k * axisStride]);
-
-        Entry dresult = dout[o];
-        for (int k = axisSize - 1; k >= 0; k--) {
-            Entry Ak = op->A.entries[base + k * axisStride];
-            dA[base + k * axisStride] += dresult * op->b.db(result[k], Ak);
-            dresult *= op->b.da(result[k], Ak);
+        Entry dresult = op->out.gradients[i];
+        int c = count - 1;
+        for (int ix = idxSize - 1; ix >= 0 && c >= 0; ix--) {
+            if ((int)I.entries[ix] == kTarget) {
+                int aOffset = (outer * idxSize + ix) * innerSize + inner;
+                Entry Av    = A.entries[aOffset];
+                A.gradients[aOffset] += dresult * op->b.db(chain[c], Av);
+                dresult *= op->b.da(chain[c], Av);
+                c--;
+            }
         }
     }
 }

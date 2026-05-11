@@ -32,6 +32,7 @@ extern Univariate LOG;
 extern Univariate EXP;
 extern Univariate NEGATE;
 extern Univariate IDENTITY;
+extern Univariate TANH;
 extern Bivariate  ADD;
 extern Bivariate  SUBTRACT;
 extern Bivariate  MULTIPLY;
@@ -92,6 +93,8 @@ Tensor TensorView(Tensor A, int dimensions, int *shape, int autograd);
  */
 Tensor TensorReshape(Tensor A, int dimensions, int *shape);
 
+Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides);
+
 /*
  * Returns a view of length entries starting at index along the given axis.
  */
@@ -129,27 +132,16 @@ Tensor TensorMap(Univariate f, Tensor A);
 Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
 
 /*
- * Reduces A along the given axis using f, starting from initial.
- * A:   [..., m, ...]
- * out: [..., 1, ...]
- */
-Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis);
-
-/*
- * broadcasts the given axis from size 1 to size n, all entries are replicated
- * along that axis.
- * A:   [..., 1, ...]
- * out: [..., n, ...]
- */
-Tensor TensorBroadcast(Tensor A, int axis, int n);
-
-/*
  * Multiply A by B using the last two dimensions as matrices.
  * A:   [..., m, k]
  * B:   [..., k, n]
  * out: [..., m, n]
  */
 Tensor TensorMultiply(Tensor A, Tensor B);
+
+Tensor TensorGather(Tensor A, int axis, Tensor indices);
+
+Tensor TensorScatter(Bivariate f, Entry initial, Tensor A, int axis, Tensor indices, int n);
 
 /*
  * Apply each filter across the height and width of each input. Each filter
@@ -247,6 +239,22 @@ Tensor TensorNLL(Tensor y, Tensor y_hat);
  */
 Tensor TensorMSE(Tensor y, Tensor y_hat);
 
+/*
+ * Broadcasts the given axis from size 1 to size n; all entries are replicated
+ * along that axis. Implemented as a Gather with a length-n index tensor of zeros.
+ * A:   [..., 1, ...]
+ * out: [..., n, ...]
+ */
+Tensor TensorBroadcast(Tensor A, int axis, int n);
+
+/*
+ * Reduces A along the given axis using f, starting from initial. Implemented as
+ * a Scatter with a length-A.shape[axis] index tensor of zeros and n=1.
+ * A:   [..., k, ...]
+ * out: [..., 1, ...]
+ */
+Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis);
+
 
 /*=============================================================================================
  *                                          Utilities
@@ -280,6 +288,8 @@ void TensorXavier(Tensor A);
  * shape [..., numClasses]. Labels must be non-negative integers in [0, numClasses)
  */
 Tensor TensorOneHot(Tensor labels, int numClasses);
+
+int TensorNumberOfClasses(Tensor labels);
 
 /*
  * Prints a tensor to stdout. Tensors of size 1 are printed as scalars.
