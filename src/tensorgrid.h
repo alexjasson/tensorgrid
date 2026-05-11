@@ -93,6 +93,9 @@ Tensor TensorView(Tensor A, int dimensions, int *shape, int autograd);
  */
 Tensor TensorReshape(Tensor A, int dimensions, int *shape);
 
+/*
+ * Returns a new tensor of the given shape and strides. Allocates new memory.
+ */
 Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides);
 
 /*
@@ -139,8 +142,23 @@ Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
  */
 Tensor TensorMultiply(Tensor A, Tensor B);
 
+/*
+ * Write values from A into positions given by indices.
+ * If multiple values go to the same position, combine them with f.
+ *
+ * A:       [..., K, ...]               (K is the size of the gathered axis)
+ * indices: [s_0, ..., s_m]             (integer values in [0, K), encoded as Entry)
+ * out:     [..., s_0, ..., s_m, ...]
+ */
 Tensor TensorGather(Tensor A, int axis, Tensor indices);
 
+/*
+ * Read from A at positions given by indices.
+ *
+ * A:       [..., s_0, ..., s_m, ...]   (indices shape lives at axis)
+ * indices: [s_0, ..., s_m]             (integer values in [0, n), encoded as Entry)
+ * out:     [..., n, ...]
+ */
 Tensor TensorScatter(Bivariate f, Entry initial, Tensor A, int axis, Tensor indices, int n);
 
 /*
@@ -289,6 +307,10 @@ void TensorXavier(Tensor A);
  */
 Tensor TensorOneHot(Tensor labels, int numClasses);
 
+/*
+ * Returns max(labels) + 1, the inferred number of classes. Labels must be
+ * non-negative integers in [0, numClasses).
+ */
 int TensorNumberOfClasses(Tensor labels);
 
 /*
