@@ -83,10 +83,10 @@ int TensorSize(Tensor A);
 int TensorShape(Tensor A, int axis);
 
 /*
- * Returns a view with a new shape. Total size must be unchanged. Shares memory
- * with A, use with caution.
+ * Returns a view of A with autograd removed. Shares memory with A.
+ * Operations on the returned tensor are no longer recorded.
  */
-Tensor TensorView(Tensor A, int dimensions, int *shape, int autograd);
+Tensor TensorDetach(Tensor A);
 
 /*
  * Returns A with a new shape. Total size must be unchanged. Does not allocate memory.

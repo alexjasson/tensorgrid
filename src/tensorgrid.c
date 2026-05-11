@@ -164,19 +164,11 @@ Tensor TensorReshape(Tensor A, int dimensions, int *shape)
     return A;
 }
 
-Tensor TensorView(Tensor A, int dimensions, int *shape, int autograd)
+Tensor TensorDetach(Tensor A)
 {
-    Tensor t = {0};
-    t.dimensions = dimensions;
-    for (int i = 0; i < dimensions; i++) t.shape[i] = shape[i];
-    if (dimensions > 0) {
-        t.strides[dimensions - 1] = 1;
-        for (int i = dimensions - 2; i >= 0; i--)
-            t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
-    }
-    t.entries   = A.entries;
-    t.gradients = autograd ? A.gradients : NULL;
-    t.optimizer = autograd ? A.optimizer : NULL;
+    Tensor t    = A;
+    t.gradients = NULL;
+    t.optimizer = NULL;
     t.refcount  = NULL;
     return t;
 }
@@ -585,7 +577,7 @@ void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, flo
 Tensor TensorSoftmax(Tensor in, float temperature)
 {
     // Numerical stability trick
-    Tensor inView       = TensorView(in, in.dimensions, in.shape, 0);
+    Tensor inView       = TensorDetach(in);
     Tensor temp1        = TensorReduce(MAX, -FLT_MAX, inView, in.dimensions - 1);
     Tensor temp2        = TensorBroadcast(temp1, in.dimensions - 1, in.shape[in.dimensions - 1]);
     Tensor stableLogits = TensorZip(SUBTRACT, in, temp2);
@@ -609,7 +601,7 @@ Tensor TensorSoftmax(Tensor in, float temperature)
 Tensor TensorLogSoftmax(Tensor in, float temperature)
 {
     // Numerical stability trick
-    Tensor inView       = TensorView(in, in.dimensions, in.shape, 0);
+    Tensor inView       = TensorDetach(in);
     Tensor temp1        = TensorReduce(MAX, -FLT_MAX, inView, in.dimensions - 1);
     Tensor temp2        = TensorBroadcast(temp1, in.dimensions - 1, in.shape[in.dimensions - 1]);
     Tensor stableLogits = TensorZip(SUBTRACT, in, temp2);
