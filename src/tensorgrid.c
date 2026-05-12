@@ -142,13 +142,15 @@ void TensorFree(Tensor A)
     free(A.refcount);
 }
 
-Tensor TensorSlice(Tensor A, int axis, int index, int length)
+Tensor TensorSlice(Tensor A, int index, int length)
 {
-    Tensor t         = A;
-    t.shape[axis]    = length;
-    t.entries        = A.entries   + index * A.strides[axis];
-    t.gradients      = A.gradients ? A.gradients + index * A.strides[axis] : NULL;
-    t.refcount       = NULL;
+    Tensor t    = A;
+    t.shape[0]  = length;
+    int inner   = 1;
+    for (int i = 1; i < A.dimensions; i++) inner *= A.shape[i];
+    t.entries   = A.entries   + index * inner;
+    t.gradients = A.gradients ? A.gradients + index * inner : NULL;
+    t.refcount  = NULL;
     return t;
 }
 
@@ -175,12 +177,31 @@ Tensor TensorDetach(Tensor A)
 
 Tensor TensorTranspose(Tensor A)
 {
-    Tensor t = A;
-    t.shape[A.dimensions - 2]   = A.shape[A.dimensions - 1];
-    t.shape[A.dimensions - 1]   = A.shape[A.dimensions - 2];
-    t.strides[A.dimensions - 2] = A.strides[A.dimensions - 1];
-    t.strides[A.dimensions - 1] = A.strides[A.dimensions - 2];
-    return t;
+    int dims = A.dimensions;
+    int newShape[MAX_DIMENSIONS];
+    int srcStrides[MAX_DIMENSIONS];
+    for (int i = 0; i < dims; i++) {
+        newShape[i]   = A.shape[i];
+        srcStrides[i] = A.strides[i];
+    }
+    newShape[dims - 2]   = A.shape[dims - 1];
+    newShape[dims - 1]   = A.shape[dims - 2];
+    srcStrides[dims - 2] = A.strides[dims - 1];
+    srcStrides[dims - 1] = A.strides[dims - 2];
+
+    Tensor out = TensorNew(dims, newShape, FALSE);
+    int size = TensorSize(out);
+    for (int i = 0; i < size; i++) {
+        int rem = i;
+        int srcOffset = 0;
+        for (int d = dims - 1; d >= 0; d--) {
+            int idx = rem % newShape[d];
+            rem /= newShape[d];
+            srcOffset += idx * srcStrides[d];
+        }
+        out.entries[i] = A.entries[srcOffset];
+    }
+    return out;
 }
 
 Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides)
@@ -781,18 +802,6 @@ Tensor TensorOneHot(Tensor labels, int numClasses)
 
     return out;
 }
-
-int TensorNumberOfClasses(Tensor labels)
-{
-    int size = TensorSize(labels);
-    int max = 0;
-    for (int i = 0; i < size; i++) {
-        int v = (int)labels.entries[i];
-        if (v > max) max = v;
-    }
-    return max + 1;
-}
-
 
 void TensorPrint(Tensor A)
 {

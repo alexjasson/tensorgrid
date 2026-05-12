@@ -14,29 +14,36 @@
 #define MOMENTUM    0.9f
 
 /*
- * CNN with two convolution layers with max-pooling, one
- * hidden layer and an output layer. Let N = batch size
+ * CNN with two convolution layers with max-pooling, one hidden layer and
+ * an output layer. Let N = batch size.
+ *
+ * p_1 = maxpool(relu(conv(X,   K_1) + b_1))
+ * p_2 = maxpool(relu(conv(p_1, K_2) + b_2))
+ * h   = relu(flatten(p_2) @ W_h + b_h)
+ * Z   = h @ W_y + b_y
  */
 typedef struct {
-    Tensor K1, b1, K2, b2; // Convolution filter weights and biases
-    Tensor W1, b3, W2, b4; // Hidden/output layer weights and biases
+    Tensor K_1, b_1; // [C1_CHANNELS, 1, 3, 3],           [1, C1_CHANNELS, 1, 1]
+    Tensor K_2, b_2; // [C2_CHANNELS, C1_CHANNELS, 3, 3], [1, C2_CHANNELS, 1, 1]
+    Tensor W_h, b_h; // [FEATURES, HIDDEN_SIZE],          [1, HIDDEN_SIZE]
+    Tensor W_y, b_y; // [HIDDEN_SIZE, NUM_CLASSES],       [1, NUM_CLASSES]
 } Model;
 
 // X: [N, 1, 28, 28]
 static Tensor forward(Tensor X, Model *m)
 {
-    int N     = TensorShape(X, 0);
-    Tensor A1 = TensorConvolutionLayer(X,  m->K1, m->b1, 1, 1, RELU); // [N, 16, 28, 28]
-    Tensor P1 = TensorMaxPool(A1, 2, 2, 0);                           // [N, 16, 14, 14]
-    Tensor A2 = TensorConvolutionLayer(P1, m->K2, m->b2, 1, 1, RELU); // [N, 32, 14, 14]
-    Tensor P2 = TensorMaxPool(A2, 2, 2, 0);                           // [N, 32, 7, 7]
-    Tensor F  = TensorReshape(P2, 2, (int[]){N, FEATURES});           // [N, FEATURES]
-    Tensor H  = TensorLinearLayer(F, m->W1, m->b3, RELU);             // [N, 128]
-    Tensor Z  = TensorLinearLayer(H, m->W2, m->b4, IDENTITY);         // [N, 10]
+    int N      = TensorShape(X, 0);
+    Tensor c_1 = TensorConvolutionLayer(X,   m->K_1, m->b_1, 1, 1, RELU); // [N, 16, 28, 28]
+    Tensor p_1 = TensorMaxPool(c_1, 2, 2, 0);                             // [N, 16, 14, 14]
+    Tensor c_2 = TensorConvolutionLayer(p_1, m->K_2, m->b_2, 1, 1, RELU); // [N, 32, 14, 14]
+    Tensor p_2 = TensorMaxPool(c_2, 2, 2, 0);                             // [N, 32, 7, 7]
+    Tensor f   = TensorReshape(p_2, 2, (int[]){N, FEATURES});             // [N, FEATURES]
+    Tensor h   = TensorLinearLayer(f, m->W_h, m->b_h, RELU);              // [N, HIDDEN_SIZE]
+    Tensor Z   = TensorLinearLayer(h, m->W_y, m->b_y, IDENTITY);          // [N, NUM_CLASSES]
 
-    TensorFree(A1); TensorFree(P1);
-    TensorFree(A2); TensorFree(P2);
-    TensorFree(H);
+    TensorFree(c_1); TensorFree(p_1);
+    TensorFree(c_2); TensorFree(p_2);
+    TensorFree(h);
     return Z;
 }
 
@@ -49,30 +56,30 @@ int main(void)
     Tensor yTest  = TensorRead("data/mnist/yTest.npy");  // [10000]
 
     // Compute number of training/test samples and number of batches
-    int nTrain = TensorShape(xTrain, 0);
-    int nTest  = TensorShape(xTest, 0);
-    int trainBatches = (nTrain + BATCH_SIZE - 1) / BATCH_SIZE;
-    int testBatches  = (nTest  + BATCH_SIZE - 1) / BATCH_SIZE;
-    printf("Train: %d  Test: %d\n\n", nTrain, nTest);
+    int trainSamples = TensorShape(xTrain, 0);
+    int testSamples  = TensorShape(xTest, 0);
+    int trainBatches = (trainSamples + BATCH_SIZE - 1) / BATCH_SIZE;
+    int testBatches  = (testSamples  + BATCH_SIZE - 1) / BATCH_SIZE;
+    printf("Train: %d  Test: %d\n\n", trainSamples, testSamples);
 
     // Reshape data Tensors from [..., 28, 28] to [..., 1, 28, 28] and scale entries from [0, 255] to [0, 1]
-    xTrain = TensorReshape(xTrain, 4, (int[]){nTrain, 1, 28, 28}); // [60000, 1, 28, 28]
-    xTest  = TensorReshape(xTest,  4, (int[]){nTest,  1, 28, 28}); // [10000, 1, 28, 28]
+    xTrain = TensorReshape(xTrain, 4, (int[]){trainSamples, 1, 28, 28}); // [60000, 1, 28, 28]
+    xTest  = TensorReshape(xTest,  4, (int[]){testSamples,  1, 28, 28}); // [10000, 1, 28, 28]
     TensorScale(xTrain, 1.0f / 255.0f);
     TensorScale(xTest,  1.0f / 255.0f);
 
     // Create and initialize convolution filters, weights and biases
     Model m;
-    m.K1 = TensorNew(4, (int[]){C1_CHANNELS,  1, 3, 3}, TRUE);          // [16, 1, 3, 3]
-    m.b1 = TensorNew(4, (int[]){1, C1_CHANNELS, 1, 1}, TRUE);           // [1, 16, 1, 1]
-    m.K2 = TensorNew(4, (int[]){C2_CHANNELS, C1_CHANNELS, 3, 3}, TRUE); // [32, 16, 3, 3]
-    m.b2 = TensorNew(4, (int[]){1, C2_CHANNELS, 1, 1}, TRUE);           // [1, 32, 1, 1]
-    m.W1 = TensorNew(2, (int[]){FEATURES, HIDDEN_SIZE}, TRUE);          // [32*7*7, 128]
-    m.b3 = TensorNew(2, (int[]){1, HIDDEN_SIZE}, TRUE);                 // [1, 128]
-    m.W2 = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE);       // [128, 10]
-    m.b4 = TensorNew(2, (int[]){1, NUM_CLASSES}, TRUE);                 // [1, 10]
-    TensorXavier(m.K1); TensorXavier(m.K2);
-    TensorXavier(m.W1); TensorXavier(m.W2);
+    m.K_1 = TensorNew(4, (int[]){C1_CHANNELS,  1, 3, 3}, TRUE);          // [16, 1, 3, 3]
+    m.b_1 = TensorNew(4, (int[]){1, C1_CHANNELS, 1, 1}, TRUE);           // [1, 16, 1, 1]
+    m.K_2 = TensorNew(4, (int[]){C2_CHANNELS, C1_CHANNELS, 3, 3}, TRUE); // [32, 16, 3, 3]
+    m.b_2 = TensorNew(4, (int[]){1, C2_CHANNELS, 1, 1}, TRUE);           // [1, 32, 1, 1]
+    m.W_h = TensorNew(2, (int[]){FEATURES, HIDDEN_SIZE}, TRUE);          // [32*7*7, 128]
+    m.b_h = TensorNew(2, (int[]){1, HIDDEN_SIZE}, TRUE);                 // [1, 128]
+    m.W_y = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE);       // [128, 10]
+    m.b_y = TensorNew(2, (int[]){1, NUM_CLASSES}, TRUE);                 // [1, 10]
+    TensorXavier(m.K_1); TensorXavier(m.K_2);
+    TensorXavier(m.W_h); TensorXavier(m.W_y);
 
     // One-hot encoding of yTrain needed to compute cross entropy loss
     Tensor oneHot = TensorOneHot(yTrain, NUM_CLASSES); // [60000, 10]
@@ -84,23 +91,23 @@ int main(void)
 
         for (int batch = 0; batch < trainBatches; batch++) {
             // Cap final batch size so we don't slice past the end of dataset
-            int N = nTrain - batch * BATCH_SIZE;
-            if (N > BATCH_SIZE) N = BATCH_SIZE;
-            Tensor X = TensorSlice(xShuffled, 0, batch * BATCH_SIZE, N); // [N, 1, 28, 28]
-            Tensor Y = TensorSlice(yShuffled, 0, batch * BATCH_SIZE, N); // [N, 10]
+            int remaining = trainSamples - batch * BATCH_SIZE;
+            int N = remaining > BATCH_SIZE ? BATCH_SIZE : remaining;
 
-            Tensor Z    = forward(X, &m);                     // [N, 10]
-            Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f); // [] (Scalar)
+            Tensor X = TensorSlice(xShuffled, batch * BATCH_SIZE, N); // [N, 1, 28, 28]
+            Tensor Y = TensorSlice(yShuffled, batch * BATCH_SIZE, N); // [N, 10]
+            Tensor Z    = forward(X, &m);                             // [N, 10]
+            Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f);         // [] (Scalar)
 
             TensorBackward(loss);
-            TensorSGD(m.K1, LR, MOMENTUM);
-            TensorSGD(m.b1, LR, MOMENTUM);
-            TensorSGD(m.K2, LR, MOMENTUM);
-            TensorSGD(m.b2, LR, MOMENTUM);
-            TensorSGD(m.W1, LR, MOMENTUM);
-            TensorSGD(m.b3, LR, MOMENTUM);
-            TensorSGD(m.W2, LR, MOMENTUM);
-            TensorSGD(m.b4, LR, MOMENTUM);
+            TensorSGD(m.K_1, LR, MOMENTUM);
+            TensorSGD(m.b_1, LR, MOMENTUM);
+            TensorSGD(m.K_2, LR, MOMENTUM);
+            TensorSGD(m.b_2, LR, MOMENTUM);
+            TensorSGD(m.W_h, LR, MOMENTUM);
+            TensorSGD(m.b_h, LR, MOMENTUM);
+            TensorSGD(m.W_y, LR, MOMENTUM);
+            TensorSGD(m.b_y, LR, MOMENTUM);
 
             if (((batch + 1) % LOG == 0) || (batch + 1 == trainBatches)) {
                 printf("Epoch %2d | Batch %3d/%d | Loss: ", epoch, batch + 1, trainBatches);
@@ -113,13 +120,13 @@ int main(void)
 
         int totalSamples = 0, totalErrors = 0;
         for (int batch = 0; batch < testBatches; batch++) {
-            int N = nTest - batch * BATCH_SIZE;
-            if (N > BATCH_SIZE) N = BATCH_SIZE;
-            Tensor X = TensorSlice(xTest, 0, batch * BATCH_SIZE, N); // [N, 1, 28, 28]
-            Tensor Y = TensorSlice(yTest, 0, batch * BATCH_SIZE, N); // [N]
+            int remaining = testSamples - batch * BATCH_SIZE;
+            int N = remaining > BATCH_SIZE ? BATCH_SIZE : remaining;
 
-            Tensor Z           = forward(X, &m);     // [N, 10]
-            Tensor predictions = TensorSample(Z, 0); // [N]
+            Tensor X = TensorSlice(xTest, batch * BATCH_SIZE, N); // [N, 1, 28, 28]
+            Tensor Y = TensorSlice(yTest, batch * BATCH_SIZE, N); // [N]
+            Tensor Z           = forward(X, &m);                  // [N, 10]
+            Tensor predictions = TensorSample(Z, 0);              // [N]
 
             totalErrors  += TensorHammingDistance(predictions, Y);
             totalSamples += TensorSize(predictions);
@@ -129,8 +136,8 @@ int main(void)
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
     }
 
-    TensorFree(m.K1); TensorFree(m.b1); TensorFree(m.K2); TensorFree(m.b2);
-    TensorFree(m.W1); TensorFree(m.b3); TensorFree(m.W2); TensorFree(m.b4);
+    TensorFree(m.K_1); TensorFree(m.b_1); TensorFree(m.K_2); TensorFree(m.b_2);
+    TensorFree(m.W_h); TensorFree(m.b_h); TensorFree(m.W_y); TensorFree(m.b_y);
     TensorFree(oneHot);
     TensorFree(xTrain); TensorFree(yTrain);
     TensorFree(xTest);  TensorFree(yTest);

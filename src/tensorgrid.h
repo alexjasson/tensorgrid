@@ -89,7 +89,12 @@ int TensorShape(Tensor A, int axis);
 Tensor TensorDetach(Tensor A);
 
 /*
- * Returns A with a new shape. Total size must be unchanged. Does not allocate memory.
+ * Returns a view of length entries starting along axis 0. Shares memory with A.
+ */
+Tensor TensorSlice(Tensor A, int index, int length);
+
+/*
+ * Returns a view of A with a new shape. Total size must be unchanged. Shares memory with A.
  */
 Tensor TensorReshape(Tensor A, int dimensions, int *shape);
 
@@ -99,12 +104,7 @@ Tensor TensorReshape(Tensor A, int dimensions, int *shape);
 Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides);
 
 /*
- * Returns a view of length entries starting at index along the given axis.
- */
-Tensor TensorSlice(Tensor A, int axis, int index, int length);
-
-/*
- * Returns a view with the last two dimensions transposed.
+ * Returns a new tensor with the last two dimensions transposed. Allocates new memory.
  */
 Tensor TensorTranspose(Tensor A);
 
@@ -314,12 +314,6 @@ void TensorXavier(Tensor A);
  * shape [..., numClasses]. Labels must be non-negative integers in [0, numClasses)
  */
 Tensor TensorOneHot(Tensor labels, int numClasses);
-
-/*
- * Returns max(labels) + 1, the inferred number of classes. Labels must be
- * non-negative integers in [0, numClasses).
- */
-int TensorNumberOfClasses(Tensor labels);
 
 /*
  * Prints a tensor to stdout. Tensors of size 1 are printed as scalars.
