@@ -37,7 +37,7 @@ static Tensor forward(Tensor X, Model *m)
 
     for (int t = 0; t < SEQ_LENGTH; t++) {
         Tensor e_t    = TensorSlice(embedding, t, 1);                    // [1, N, HIDDEN_SIZE]
-        Tensor e_bias = TensorZip(ADD, e_t, m->b_h);                     // [1, N, HIDDEN_SIZE]
+        Tensor e_bias = TensorAdd(e_t, m->b_h);                          // [1, N, HIDDEN_SIZE]
         Tensor h_curr = TensorLinearLayer(h_prev, m->U_h, e_bias, TANH); // [1, N, HIDDEN_SIZE]
 
         TensorFree(h_prev);

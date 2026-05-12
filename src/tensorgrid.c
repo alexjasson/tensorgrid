@@ -229,6 +229,11 @@ Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
     return out;
 }
 
+Tensor TensorCopy(Tensor A)               { return TensorMap(IDENTITY, A);    }
+Tensor TensorAdd(Tensor A, Tensor B)      { return TensorZip(ADD, A, B);      }
+Tensor TensorSubtract(Tensor A, Tensor B) { return TensorZip(SUBTRACT, A, B); }
+Tensor TensorHadamard(Tensor A, Tensor B) { return TensorZip(MULTIPLY, A, B); }
+
 Tensor TensorMap(Univariate f, Tensor A)
 {
     Tensor out = TensorNew(A.dimensions, A.shape, A.gradients != NULL);

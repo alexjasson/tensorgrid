@@ -120,62 +120,6 @@ void TensorSet(Tensor A, int *indices, Entry value);
 
 
 /*=============================================================================================
- *                                   Primitive Operations
- *=============================================================================================*/
-
-/*
- * out = f(A).
- */
-Tensor TensorMap(Univariate f, Tensor A);
-
-/*
- * out = f(A, B). Shapes must match, except axes of size 1, which are broadcasted
- * to the other tensor's size.
- */
-Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
-
-/*
- * Multiply A by B using the last two dimensions as matrices.
- * A:   [..., m, k]
- * B:   [..., k, n]
- * out: [..., m, n]
- */
-Tensor TensorMultiply(Tensor A, Tensor B);
-
-/*
-* Read from A at positions given by indices.
-*
-* A:       [..., s_0, ..., s_m, ...]   (indices shape lives at axis)
-* indices: [s_0, ..., s_m]             (integer values in [0, n), encoded as Entry)
-* out:     [..., n, ...]
-*/
-Tensor TensorGather(Tensor A, int axis, Tensor indices);
-
-/*
- * Write values from A into positions given by indices.
- * If multiple values go to the same position, combine them with f.
- *
- * A:       [..., K, ...]               (K is the size of the gathered axis)
- * indices: [s_0, ..., s_m]             (integer values in [0, K), encoded as Entry)
- * out:     [..., s_0, ..., s_m, ...]
- */
-Tensor TensorScatter(Bivariate f, Entry initial, Tensor A, int axis, Tensor indices, int n);
-
-/*
- * Moves a fH x fW window across the height and width of each input, and flattens each window
- * into a column of the output.. Out-of-bounds positions are filled with `fill`. Input must
- * be 4D.
- *
- * input  = [batch size, input channels, height, width]
- * output = [batch size, input channels * fH * fW, output height * output width]
- *
- * output height = (input height + 2*padding - fH) / stride + 1
- * output width  = (input width  + 2*padding - fW) / stride + 1
- */
-Tensor TensorUnfold(Tensor input, int fH, int fW, int stride, int padding, Entry fill);
-
-
-/*=============================================================================================
  *                                   Composite Operations
  *=============================================================================================*/
 
@@ -294,11 +238,86 @@ Tensor TensorBroadcast(Tensor A, int axis, int n);
  */
 Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis);
 
+/*
+ * Element-wise addition. out = A + B
+ */
+Tensor TensorAdd(Tensor A, Tensor B);
+
+/*
+ * Element-wise subtraction. out = A - B
+ */
+Tensor TensorSubtract(Tensor A, Tensor B);
+
+/*
+ * Element-wise (Hadamard) product. out = A * B
+ */
+Tensor TensorHadamard(Tensor A, Tensor B);
+
+/*
+ * Returns a new tensor with the same shape and values as A. Allocates new memory.
+ */
+Tensor TensorCopy(Tensor A);
+
+
+/*=============================================================================================
+ *                                   Primitive Operations
+ *=============================================================================================*/
+
+/*
+ * out = f(A).
+ */
+Tensor TensorMap(Univariate f, Tensor A);
+
+/*
+ * out = f(A, B). Shapes must match, except axes of size 1, which are broadcasted
+ * to the other tensor's size.
+ */
+Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
+
+/*
+ * Multiply A by B using the last two dimensions as matrices.
+ * A:   [..., m, k]
+ * B:   [..., k, n]
+ * out: [..., m, n]
+ */
+Tensor TensorMultiply(Tensor A, Tensor B);
+
+/*
+* Read from A at positions given by indices.
+*
+* A:       [..., s_0, ..., s_m, ...]   (indices shape lives at axis)
+* indices: [s_0, ..., s_m]             (integer values in [0, n), encoded as Entry)
+* out:     [..., n, ...]
+*/
+Tensor TensorGather(Tensor A, int axis, Tensor indices);
+
+/*
+ * Write values from A into positions given by indices.
+ * If multiple values go to the same position, combine them with f.
+ *
+ * A:       [..., K, ...]               (K is the size of the gathered axis)
+ * indices: [s_0, ..., s_m]             (integer values in [0, K), encoded as Entry)
+ * out:     [..., s_0, ..., s_m, ...]
+ */
+Tensor TensorScatter(Bivariate f, Entry initial, Tensor A, int axis, Tensor indices, int n);
+
+/*
+ * Moves a fH x fW window across the height and width of each input, and flattens each window
+ * into a column of the output. Out-of-bounds positions are filled with `fill`. Input must
+ * be 4D.
+ *
+ * input  = [batch size, input channels, height, width]
+ * output = [batch size, input channels * fH * fW, output height * output width]
+ *
+ * output height = (input height + 2*padding - fH) / stride + 1
+ * output width  = (input width  + 2*padding - fW) / stride + 1
+ */
+Tensor TensorUnfold(Tensor input, int fH, int fW, int stride, int padding, Entry fill);
+
 
 /*=============================================================================================
  *                                          Utilities
  *=============================================================================================*/
-
 
 /*
  * Returns a new tensor with rows shuffled via Fisher-Yates.
