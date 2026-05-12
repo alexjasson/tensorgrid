@@ -1,0 +1,176 @@
+#include <stdio.h>
+#include "tensorgrid.h"
+
+#define NUM_CLASSES 65
+#define SEQ_LENGTH  16
+#define HIDDEN_SIZE 64
+#define BATCH_SIZE  64
+#define EPOCHS      5
+#define LOG         50
+#define LR          0.005f
+#define BETA1       0.9f
+#define BETA2       0.999f
+#define EPSILON     1e-8f
+
+/*
+ * Gated Recurrent Unit (GRU) with an embedding layer. Let N = batch size.
+ *
+ * e_t       = E[x_t]
+ * z_t       = sigmoid(e_t + h_{t-1} @ U_z + b_z)
+ * r_t       = sigmoid(e_t + h_{t-1} @ U_r + b_r)
+ * h_tilde_t = tanh(e_t + (r_t * h_{t-1}) @ U_h + b_h)
+ * h_t       = (1 - z_t) * h_{t-1} + z_t * h_tilde_t
+ * Z         = h_{SEQ_LENGTH-1} @ W_y + b_y
+ */
+typedef struct {
+    Tensor E;        // [NUM_CLASSES, HIDDEN_SIZE]
+    Tensor U_z, b_z; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, 1, HIDDEN_SIZE]
+    Tensor U_r, b_r; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, 1, HIDDEN_SIZE]
+    Tensor U_h, b_h; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, 1, HIDDEN_SIZE]
+    Tensor W_y, b_y; // [HIDDEN_SIZE, NUM_CLASSES], [1, NUM_CLASSES]
+} Model;
+
+// X: [N, SEQ_LENGTH]
+static Tensor forward(Tensor X, Model *m)
+{
+    int N = TensorShape(X, 0);
+
+    Tensor X_T       = TensorTranspose(X);                              // [SEQ_LENGTH, N]
+    Tensor embedding = TensorEmbedding(m->E, X_T);                      // [SEQ_LENGTH, N, HIDDEN_SIZE]
+    Tensor h_prev    = TensorNew(3, (int[]){1, N, HIDDEN_SIZE}, FALSE); // [1, N, HIDDEN_SIZE]
+    Tensor ones      = TensorNew(3, (int[]){1, N, HIDDEN_SIZE}, FALSE); // [1, N, HIDDEN_SIZE]
+    TensorFill(ones, 1.0f);
+    TensorFree(X_T);
+
+    for (int t = 0; t < SEQ_LENGTH; t++) {
+        Tensor e_t = TensorSlice(embedding, t, 1);                              // [1, N, HIDDEN_SIZE]
+
+        Tensor e_bias_z = TensorAdd(e_t, m->b_z);                               // [1, N, HIDDEN_SIZE]
+        Tensor z_t      = TensorLinearLayer(h_prev, m->U_z, e_bias_z, SIGMOID); // [1, N, HIDDEN_SIZE]
+        TensorFree(e_bias_z);
+
+        Tensor e_bias_r = TensorAdd(e_t, m->b_r);                               // [1, N, HIDDEN_SIZE]
+        Tensor r_t      = TensorLinearLayer(h_prev, m->U_r, e_bias_r, SIGMOID); // [1, N, HIDDEN_SIZE]
+        TensorFree(e_bias_r);
+
+        Tensor r_h      = TensorHadamard(r_t, h_prev);                          // [1, N, HIDDEN_SIZE]
+        Tensor e_bias_h = TensorAdd(e_t, m->b_h);                               // [1, N, HIDDEN_SIZE]
+        Tensor h_tilde  = TensorLinearLayer(r_h, m->U_h, e_bias_h, TANH);       // [1, N, HIDDEN_SIZE]
+        TensorFree(r_h);
+        TensorFree(e_bias_h);
+
+        Tensor one_minus_z = TensorSubtract(ones, z_t);                         // [1, N, HIDDEN_SIZE]
+        Tensor left        = TensorHadamard(one_minus_z, h_prev);               // [1, N, HIDDEN_SIZE]
+        Tensor right       = TensorHadamard(z_t, h_tilde);                      // [1, N, HIDDEN_SIZE]
+        Tensor h_curr      = TensorAdd(left, right);                            // [1, N, HIDDEN_SIZE]
+
+        TensorFree(z_t); TensorFree(r_t); TensorFree(h_tilde);
+        TensorFree(one_minus_z); TensorFree(left); TensorFree(right);
+        TensorFree(h_prev);
+        h_prev = h_curr;
+    }
+    TensorFree(embedding);
+    TensorFree(ones);
+
+    h_prev = TensorReshape(h_prev, 2, (int[]){N, HIDDEN_SIZE});
+    Tensor Z = TensorLinearLayer(h_prev, m->W_y, m->b_y, IDENTITY); // [N, NUM_CLASSES]
+    TensorFree(h_prev);
+    return Z;
+}
+
+int main(void)
+{
+    // Read data into Tensors from .npy files
+    Tensor train = TensorRead("data/tinyShakespeare/train.npy"); // [1003854]
+    Tensor test  = TensorRead("data/tinyShakespeare/test.npy");  // [111540]
+
+    // Compute number of training/test samples and number of batches
+    int trainSamples = TensorShape(train, 0) - SEQ_LENGTH;
+    int testSamples  = TensorShape(test,  0) - SEQ_LENGTH;
+    int trainBatches = (trainSamples + BATCH_SIZE - 1) / BATCH_SIZE;
+    int testBatches  = (testSamples  + BATCH_SIZE - 1) / BATCH_SIZE;
+    printf("Train: %d  Test: %d\n\n", trainSamples, testSamples);
+
+    Tensor xTrain = TensorRestride(train, 2, (int[]){trainSamples, SEQ_LENGTH}, (int[]){1, 1});
+    Tensor xTest  = TensorRestride(test,  2, (int[]){testSamples,  SEQ_LENGTH}, (int[]){1, 1});
+    Tensor yTrain = TensorSlice(train, SEQ_LENGTH, trainSamples);
+    Tensor yTest  = TensorSlice(test,  SEQ_LENGTH, testSamples);
+
+    Model m;
+    m.E   = TensorNew(2, (int[]){NUM_CLASSES, HIDDEN_SIZE}, TRUE);
+    m.U_z = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
+    m.b_z = TensorNew(3, (int[]){1, 1, HIDDEN_SIZE}, TRUE);
+    m.U_r = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
+    m.b_r = TensorNew(3, (int[]){1, 1, HIDDEN_SIZE}, TRUE);
+    m.U_h = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
+    m.b_h = TensorNew(3, (int[]){1, 1, HIDDEN_SIZE}, TRUE);
+    m.W_y = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE);
+    m.b_y = TensorNew(2, (int[]){1, NUM_CLASSES}, TRUE);
+    TensorXavier(m.E);
+    TensorXavier(m.U_z); TensorXavier(m.U_r); TensorXavier(m.U_h);
+    TensorXavier(m.W_y);
+
+    // One-hot encoding of yTrain needed to compute cross entropy loss
+    Tensor oneHot = TensorOneHot(yTrain, NUM_CLASSES); // [trainSamples, NUM_CLASSES]
+
+    for (int epoch = 1; epoch <= EPOCHS; epoch++) {
+        Tensor xShuffled = TensorShuffle(xTrain, epoch); // [trainSamples, SEQ_LENGTH]
+        Tensor yShuffled = TensorShuffle(oneHot, epoch); // [trainSamples, NUM_CLASSES]
+
+        for (int batch = 0; batch < trainBatches; batch++) {
+            int N = trainSamples - batch * BATCH_SIZE;
+            if (N > BATCH_SIZE) N = BATCH_SIZE;
+
+            Tensor X    = TensorSlice(xShuffled, batch * BATCH_SIZE, N); // [N, SEQ_LENGTH] view
+            Tensor Y    = TensorSlice(yShuffled, batch * BATCH_SIZE, N); // [N, NUM_CLASSES]
+            Tensor Z    = forward(X, &m);                                // [N, NUM_CLASSES]
+            Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f);            // [] (Scalar)
+
+            TensorBackward(loss);
+            TensorAdam(m.E,   LR, BETA1, BETA2, EPSILON, 0);
+            TensorAdam(m.U_z, LR, BETA1, BETA2, EPSILON, 0);
+            TensorAdam(m.b_z, LR, BETA1, BETA2, EPSILON, 0);
+            TensorAdam(m.U_r, LR, BETA1, BETA2, EPSILON, 0);
+            TensorAdam(m.b_r, LR, BETA1, BETA2, EPSILON, 0);
+            TensorAdam(m.U_h, LR, BETA1, BETA2, EPSILON, 0);
+            TensorAdam(m.b_h, LR, BETA1, BETA2, EPSILON, 0);
+            TensorAdam(m.W_y, LR, BETA1, BETA2, EPSILON, 0);
+            TensorAdam(m.b_y, LR, BETA1, BETA2, EPSILON, 0);
+
+            if (((batch + 1) % LOG == 0) || (batch + 1 == trainBatches)) {
+                printf("Epoch %2d | Batch %4d/%d | Loss: ", epoch, batch + 1, trainBatches);
+                TensorPrint(loss);
+            }
+
+            TensorFree(Z); TensorFree(loss);
+        }
+        TensorFree(xShuffled); TensorFree(yShuffled);
+
+        int totalSamples = 0, totalErrors = 0;
+        for (int batch = 0; batch < testBatches; batch++) {
+            int N = testSamples - batch * BATCH_SIZE;
+            if (N > BATCH_SIZE) N = BATCH_SIZE;
+
+            Tensor X = TensorSlice(xTest, batch * BATCH_SIZE, N); // [N, SEQ_LENGTH] view
+            Tensor Y = TensorSlice(yTest, batch * BATCH_SIZE, N); // [N]
+            Tensor Z           = forward(X, &m);                  // [N, NUM_CLASSES]
+            Tensor predictions = TensorSample(Z, 0);              // [N]
+
+            totalErrors  += TensorHammingDistance(predictions, Y);
+            totalSamples += TensorSize(predictions);
+
+            TensorFree(Z); TensorFree(predictions);
+        }
+        printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
+    }
+
+    TensorFree(m.E);
+    TensorFree(m.U_z); TensorFree(m.b_z);
+    TensorFree(m.U_r); TensorFree(m.b_r);
+    TensorFree(m.U_h); TensorFree(m.b_h);
+    TensorFree(m.W_y); TensorFree(m.b_y);
+    TensorFree(oneHot);
+    TensorFree(xTrain); TensorFree(xTest);
+    TensorFree(train); TensorFree(test);
+    return 0;
+}
