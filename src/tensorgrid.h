@@ -143,6 +143,15 @@ Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
 Tensor TensorMultiply(Tensor A, Tensor B);
 
 /*
+* Read from A at positions given by indices.
+*
+* A:       [..., s_0, ..., s_m, ...]   (indices shape lives at axis)
+* indices: [s_0, ..., s_m]             (integer values in [0, n), encoded as Entry)
+* out:     [..., n, ...]
+*/
+Tensor TensorGather(Tensor A, int axis, Tensor indices);
+
+/*
  * Write values from A into positions given by indices.
  * If multiple values go to the same position, combine them with f.
  *
@@ -150,41 +159,20 @@ Tensor TensorMultiply(Tensor A, Tensor B);
  * indices: [s_0, ..., s_m]             (integer values in [0, K), encoded as Entry)
  * out:     [..., s_0, ..., s_m, ...]
  */
-Tensor TensorGather(Tensor A, int axis, Tensor indices);
-
-/*
- * Read from A at positions given by indices.
- *
- * A:       [..., s_0, ..., s_m, ...]   (indices shape lives at axis)
- * indices: [s_0, ..., s_m]             (integer values in [0, n), encoded as Entry)
- * out:     [..., n, ...]
- */
 Tensor TensorScatter(Bivariate f, Entry initial, Tensor A, int axis, Tensor indices, int n);
 
 /*
- * Apply each filter across the height and width of each input. Each filter
- * produces one output feature map.
+ * Moves a fH x fW window across the height and width of each input, and flattens each window
+ * into a column of the output.. Out-of-bounds positions are filled with `fill`. Input must
+ * be 4D.
  *
  * input  = [batch size, input channels, height, width]
- * filter = [number of filters, input channels, filter height, filter width]
- * output = [batch size, number of filters, output height, output width]
+ * output = [batch size, input channels * fH * fW, output height * output width]
  *
- * output height = (input height + 2*padding - filter height) / stride + 1
- * output width  = (input width  + 2*padding - filter width)  / stride + 1
+ * output height = (input height + 2*padding - fH) / stride + 1
+ * output width  = (input width  + 2*padding - fW) / stride + 1
  */
-Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding);
-
-/*
- * Moves a size x size window across height and width, and reduces each window
- * with a bivariate function like max or sum.
- *
- * input  = [batch size, channels, height, width]
- * output = [batch size, channels, output height, output width]
- *
- * output height = (input height + 2*padding - size) / stride + 1
- * output width  = (input width  + 2*padding - size) / stride + 1
- */
-Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride, int padding);
+Tensor TensorUnfold(Tensor input, int fH, int fW, int stride, int padding, Entry fill);
 
 
 /*=============================================================================================
@@ -264,6 +252,31 @@ Tensor TensorNLL(Tensor y, Tensor y_hat);
  * out:   Mean MSE loss    [] (Scalar)
  */
 Tensor TensorMSE(Tensor y, Tensor y_hat);
+
+/*
+ * Apply each filter across the height and width of each input. Each filter
+ * produces one output feature map.
+ *
+ * input  = [batch size, input channels, height, width]
+ * filter = [number of filters, input channels, filter height, filter width]
+ * output = [batch size, number of filters, output height, output width]
+ *
+ * output height = (input height + 2*padding - filter height) / stride + 1
+ * output width  = (input width  + 2*padding - filter width)  / stride + 1
+ */
+Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding);
+
+/*
+ * Moves a size x size window across height and width, and reduces each window
+ * with a bivariate function like max or sum.
+ *
+ * input  = [batch size, channels, height, width]
+ * output = [batch size, channels, output height, output width]
+ *
+ * output height = (input height + 2*padding - size) / stride + 1
+ * output width  = (input width  + 2*padding - size) / stride + 1
+ */
+Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride, int padding);
 
 /*
  * Broadcasts the given axis from size 1 to size n; all entries are replicated
