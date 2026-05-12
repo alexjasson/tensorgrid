@@ -94,6 +94,12 @@ Tensor TensorDetach(Tensor A);
 Tensor TensorSlice(Tensor A, int index, int length);
 
 /*
+ * Returns a view of A at the given index along axis 0, with axis 0 removed.
+ * Result has one fewer dimension than A. Shares memory with A.
+ */
+Tensor TensorIndex(Tensor A, int index);
+
+/*
  * Returns a view of A with a new shape. Total size must be unchanged. Shares memory with A.
  */
 Tensor TensorReshape(Tensor A, int dimensions, int *shape);

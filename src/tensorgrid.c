@@ -154,6 +154,22 @@ Tensor TensorSlice(Tensor A, int index, int length)
     return t;
 }
 
+Tensor TensorIndex(Tensor A, int index)
+{
+    Tensor t     = A;
+    t.dimensions = A.dimensions - 1;
+    for (int i = 0; i < t.dimensions; i++) {
+        t.shape[i]   = A.shape[i + 1];
+        t.strides[i] = A.strides[i + 1];
+    }
+    int inner = 1;
+    for (int i = 1; i < A.dimensions; i++) inner *= A.shape[i];
+    t.entries   = A.entries   + index * inner;
+    t.gradients = A.gradients ? A.gradients + index * inner : NULL;
+    t.refcount  = NULL;
+    return t;
+}
+
 Tensor TensorReshape(Tensor A, int dimensions, int *shape)
 {
     A.dimensions = dimensions;

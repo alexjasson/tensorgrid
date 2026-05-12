@@ -30,15 +30,15 @@ static Tensor forward(Tensor X, Model *m)
 {
     int N = TensorShape(X, 0);
 
-    Tensor X_T       = TensorTranspose(X);                              // [SEQ_LENGTH, N]
-    Tensor embedding = TensorEmbedding(m->E, X_T);                      // [SEQ_LENGTH, N, HIDDEN_SIZE]
-    Tensor h_prev    = TensorNew(3, (int[]){1, N, HIDDEN_SIZE}, FALSE); // [1, N, HIDDEN_SIZE]
+    Tensor X_T       = TensorTranspose(X);                           // [SEQ_LENGTH, N]
+    Tensor embedding = TensorEmbedding(m->E, X_T);                   // [SEQ_LENGTH, N, HIDDEN_SIZE]
+    Tensor h_prev    = TensorNew(2, (int[]){N, HIDDEN_SIZE}, FALSE); // [N, HIDDEN_SIZE]
     TensorFree(X_T);
 
     for (int t = 0; t < SEQ_LENGTH; t++) {
-        Tensor e_t    = TensorSlice(embedding, t, 1);                    // [1, N, HIDDEN_SIZE]
-        Tensor e_bias = TensorAdd(e_t, m->b_h);                          // [1, N, HIDDEN_SIZE]
-        Tensor h_curr = TensorLinearLayer(h_prev, m->U_h, e_bias, TANH); // [1, N, HIDDEN_SIZE]
+        Tensor e_t    = TensorIndex(embedding, t);                       // [N, HIDDEN_SIZE]
+        Tensor e_bias = TensorAdd(e_t, m->b_h);                          // [N, HIDDEN_SIZE]
+        Tensor h_curr = TensorLinearLayer(h_prev, m->U_h, e_bias, TANH); // [N, HIDDEN_SIZE]
 
         TensorFree(h_prev);
         TensorFree(e_bias);
@@ -46,7 +46,6 @@ static Tensor forward(Tensor X, Model *m)
     }
     TensorFree(embedding);
 
-    h_prev = TensorReshape(h_prev, 2, (int[]){N, HIDDEN_SIZE});
     Tensor Z = TensorLinearLayer(h_prev, m->W_y, m->b_y, IDENTITY); // [N, NUM_CLASSES]
     TensorFree(h_prev);
     return Z;
@@ -73,7 +72,7 @@ int main(void)
     Model m;
     m.E   = TensorNew(2, (int[]){NUM_CLASSES, HIDDEN_SIZE}, TRUE);
     m.U_h = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_h = TensorNew(3, (int[]){1, 1, HIDDEN_SIZE}, TRUE);
+    m.b_h = TensorNew(2, (int[]){1, HIDDEN_SIZE}, TRUE);
     m.W_y = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE);
     m.b_y = TensorNew(2, (int[]){1, NUM_CLASSES}, TRUE);
     TensorXavier(m.E); TensorXavier(m.U_h); TensorXavier(m.W_y);

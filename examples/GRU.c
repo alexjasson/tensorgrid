@@ -24,9 +24,9 @@
  */
 typedef struct {
     Tensor E;        // [NUM_CLASSES, HIDDEN_SIZE]
-    Tensor U_z, b_z; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, 1, HIDDEN_SIZE]
-    Tensor U_r, b_r; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, 1, HIDDEN_SIZE]
-    Tensor U_h, b_h; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, 1, HIDDEN_SIZE]
+    Tensor U_z, b_z; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, HIDDEN_SIZE]
+    Tensor U_r, b_r; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, HIDDEN_SIZE]
+    Tensor U_h, b_h; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, HIDDEN_SIZE]
     Tensor W_y, b_y; // [HIDDEN_SIZE, NUM_CLASSES], [1, NUM_CLASSES]
 } Model;
 
@@ -35,34 +35,34 @@ static Tensor forward(Tensor X, Model *m)
 {
     int N = TensorShape(X, 0);
 
-    Tensor X_T       = TensorTranspose(X);                              // [SEQ_LENGTH, N]
-    Tensor embedding = TensorEmbedding(m->E, X_T);                      // [SEQ_LENGTH, N, HIDDEN_SIZE]
-    Tensor h_prev    = TensorNew(3, (int[]){1, N, HIDDEN_SIZE}, FALSE); // [1, N, HIDDEN_SIZE]
-    Tensor ones      = TensorNew(3, (int[]){1, N, HIDDEN_SIZE}, FALSE); // [1, N, HIDDEN_SIZE]
+    Tensor X_T       = TensorTranspose(X);                           // [SEQ_LENGTH, N]
+    Tensor embedding = TensorEmbedding(m->E, X_T);                   // [SEQ_LENGTH, N, HIDDEN_SIZE]
+    Tensor h_prev    = TensorNew(2, (int[]){N, HIDDEN_SIZE}, FALSE); // [N, HIDDEN_SIZE]
+    Tensor ones      = TensorNew(2, (int[]){N, HIDDEN_SIZE}, FALSE); // [N, HIDDEN_SIZE]
     TensorFill(ones, 1.0f);
     TensorFree(X_T);
 
     for (int t = 0; t < SEQ_LENGTH; t++) {
-        Tensor e_t = TensorSlice(embedding, t, 1);                              // [1, N, HIDDEN_SIZE]
+        Tensor e_t = TensorIndex(embedding, t);                                 // [N, HIDDEN_SIZE]
 
-        Tensor e_bias_z = TensorAdd(e_t, m->b_z);                               // [1, N, HIDDEN_SIZE]
-        Tensor z_t      = TensorLinearLayer(h_prev, m->U_z, e_bias_z, SIGMOID); // [1, N, HIDDEN_SIZE]
+        Tensor e_bias_z = TensorAdd(e_t, m->b_z);                               // [N, HIDDEN_SIZE]
+        Tensor z_t      = TensorLinearLayer(h_prev, m->U_z, e_bias_z, SIGMOID); // [N, HIDDEN_SIZE]
         TensorFree(e_bias_z);
 
-        Tensor e_bias_r = TensorAdd(e_t, m->b_r);                               // [1, N, HIDDEN_SIZE]
-        Tensor r_t      = TensorLinearLayer(h_prev, m->U_r, e_bias_r, SIGMOID); // [1, N, HIDDEN_SIZE]
+        Tensor e_bias_r = TensorAdd(e_t, m->b_r);                               // [N, HIDDEN_SIZE]
+        Tensor r_t      = TensorLinearLayer(h_prev, m->U_r, e_bias_r, SIGMOID); // [N, HIDDEN_SIZE]
         TensorFree(e_bias_r);
 
-        Tensor r_h      = TensorHadamard(r_t, h_prev);                          // [1, N, HIDDEN_SIZE]
-        Tensor e_bias_h = TensorAdd(e_t, m->b_h);                               // [1, N, HIDDEN_SIZE]
-        Tensor h_tilde  = TensorLinearLayer(r_h, m->U_h, e_bias_h, TANH);       // [1, N, HIDDEN_SIZE]
+        Tensor r_h      = TensorHadamard(r_t, h_prev);                          // [N, HIDDEN_SIZE]
+        Tensor e_bias_h = TensorAdd(e_t, m->b_h);                               // [N, HIDDEN_SIZE]
+        Tensor h_tilde  = TensorLinearLayer(r_h, m->U_h, e_bias_h, TANH);       // [N, HIDDEN_SIZE]
         TensorFree(r_h);
         TensorFree(e_bias_h);
 
-        Tensor one_minus_z = TensorSubtract(ones, z_t);                         // [1, N, HIDDEN_SIZE]
-        Tensor left        = TensorHadamard(one_minus_z, h_prev);               // [1, N, HIDDEN_SIZE]
-        Tensor right       = TensorHadamard(z_t, h_tilde);                      // [1, N, HIDDEN_SIZE]
-        Tensor h_curr      = TensorAdd(left, right);                            // [1, N, HIDDEN_SIZE]
+        Tensor one_minus_z = TensorSubtract(ones, z_t);                         // [N, HIDDEN_SIZE]
+        Tensor left        = TensorHadamard(one_minus_z, h_prev);               // [N, HIDDEN_SIZE]
+        Tensor right       = TensorHadamard(z_t, h_tilde);                      // [N, HIDDEN_SIZE]
+        Tensor h_curr      = TensorAdd(left, right);                            // [N, HIDDEN_SIZE]
 
         TensorFree(z_t); TensorFree(r_t); TensorFree(h_tilde);
         TensorFree(one_minus_z); TensorFree(left); TensorFree(right);
@@ -72,7 +72,6 @@ static Tensor forward(Tensor X, Model *m)
     TensorFree(embedding);
     TensorFree(ones);
 
-    h_prev = TensorReshape(h_prev, 2, (int[]){N, HIDDEN_SIZE});
     Tensor Z = TensorLinearLayer(h_prev, m->W_y, m->b_y, IDENTITY); // [N, NUM_CLASSES]
     TensorFree(h_prev);
     return Z;
@@ -99,11 +98,11 @@ int main(void)
     Model m;
     m.E   = TensorNew(2, (int[]){NUM_CLASSES, HIDDEN_SIZE}, TRUE);
     m.U_z = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_z = TensorNew(3, (int[]){1, 1, HIDDEN_SIZE}, TRUE);
+    m.b_z = TensorNew(2, (int[]){1, HIDDEN_SIZE}, TRUE);
     m.U_r = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_r = TensorNew(3, (int[]){1, 1, HIDDEN_SIZE}, TRUE);
+    m.b_r = TensorNew(2, (int[]){1, HIDDEN_SIZE}, TRUE);
     m.U_h = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_h = TensorNew(3, (int[]){1, 1, HIDDEN_SIZE}, TRUE);
+    m.b_h = TensorNew(2, (int[]){1, HIDDEN_SIZE}, TRUE);
     m.W_y = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE);
     m.b_y = TensorNew(2, (int[]){1, NUM_CLASSES}, TRUE);
     TensorXavier(m.E);
@@ -118,10 +117,10 @@ int main(void)
         Tensor yShuffled = TensorShuffle(oneHot, epoch); // [trainSamples, NUM_CLASSES]
 
         for (int batch = 0; batch < trainBatches; batch++) {
-            int N = trainSamples - batch * BATCH_SIZE;
-            if (N > BATCH_SIZE) N = BATCH_SIZE;
+            int remaining = trainSamples - batch * BATCH_SIZE;
+            int N = remaining > BATCH_SIZE ? BATCH_SIZE : remaining;
 
-            Tensor X    = TensorSlice(xShuffled, batch * BATCH_SIZE, N); // [N, SEQ_LENGTH] view
+            Tensor X    = TensorSlice(xShuffled, batch * BATCH_SIZE, N); // [N, SEQ_LENGTH]
             Tensor Y    = TensorSlice(yShuffled, batch * BATCH_SIZE, N); // [N, NUM_CLASSES]
             Tensor Z    = forward(X, &m);                                // [N, NUM_CLASSES]
             Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f);            // [] (Scalar)
@@ -148,10 +147,10 @@ int main(void)
 
         int totalSamples = 0, totalErrors = 0;
         for (int batch = 0; batch < testBatches; batch++) {
-            int N = testSamples - batch * BATCH_SIZE;
-            if (N > BATCH_SIZE) N = BATCH_SIZE;
+            int remaining = testSamples - batch * BATCH_SIZE;
+            int N = remaining > BATCH_SIZE ? BATCH_SIZE : remaining;
 
-            Tensor X = TensorSlice(xTest, batch * BATCH_SIZE, N); // [N, SEQ_LENGTH] view
+            Tensor X = TensorSlice(xTest, batch * BATCH_SIZE, N); // [N, SEQ_LENGTH]
             Tensor Y = TensorSlice(yTest, batch * BATCH_SIZE, N); // [N]
             Tensor Z           = forward(X, &m);                  // [N, NUM_CLASSES]
             Tensor predictions = TensorSample(Z, 0);              // [N]
