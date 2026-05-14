@@ -5,6 +5,7 @@
 #define TRUE 1
 #define FALSE 0
 #define INFINITE 1e+38
+#define PI 3.141592653589793f
 
 typedef float Entry;                        // Change data type of entry as needed
 typedef Entry (*UnivariateFn)(Entry);       // y = f(a) on an entry in A
@@ -33,6 +34,8 @@ extern Univariate EXP;
 extern Univariate NEGATE;
 extern Univariate IDENTITY;
 extern Univariate TANH;
+extern Univariate SQRT;
+extern Univariate GELU;
 extern Bivariate  ADD;
 extern Bivariate  SUBTRACT;
 extern Bivariate  MULTIPLY;
@@ -106,9 +109,10 @@ Tensor TensorIndex(Tensor A, int index);
 Tensor TensorReshape(Tensor A, int dimensions, int *shape);
 
 /*
- * Returns a view of A with the given shape and strides. Shares memory with A.
+ * Returns a view of A with the given shape and strides, starting at the given
+ * element offset. Shares memory with A.
  */
-Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides);
+Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides, int offset);
 
 /*
  * Returns a view of A with the last two dimensions transposed. Shares memory with A.
@@ -154,6 +158,22 @@ Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride,
  * Max-pooling over the spatial dimensions.
  */
 Tensor TensorMaxPool(Tensor input, int size, int stride, int padding);
+
+/*
+ * Layer normalization over the last dimension.
+ * out = weight * (in - mean(in)) / sqrt(variance(in) + epsilon) + bias
+ *
+ * in:     [..., D]
+ * weight: [..., D]
+ * bias:   [..., D]
+ * out:    [..., D]
+ */
+Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, float eps);
+
+/*
+ * Returns an n x n causal mask: 0 on and below the diagonal, -INFINITE above.
+ */
+Tensor TensorCausalMask(int n);
 
 /*
  * Softmax over the last dimension.

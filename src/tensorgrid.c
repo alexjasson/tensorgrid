@@ -24,6 +24,14 @@ static Entry minusOne(Entry a) { (void)a; return -1.0f; }
 static Entry expe(Entry a)     { return fastExp(a); }
 static Entry tanhe(Entry a)    { return 2.0f / (1.0f + fastExp(-2.0f * a)) - 1.0f; }
 static Entry dtanhe(Entry a)   { return 1.0f - tanhe(a) * tanhe(a); }
+static Entry sqrte(Entry a)    { return __builtin_sqrtf(a); }
+static Entry dsqrte(Entry a)   { return 0.5f / sqrte(a); }
+static Entry gelu(Entry a)     { return 0.5f * a * (1.0f + tanhe(sqrte(2.0f / PI) * (a + 0.044715f * a * a * a))); }
+static Entry dgelu(Entry a)
+{
+    float u = tanhe(sqrte(2.0f / PI) * (a + 0.044715f * a * a * a));
+    return 0.5f * (1.0f + u) + 0.5f * a * (1.0f - u * u) * sqrte(2.0f / PI) * (1.0f + 0.134145f * a * a);
+}
 
 // Bivariate functions and partial derivatives
 static Entry add(Entry a, Entry b)       { return a + b; }
@@ -47,6 +55,8 @@ Univariate LOG      = { loge,     dloge    };
 Univariate EXP      = { expe,     expe     };
 Univariate NEGATE   = { negate,   minusOne };
 Univariate IDENTITY = { identity, one      };
+Univariate SQRT     = { sqrte,    dsqrte   };
+Univariate GELU     = { gelu,    dgelu   };
 Bivariate  ADD      = { add,      ones,      ones      };
 Bivariate  SUBTRACT = { subtract, ones,      minusOnes };
 Bivariate  MULTIPLY = { multiply, second,    first     };
@@ -209,7 +219,7 @@ Tensor TensorTranspose(Tensor A)
     return t;
 }
 
-Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides)
+Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides, int offset)
 {
     Tensor t = A;
     t.dimensions = dimensions;
@@ -217,7 +227,9 @@ Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides)
         t.shape[i]   = shape[i];
         t.strides[i] = strides[i];
     }
-    t.refcount = NULL;
+    t.entries   = A.entries   + offset;
+    t.gradients = A.gradients ? A.gradients + offset : NULL;
+    t.refcount  = NULL;
     return t;
 }
 
@@ -604,6 +616,54 @@ void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, flo
     }
 }
 
+Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, float eps)
+{
+    int axis = in.dimensions - 1;
+    int D    = in.shape[axis];
+
+    int constShape[MAX_DIMENSIONS];
+    for (int i = 0; i < in.dimensions; i++) constShape[i] = 1;
+    Tensor dT   = TensorNew(in.dimensions, constShape, FALSE);
+    Tensor epsT = TensorNew(in.dimensions, constShape, FALSE);
+    TensorFill(dT,   (Entry)D);
+    TensorFill(epsT, eps);
+
+    Tensor sumX     = TensorReduce(ADD, 0.0f, in, axis);
+    Tensor mean     = TensorZip(DIVIDE, sumX, dT);
+    Tensor meanB    = TensorBroadcast(mean, axis, D);
+    Tensor centered = TensorSubtract(in, meanB);
+    TensorFree(sumX); TensorFree(mean); TensorFree(meanB);
+
+    Tensor sq    = TensorHadamard(centered, centered);
+    Tensor sumSq = TensorReduce(ADD, 0.0f, sq, axis);
+    Tensor var   = TensorZip(DIVIDE, sumSq, dT);
+    TensorFree(sq); TensorFree(sumSq);
+
+    Tensor varEps = TensorZip(ADD, var, epsT);
+    Tensor std    = TensorMap(SQRT, varEps);
+    Tensor stdB   = TensorBroadcast(std, axis, D);
+    TensorFree(var); TensorFree(varEps); TensorFree(std);
+
+    Tensor normalized = TensorZip(DIVIDE, centered, stdB);
+    TensorFree(centered); TensorFree(stdB);
+
+    Tensor scaled = TensorZip(MULTIPLY, normalized, weight);
+    Tensor result = TensorZip(ADD, scaled, bias);
+    TensorFree(normalized); TensorFree(scaled);
+
+    TensorFree(dT); TensorFree(epsT);
+    return result;
+}
+
+Tensor TensorCausalMask(int n)
+{
+    Tensor mask = TensorNew(2, (int[]){n, n}, FALSE);
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            mask.entries[i * n + j] = (j <= i) ? 0.0f : -INFINITE;
+    return mask;
+}
+
 Tensor TensorSoftmax(Tensor in, float temperature)
 {
     // Numerical stability trick
@@ -747,8 +807,13 @@ int TensorHammingDistance(Tensor A, Tensor B)
 {
     int n = TensorSize(A);
     int count = 0;
-    for (int i = 0; i < n; i++)
-        if (A.entries[i] != B.entries[i]) count++;
+    int aC = isContiguous(A);
+    int bC = isContiguous(B);
+    for (int i = 0; i < n; i++) {
+        int aOff = aC ? i : unravel(i, A.shape, A.strides, A.dimensions);
+        int bOff = bC ? i : unravel(i, B.shape, B.strides, B.dimensions);
+        if (A.entries[aOff] != B.entries[bOff]) count++;
+    }
     return count;
 }
 
