@@ -100,17 +100,18 @@ Tensor TensorSlice(Tensor A, int index, int length);
 Tensor TensorIndex(Tensor A, int index);
 
 /*
- * Returns a view of A with a new shape. Total size must be unchanged. Shares memory with A.
+ * Returns a view of A with a new shape. Total size must be unchanged and A must
+ * be contiguous. Shares memory with A.
  */
 Tensor TensorReshape(Tensor A, int dimensions, int *shape);
 
 /*
- * Returns a new tensor of the given shape and strides. Allocates new memory.
+ * Returns a view of A with the given shape and strides. Shares memory with A.
  */
 Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides);
 
 /*
- * Returns a new tensor with the last two dimensions transposed. Allocates new memory.
+ * Returns a view of A with the last two dimensions transposed. Shares memory with A.
  */
 Tensor TensorTranspose(Tensor A);
 
