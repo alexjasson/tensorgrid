@@ -97,28 +97,6 @@ static void operationArrayClear(DynamicArray arr);
 static inline int unravel(int i, const int *shape, const int *strides, int dims);
 static int isContiguous(Tensor t);
 
-
-static inline int unravel(int i, const int *shape, const int *strides, int dims)
-{
-    int offset = 0;
-    for (int d = dims - 1; d >= 0; d--) {
-        int s = shape[d];
-        offset += (i % s) * strides[d];
-        i /= s;
-    }
-    return offset;
-}
-
-static int isContiguous(Tensor t)
-{
-    int expected = 1;
-    for (int d = t.dimensions - 1; d >= 0; d--) {
-        if (t.strides[d] != expected) return 0;
-        expected *= t.shape[d];
-    }
-    return 1;
-}
-
 int TensorSize(Tensor A)
 {
     int size = 1;
@@ -1016,22 +994,65 @@ void TensorSet(Tensor A, int *indices, Entry value)
     A.entries[idx] = value;
 }
 
+static inline int unravel(int i, const int *shape, const int *strides, int dims)
+{
+    int offset = 0;
+    for (int d = dims - 1; d >= 0; d--) {
+        int s = shape[d];
+        offset += (i % s) * strides[d];
+        i /= s;
+    }
+    return offset;
+}
+
+static int isContiguous(Tensor t)
+{
+    int expected = 1;
+    for (int d = t.dimensions - 1; d >= 0; d--) {
+        if (t.strides[d] != expected) return 0;
+        expected *= t.shape[d];
+    }
+    return 1;
+}
+
 static void mapForward(void *arg, int start, int end)
 {
     Operation *op = arg;
-    for (int i = start; i < end; i++) {
-        int aOff = unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
-        op->out.entries[i] = op->u.f(op->A.entries[aOff]);
+    if (isContiguous(op->A)) {
+        for (int i = start; i < end; i++)
+            op->out.entries[i] = op->u.f(op->A.entries[i]);
+    } else {
+        for (int i = start; i < end; i++) {
+            int aOff = unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
+            op->out.entries[i] = op->u.f(op->A.entries[aOff]);
+        }
     }
 }
 
 static void zipForward(void *arg, int start, int end)
 {
     Operation *op = arg;
-    for (int i = start; i < end; i++) {
-        int aOff = unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
-        int bOff = unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
-        op->out.entries[i] = op->b.f(op->A.entries[aOff], op->B.entries[bOff]);
+    int aC = isContiguous(op->A);
+    int bC = isContiguous(op->B);
+    if (aC && bC) {
+        for (int i = start; i < end; i++)
+            op->out.entries[i] = op->b.f(op->A.entries[i], op->B.entries[i]);
+    } else if (aC) {
+        for (int i = start; i < end; i++) {
+            int bOff = unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
+            op->out.entries[i] = op->b.f(op->A.entries[i], op->B.entries[bOff]);
+        }
+    } else if (bC) {
+        for (int i = start; i < end; i++) {
+            int aOff = unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
+            op->out.entries[i] = op->b.f(op->A.entries[aOff], op->B.entries[i]);
+        }
+    } else {
+        for (int i = start; i < end; i++) {
+            int aOff = unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
+            int bOff = unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
+            op->out.entries[i] = op->b.f(op->A.entries[aOff], op->B.entries[bOff]);
+        }
     }
 }
 
@@ -1073,9 +1094,14 @@ static void mapBackward(void *arg, int start, int end)
     Entry *A    = op->A.entries;
     Entry *dA   = op->A.gradients;
     Entry *dout = op->out.gradients;
-    for (int j = start; j < end; j++) {
-        int aOff = unravel(j, op->A.shape, op->A.strides, op->A.dimensions);
-        dA[aOff] += dout[j] * op->u.da(A[aOff]);
+    if (isContiguous(op->A)) {
+        for (int j = start; j < end; j++)
+            dA[j] += dout[j] * op->u.da(A[j]);
+    } else {
+        for (int j = start; j < end; j++) {
+            int aOff = unravel(j, op->A.shape, op->A.strides, op->A.dimensions);
+            dA[aOff] += dout[j] * op->u.da(A[aOff]);
+        }
     }
 }
 
@@ -1087,25 +1113,45 @@ static void zipBackward(void *arg, int start, int end)
     Entry *dA   = op->A.gradients;
     Entry *dB   = op->B.gradients;
     Entry *dout = op->out.gradients;
+    int aC = isContiguous(op->A);
+    int bC = isContiguous(op->B);
     if (dA && dB) {
-        for (int j = start; j < end; j++) {
-            int aOff = unravel(j, op->A.shape, op->A.strides, op->A.dimensions);
-            int bOff = unravel(j, op->B.shape, op->B.strides, op->B.dimensions);
-            Entry g = dout[j];
-            dA[aOff] += g * op->b.da(A[aOff], B[bOff]);
-            dB[bOff] += g * op->b.db(A[aOff], B[bOff]);
+        if (aC && bC) {
+            for (int j = start; j < end; j++) {
+                Entry g = dout[j];
+                dA[j] += g * op->b.da(A[j], B[j]);
+                dB[j] += g * op->b.db(A[j], B[j]);
+            }
+        } else {
+            for (int j = start; j < end; j++) {
+                int aOff = aC ? j : unravel(j, op->A.shape, op->A.strides, op->A.dimensions);
+                int bOff = bC ? j : unravel(j, op->B.shape, op->B.strides, op->B.dimensions);
+                Entry g = dout[j];
+                dA[aOff] += g * op->b.da(A[aOff], B[bOff]);
+                dB[bOff] += g * op->b.db(A[aOff], B[bOff]);
+            }
         }
     } else if (dA) {
-        for (int j = start; j < end; j++) {
-            int aOff = unravel(j, op->A.shape, op->A.strides, op->A.dimensions);
-            int bOff = unravel(j, op->B.shape, op->B.strides, op->B.dimensions);
-            dA[aOff] += dout[j] * op->b.da(A[aOff], B[bOff]);
+        if (aC && bC) {
+            for (int j = start; j < end; j++)
+                dA[j] += dout[j] * op->b.da(A[j], B[j]);
+        } else {
+            for (int j = start; j < end; j++) {
+                int aOff = aC ? j : unravel(j, op->A.shape, op->A.strides, op->A.dimensions);
+                int bOff = bC ? j : unravel(j, op->B.shape, op->B.strides, op->B.dimensions);
+                dA[aOff] += dout[j] * op->b.da(A[aOff], B[bOff]);
+            }
         }
     } else if (dB) {
-        for (int j = start; j < end; j++) {
-            int aOff = unravel(j, op->A.shape, op->A.strides, op->A.dimensions);
-            int bOff = unravel(j, op->B.shape, op->B.strides, op->B.dimensions);
-            dB[bOff] += dout[j] * op->b.db(A[aOff], B[bOff]);
+        if (aC && bC) {
+            for (int j = start; j < end; j++)
+                dB[j] += dout[j] * op->b.db(A[j], B[j]);
+        } else {
+            for (int j = start; j < end; j++) {
+                int aOff = aC ? j : unravel(j, op->A.shape, op->A.strides, op->A.dimensions);
+                int bOff = bC ? j : unravel(j, op->B.shape, op->B.strides, op->B.dimensions);
+                dB[bOff] += dout[j] * op->b.db(A[aOff], B[bOff]);
+            }
         }
     }
 }
@@ -1274,22 +1320,39 @@ static void gatherForward(void *arg, int start, int end)
     Tensor A      = op->A;
     Tensor I      = op->B;
     int axis      = op->axis;
+    int axisSize  = A.shape[axis];
     int idxSize   = TensorSize(I);
     int innerSize = 1;
     for (int d = axis + 1; d < A.dimensions; d++) innerSize *= A.shape[d];
+    int aC = isContiguous(A);
+    int iC = isContiguous(I);
 
-    for (int i = start; i < end; i++) {
-        int inner = i % innerSize;
-        int rem   = i / innerSize;
-        int ix    = rem % idxSize;
-        int outer = rem / idxSize;
+    if (aC && iC) {
+        for (int i = start; i < end; i++) {
+            int inner = i % innerSize;
+            int rem   = i / innerSize;
+            int ix    = rem % idxSize;
+            int outer = rem / idxSize;
+            int k     = (int)I.entries[ix];
+            op->out.entries[i] = A.entries[(outer * axisSize + k) * innerSize + inner];
+        }
+    } else {
+        for (int i = start; i < end; i++) {
+            int inner = i % innerSize;
+            int rem   = i / innerSize;
+            int ix    = rem % idxSize;
+            int outer = rem / idxSize;
 
-        int outerOff = unravel(outer, A.shape, A.strides, axis);
-        int innerOff = unravel(inner, A.shape + axis + 1, A.strides + axis + 1,
-                               A.dimensions - axis - 1);
-        int idxOff   = unravel(ix, I.shape, I.strides, I.dimensions);
-        int k        = (int)I.entries[idxOff];
-        op->out.entries[i] = A.entries[outerOff + k * A.strides[axis] + innerOff];
+            int outerOff = aC ? outer * axisSize * innerSize
+                              : unravel(outer, A.shape, A.strides, axis);
+            int innerOff = aC ? inner
+                              : unravel(inner, A.shape + axis + 1, A.strides + axis + 1,
+                                        A.dimensions - axis - 1);
+            int aStride  = aC ? innerSize : A.strides[axis];
+            int idxOff   = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
+            int k        = (int)I.entries[idxOff];
+            op->out.entries[i] = A.entries[outerOff + k * aStride + innerOff];
+        }
     }
 }
 
@@ -1303,6 +1366,8 @@ static void gatherBackward(void *arg, int start, int end)
     int idxSize   = TensorSize(I);
     int innerSize = 1;
     for (int d = axis + 1; d < A.dimensions; d++) innerSize *= A.shape[d];
+    int aC = isContiguous(A);
+    int iC = isContiguous(I);
 
     for (int i = start; i < end; i++) {
         int inner    = i % innerSize;
@@ -1310,17 +1375,32 @@ static void gatherBackward(void *arg, int start, int end)
         int kTarget  = rem % axisSize;
         int outer    = rem / axisSize;
 
-        int outerOff = unravel(outer, A.shape, A.strides, axis);
-        int innerOff = unravel(inner, A.shape + axis + 1, A.strides + axis + 1,
+        int outerOff, innerOff, aStride;
+        if (aC) {
+            outerOff = outer * axisSize * innerSize;
+            innerOff = inner;
+            aStride  = innerSize;
+        } else {
+            outerOff = unravel(outer, A.shape, A.strides, axis);
+            innerOff = unravel(inner, A.shape + axis + 1, A.strides + axis + 1,
                                A.dimensions - axis - 1);
+            aStride  = A.strides[axis];
+        }
 
         Entry sum = 0;
-        for (int ix = 0; ix < idxSize; ix++) {
-            int idxOff = unravel(ix, I.shape, I.strides, I.dimensions);
-            if ((int)I.entries[idxOff] == kTarget)
-                sum += op->out.gradients[(outer * idxSize + ix) * innerSize + inner];
+        if (iC) {
+            for (int ix = 0; ix < idxSize; ix++) {
+                if ((int)I.entries[ix] == kTarget)
+                    sum += op->out.gradients[(outer * idxSize + ix) * innerSize + inner];
+            }
+        } else {
+            for (int ix = 0; ix < idxSize; ix++) {
+                int idxOff = unravel(ix, I.shape, I.strides, I.dimensions);
+                if ((int)I.entries[idxOff] == kTarget)
+                    sum += op->out.gradients[(outer * idxSize + ix) * innerSize + inner];
+            }
         }
-        A.gradients[outerOff + kTarget * A.strides[axis] + innerOff] += sum;
+        A.gradients[outerOff + kTarget * aStride + innerOff] += sum;
     }
 }
 
@@ -1335,26 +1415,47 @@ static void scatterForward(void *arg, int start, int end)
     int innerSize = 1;
     for (int d = axis + 1; d < op->out.dimensions; d++) innerSize *= op->out.shape[d];
     int aInnerDims = A.dimensions - axis - I.dimensions;
+    int aC = isContiguous(A);
+    int iC = isContiguous(I);
 
-    for (int i = start; i < end; i++) {
-        int inner   = i % innerSize;
-        int rem     = i / innerSize;
-        int kTarget = rem % n;
-        int outer   = rem / n;
+    if (aC && iC) {
+        for (int i = start; i < end; i++) {
+            int inner   = i % innerSize;
+            int rem     = i / innerSize;
+            int kTarget = rem % n;
+            int outer   = rem / n;
 
-        int outerOff = unravel(outer, A.shape, A.strides, axis);
-        int innerOff = unravel(inner, A.shape + axis + I.dimensions,
-                               A.strides + axis + I.dimensions, aInnerDims);
-
-        Entry acc = op->initial;
-        for (int ix = 0; ix < idxSize; ix++) {
-            int idxOff = unravel(ix, I.shape, I.strides, I.dimensions);
-            if ((int)I.entries[idxOff] == kTarget) {
-                int aIxOff = unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
-                acc = op->b.f(acc, A.entries[outerOff + aIxOff + innerOff]);
+            Entry acc = op->initial;
+            for (int ix = 0; ix < idxSize; ix++) {
+                if ((int)I.entries[ix] == kTarget)
+                    acc = op->b.f(acc, A.entries[(outer * idxSize + ix) * innerSize + inner]);
             }
+            op->out.entries[i] = acc;
         }
-        op->out.entries[i] = acc;
+    } else {
+        for (int i = start; i < end; i++) {
+            int inner   = i % innerSize;
+            int rem     = i / innerSize;
+            int kTarget = rem % n;
+            int outer   = rem / n;
+
+            int outerOff = aC ? outer * idxSize * innerSize
+                              : unravel(outer, A.shape, A.strides, axis);
+            int innerOff = aC ? inner
+                              : unravel(inner, A.shape + axis + I.dimensions,
+                                        A.strides + axis + I.dimensions, aInnerDims);
+
+            Entry acc = op->initial;
+            for (int ix = 0; ix < idxSize; ix++) {
+                int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
+                if ((int)I.entries[idxOff] == kTarget) {
+                    int aIxOff = aC ? ix * innerSize
+                                    : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
+                    acc = op->b.f(acc, A.entries[outerOff + aIxOff + innerOff]);
+                }
+            }
+            op->out.entries[i] = acc;
+        }
     }
 }
 
@@ -1369,6 +1470,8 @@ static void scatterBackward(void *arg, int start, int end)
     int innerSize = 1;
     for (int d = axis + 1; d < op->out.dimensions; d++) innerSize *= op->out.shape[d];
     int aInnerDims = A.dimensions - axis - I.dimensions;
+    int aC = isContiguous(A);
+    int iC = isContiguous(I);
 
     for (int i = start; i < end; i++) {
         int inner   = i % innerSize;
@@ -1376,17 +1479,24 @@ static void scatterBackward(void *arg, int start, int end)
         int kTarget = rem % n;
         int outer   = rem / n;
 
-        int outerOff = unravel(outer, A.shape, A.strides, axis);
-        int innerOff = unravel(inner, A.shape + axis + I.dimensions,
+        int outerOff, innerOff;
+        if (aC) {
+            outerOff = outer * idxSize * innerSize;
+            innerOff = inner;
+        } else {
+            outerOff = unravel(outer, A.shape, A.strides, axis);
+            innerOff = unravel(inner, A.shape + axis + I.dimensions,
                                A.strides + axis + I.dimensions, aInnerDims);
+        }
 
         Entry chain[idxSize + 1];
         chain[0] = op->initial;
         int count = 0;
         for (int ix = 0; ix < idxSize; ix++) {
-            int idxOff = unravel(ix, I.shape, I.strides, I.dimensions);
+            int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
             if ((int)I.entries[idxOff] == kTarget) {
-                int aIxOff = unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
+                int aIxOff = aC ? ix * innerSize
+                                : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
                 Entry Av = A.entries[outerOff + aIxOff + innerOff];
                 chain[count + 1] = op->b.f(chain[count], Av);
                 count++;
@@ -1396,9 +1506,10 @@ static void scatterBackward(void *arg, int start, int end)
         Entry dresult = op->out.gradients[i];
         int c = count - 1;
         for (int ix = idxSize - 1; ix >= 0 && c >= 0; ix--) {
-            int idxOff = unravel(ix, I.shape, I.strides, I.dimensions);
+            int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
             if ((int)I.entries[idxOff] == kTarget) {
-                int aIxOff  = unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
+                int aIxOff  = aC ? ix * innerSize
+                                 : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
                 int aOffset = outerOff + aIxOff + innerOff;
                 Entry Av    = A.entries[aOffset];
                 A.gradients[aOffset] += dresult * op->b.db(chain[c], Av);
