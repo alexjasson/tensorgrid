@@ -13,6 +13,10 @@ typedef Entry (*BivariateFn)(Entry, Entry); // y = f(a,b) on entries in A and B
 typedef struct { UnivariateFn f; UnivariateFn da; } Univariate;              // y = f(a) and dy/da
 typedef struct { BivariateFn f; BivariateFn da; BivariateFn db; } Bivariate; // y = f(a,b), dy/da and dy/db
 
+// Univariate/Bivariate functions to be applied to tensors - add more as needed
+extern Univariate RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
+extern Bivariate  ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX;
+
 typedef struct optimizer Optimizer;
 
 // Tensor representation
@@ -25,22 +29,6 @@ typedef struct {
     Optimizer *optimizer;  // Optimizer state, NULL if no autograd
     int   *refcount;       // Number of references, NULL for views
 } Tensor;
-
-// Univariate/Bivariate functions to be applied to tensors - add more as needed
-extern Univariate RELU;
-extern Univariate SIGMOID;
-extern Univariate LOG;
-extern Univariate EXP;
-extern Univariate NEGATE;
-extern Univariate IDENTITY;
-extern Univariate TANH;
-extern Univariate SQRT;
-extern Univariate GELU;
-extern Bivariate  ADD;
-extern Bivariate  SUBTRACT;
-extern Bivariate  MULTIPLY;
-extern Bivariate  DIVIDE;
-extern Bivariate  MAX;
 
 
 /*=============================================================================================
