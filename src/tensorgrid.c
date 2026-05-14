@@ -1121,6 +1121,18 @@ static void zipForward(void *arg, int start, int end)
     }
 }
 
+// Cache-blocked matmul
+#if defined(__AVX512F__)
+#define MR 6
+#define NR 16
+#elif defined(__AVX2__)
+#define MR 4
+#define NR 8
+#else
+#define MR 2
+#define NR 4
+#endif
+
 static void multiplyForward(void *arg, int start, int end)
 {
     Operation *op    = arg;
@@ -1134,22 +1146,49 @@ static void multiplyForward(void *arg, int start, int end)
     int batchStrideA = (op->A.dimensions >= 3) ? op->A.strides[op->A.dimensions - 3] : 0;
     int batchStrideB = (op->B.dimensions >= 3) ? op->B.strides[op->B.dimensions - 3] : 0;
 
-    for (int i = start; i < end; i++) {
-        int batch = i / m;
-        int row   = i % m;
+    int i = start;
+    while (i < end) {
+        int batch        = i / m;
+        int row          = i % m;
+        int batchEnd     = (batch + 1) * m;
+        int chunkEnd     = (end < batchEnd) ? end : batchEnd;
+        int chunkLen     = chunkEnd - i;
+        Entry *A_batch   = op->A.entries  + batch * batchStrideA;
+        Entry *B_batch   = op->B.entries  + batch * batchStrideB;
+        Entry *C_batch   = op->out.entries + batch * m * n;
 
-        Entry *A_batch = op->A.entries + batch * batchStrideA;
-        Entry *B_batch = op->B.entries + batch * batchStrideB;
-        Entry *C_row   = op->out.entries + (batch * m + row) * n;
-
-        for (int j = 0; j < n; j++)
-            C_row[j] = 0.0f;
-
-        for (int l = 0; l < k; l++) {
-            Entry a = A_batch[row * strideA_row + l * strideA_col];
+        int blocked = chunkLen - (chunkLen % MR);
+        int r = 0;
+        for (; r < blocked; r += MR) {
+            Entry *C[MR];
+            for (int mr = 0; mr < MR; mr++)
+                C[mr] = C_batch + (row + r + mr) * n;
             for (int j = 0; j < n; j++)
-                C_row[j] += a * B_batch[l * strideB_row + j * strideB_col];
+                for (int mr = 0; mr < MR; mr++)
+                    C[mr][j] = 0.0f;
+            for (int l = 0; l < k; l++) {
+                Entry a[MR];
+                for (int mr = 0; mr < MR; mr++)
+                    a[mr] = A_batch[(row + r + mr) * strideA_row + l * strideA_col];
+                int bBase = l * strideB_row;
+                for (int j = 0; j < n; j++) {
+                    Entry b = B_batch[bBase + j * strideB_col];
+                    for (int mr = 0; mr < MR; mr++)
+                        C[mr][j] += a[mr] * b;
+                }
+            }
         }
+        for (; r < chunkLen; r++) {
+            Entry *C_row = C_batch + (row + r) * n;
+            for (int j = 0; j < n; j++) C_row[j] = 0.0f;
+            for (int l = 0; l < k; l++) {
+                Entry a = A_batch[(row + r) * strideA_row + l * strideA_col];
+                int bBase = l * strideB_row;
+                for (int j = 0; j < n; j++)
+                    C_row[j] += a * B_batch[bBase + j * strideB_col];
+            }
+        }
+        i = chunkEnd;
     }
 }
 
@@ -1221,9 +1260,9 @@ static void zipBackward(void *arg, int start, int end)
     }
 }
 
+// dA = dout @ B^T
 static void multiplyBackwardDa(void *arg, int start, int end)
 {
-    // dA[m,k] += dout[m,n] @ B^T[n,k]
     Operation *op    = arg;
     int m            = op->A.shape[op->A.dimensions - 2];
     int k            = op->A.shape[op->A.dimensions - 1];
@@ -1236,28 +1275,69 @@ static void multiplyBackwardDa(void *arg, int start, int end)
     int bRowStride   = op->B.strides[op->B.dimensions - 2];
     int bColStride   = op->B.strides[op->B.dimensions - 1];
 
-    for (int i = start; i < end; i++) {
-        int batchFrom, batchTo, row;
-        if (batchStrideA) { batchFrom = i / m; batchTo = batchFrom + 1; row = i % m; }
-        else              { batchFrom = 0;     batchTo = batchSize;     row = i;     }
-
-        Entry *dA = op->A.gradients + batchFrom * batchStrideA;
-        for (int col = 0; col < k; col++) {
-            Entry sum = 0;
-            for (int batch = batchFrom; batch < batchTo; batch++) {
-                Entry *B    = op->B.entries    + batch * batchStrideB;
-                Entry *dout = op->out.gradients + batch * m * n;
-                for (int j = 0; j < n; j++)
-                    sum += dout[row * n + j] * B[col * bRowStride + j * bColStride];
-            }
-            dA[row * aRowStride + col * aColStride] += sum;
+    int i = start;
+    while (i < end) {
+        int batchFrom, batchTo, row, chunkEnd;
+        if (batchStrideA) {
+            int batch = i / m;
+            batchFrom = batch;
+            batchTo   = batch + 1;
+            row       = i % m;
+            int batchEndGlobal = (batch + 1) * m;
+            chunkEnd  = (end < batchEndGlobal) ? end : batchEndGlobal;
+        } else {
+            batchFrom = 0;
+            batchTo   = batchSize;
+            row       = i;
+            chunkEnd  = end;
         }
+        int chunkLen = chunkEnd - i;
+        Entry *dA = op->A.gradients + batchFrom * batchStrideA;
+
+        int blocked = chunkLen - (chunkLen % MR);
+        int r = 0;
+        for (; r < blocked; r += MR) {
+            for (int col = 0; col < k; col++) {
+                Entry s[MR];
+                for (int mr = 0; mr < MR; mr++) s[mr] = 0;
+                for (int batch = batchFrom; batch < batchTo; batch++) {
+                    Entry *B    = op->B.entries     + batch * batchStrideB;
+                    Entry *dout = op->out.gradients + batch * m * n;
+                    Entry *dout_rows[MR];
+                    for (int mr = 0; mr < MR; mr++)
+                        dout_rows[mr] = dout + (row + r + mr) * n;
+                    int bBase = col * bRowStride;
+                    for (int j = 0; j < n; j++) {
+                        Entry b = B[bBase + j * bColStride];
+                        for (int mr = 0; mr < MR; mr++)
+                            s[mr] += dout_rows[mr][j] * b;
+                    }
+                }
+                for (int mr = 0; mr < MR; mr++)
+                    dA[(row + r + mr) * aRowStride + col * aColStride] += s[mr];
+            }
+        }
+        for (; r < chunkLen; r++) {
+            for (int col = 0; col < k; col++) {
+                Entry sum = 0;
+                for (int batch = batchFrom; batch < batchTo; batch++) {
+                    Entry *B    = op->B.entries     + batch * batchStrideB;
+                    Entry *dout = op->out.gradients + batch * m * n;
+                    int bBase = col * bRowStride;
+                    for (int j = 0; j < n; j++)
+                        sum += dout[(row + r) * n + j] * B[bBase + j * bColStride];
+                }
+                dA[(row + r) * aRowStride + col * aColStride] += sum;
+            }
+        }
+
+        i = chunkEnd;
     }
 }
 
+// dB = A^T @ dout
 static void multiplyBackwardDb(void *arg, int start, int end)
 {
-    // dB[k,n] += A^T[k,m] @ dout[m,n]
     Operation *op    = arg;
     int m            = op->A.shape[op->A.dimensions - 2];
     int k            = op->A.shape[op->A.dimensions - 1];
@@ -1276,15 +1356,33 @@ static void multiplyBackwardDb(void *arg, int start, int end)
         else              { batchFrom = 0;     batchTo = batchSize;     row = i;     }
 
         Entry *dB = op->B.gradients + batchFrom * batchStrideB;
-        for (int col = 0; col < n; col++) {
+
+        int blocked = n - (n % NR);
+        int c = 0;
+        for (; c < blocked; c += NR) {
+            Entry sums[NR] = {0};
+            for (int batch = batchFrom; batch < batchTo; batch++) {
+                Entry *A    = op->A.entries     + batch * batchStrideA;
+                Entry *dout = op->out.gradients + batch * m * n;
+                for (int j = 0; j < m; j++) {
+                    Entry a = A[j * aRowStride + row * aColStride];
+                    Entry *dout_row = dout + j * n + c;
+                    for (int nr = 0; nr < NR; nr++)
+                        sums[nr] += a * dout_row[nr];
+                }
+            }
+            for (int nr = 0; nr < NR; nr++)
+                dB[row * bRowStride + (c + nr) * bColStride] += sums[nr];
+        }
+        for (; c < n; c++) {
             Entry sum = 0;
             for (int batch = batchFrom; batch < batchTo; batch++) {
-                Entry *A    = op->A.entries    + batch * batchStrideA;
+                Entry *A    = op->A.entries     + batch * batchStrideA;
                 Entry *dout = op->out.gradients + batch * m * n;
                 for (int j = 0; j < m; j++)
-                    sum += A[j * aRowStride + row * aColStride] * dout[j * n + col];
+                    sum += A[j * aRowStride + row * aColStride] * dout[j * n + c];
             }
-            dB[row * bRowStride + col * bColStride] += sum;
+            dB[row * bRowStride + c * bColStride] += sum;
         }
     }
 }
