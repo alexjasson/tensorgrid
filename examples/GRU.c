@@ -90,8 +90,8 @@ int main(void)
     int testBatches  = (testSamples  + BATCH_SIZE - 1) / BATCH_SIZE;
     printf("Train: %d  Test: %d\n\n", trainSamples, testSamples);
 
-    Tensor xTrain = TensorRestride(train, 2, (int[]){trainSamples, SEQ_LENGTH}, (int[]){1, 1});
-    Tensor xTest  = TensorRestride(test,  2, (int[]){testSamples,  SEQ_LENGTH}, (int[]){1, 1});
+    Tensor xTrain = TensorRestride(train, 2, (int[]){trainSamples, SEQ_LENGTH}, (int[]){1, 1}, 0);
+    Tensor xTest  = TensorRestride(test,  2, (int[]){testSamples,  SEQ_LENGTH}, (int[]){1, 1}, 0);
     Tensor yTrain = TensorSlice(train, SEQ_LENGTH, trainSamples);
     Tensor yTest  = TensorSlice(test,  SEQ_LENGTH, testSamples);
 

@@ -5,12 +5,17 @@
 #define TRUE 1
 #define FALSE 0
 #define INFINITE 1e+38
+#define PI 3.141592653589793f
 
 typedef float Entry;                        // Change data type of entry as needed
 typedef Entry (*UnivariateFn)(Entry);       // y = f(a) on an entry in A
 typedef Entry (*BivariateFn)(Entry, Entry); // y = f(a,b) on entries in A and B
 typedef struct { UnivariateFn f; UnivariateFn da; } Univariate;              // y = f(a) and dy/da
 typedef struct { BivariateFn f; BivariateFn da; BivariateFn db; } Bivariate; // y = f(a,b), dy/da and dy/db
+
+// Univariate/Bivariate functions to be applied to tensors - add more as needed
+extern Univariate RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
+extern Bivariate  ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX;
 
 typedef struct optimizer Optimizer;
 
@@ -24,20 +29,6 @@ typedef struct {
     Optimizer *optimizer;  // Optimizer state, NULL if no autograd
     int   *refcount;       // Number of references, NULL for views
 } Tensor;
-
-// Univariate/Bivariate functions to be applied to tensors - add more as needed
-extern Univariate RELU;
-extern Univariate SIGMOID;
-extern Univariate LOG;
-extern Univariate EXP;
-extern Univariate NEGATE;
-extern Univariate IDENTITY;
-extern Univariate TANH;
-extern Bivariate  ADD;
-extern Bivariate  SUBTRACT;
-extern Bivariate  MULTIPLY;
-extern Bivariate  DIVIDE;
-extern Bivariate  MAX;
 
 
 /*=============================================================================================
@@ -100,17 +91,19 @@ Tensor TensorSlice(Tensor A, int index, int length);
 Tensor TensorIndex(Tensor A, int index);
 
 /*
- * Returns a view of A with a new shape. Total size must be unchanged. Shares memory with A.
+ * Returns a view of A with a new shape. Total size must be unchanged and A must
+ * be contiguous. Shares memory with A.
  */
 Tensor TensorReshape(Tensor A, int dimensions, int *shape);
 
 /*
- * Returns a new tensor of the given shape and strides. Allocates new memory.
+ * Returns a view of A with the given shape and strides, starting at the given
+ * element offset. Shares memory with A.
  */
-Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides);
+Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides, int offset);
 
 /*
- * Returns a new tensor with the last two dimensions transposed. Allocates new memory.
+ * Returns a view of A with the last two dimensions transposed. Shares memory with A.
  */
 Tensor TensorTranspose(Tensor A);
 
@@ -153,6 +146,22 @@ Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride,
  * Max-pooling over the spatial dimensions.
  */
 Tensor TensorMaxPool(Tensor input, int size, int stride, int padding);
+
+/*
+ * Layer normalization over the last dimension.
+ * out = weight * (in - mean(in)) / sqrt(variance(in) + epsilon) + bias
+ *
+ * in:     [..., D]
+ * weight: [..., D]
+ * bias:   [..., D]
+ * out:    [..., D]
+ */
+Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, float eps);
+
+/*
+ * Returns an n x n causal mask: 0 on and below the diagonal, -INFINITE above.
+ */
+Tensor TensorCausalMask(int n);
 
 /*
  * Softmax over the last dimension.
