@@ -382,7 +382,7 @@ Tensor TensorSample(Tensor logits, float temperature);
 int TensorHammingDistance(Tensor A, Tensor B);
 
 /*
- * Starts with loss tensor, takes mean for each entry, then propogates gradients
+ * Starts with loss tensor, takes mean for each entry, then propagates gradients
  * backwards through all recorded operations. All gradients are zero'd first and
  * then accumulated during the backward pass.
  */

@@ -68,3 +68,24 @@ float fastPow(float base, int exp)
     }
     return result;
 }
+
+int unravel(int i, const int *shape, const int *strides, int dims)
+{
+    int offset = 0;
+    for (int d = dims - 1; d >= 0; d--) {
+        int s = shape[d];
+        offset += (i % s) * strides[d];
+        i /= s;
+    }
+    return offset;
+}
+
+int isContiguous(const int *shape, const int *strides, int dims)
+{
+    int expected = 1;
+    for (int d = dims - 1; d >= 0; d--) {
+        if (strides[d] != expected) return 0;
+        expected *= shape[d];
+    }
+    return 1;
+}
