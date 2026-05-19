@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "tensorgrid.h"
+#include "Parameters.h"
 
 #define NUM_CLASSES 65
 #define SEQ_LENGTH  16
@@ -88,26 +89,29 @@ int main(void)
     int testSamples  = TensorShape(test,  0) - SEQ_LENGTH;
     int trainBatches = (trainSamples + BATCH_SIZE - 1) / BATCH_SIZE;
     int testBatches  = (testSamples  + BATCH_SIZE - 1) / BATCH_SIZE;
-    printf("Train: %d  Test: %d\n\n", trainSamples, testSamples);
 
     Tensor xTrain = TensorRestride(train, 2, (int[]){trainSamples, SEQ_LENGTH}, (int[]){1, 1}, 0);
     Tensor xTest  = TensorRestride(test,  2, (int[]){testSamples,  SEQ_LENGTH}, (int[]){1, 1}, 0);
     Tensor yTrain = TensorSlice(train, SEQ_LENGTH, trainSamples);
     Tensor yTest  = TensorSlice(test,  SEQ_LENGTH, testSamples);
 
+    Parameters p = ParametersNew();
     Model m;
-    m.E   = TensorNew(2, (int[]){NUM_CLASSES, HIDDEN_SIZE}, TRUE);
-    m.U_z = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_z = TensorNew(1, (int[]){HIDDEN_SIZE}, TRUE);
-    m.U_r = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_r = TensorNew(1, (int[]){HIDDEN_SIZE}, TRUE);
-    m.U_h = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_h = TensorNew(1, (int[]){HIDDEN_SIZE}, TRUE);
-    m.W_y = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE);
-    m.b_y = TensorNew(1, (int[]){NUM_CLASSES}, TRUE);
+    m.E   = ParametersAdd(p, 2, (int[]){NUM_CLASSES, HIDDEN_SIZE});
+    m.U_z = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
+    m.b_z = ParametersAdd(p, 1, (int[]){HIDDEN_SIZE});
+    m.U_r = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
+    m.b_r = ParametersAdd(p, 1, (int[]){HIDDEN_SIZE});
+    m.U_h = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
+    m.b_h = ParametersAdd(p, 1, (int[]){HIDDEN_SIZE});
+    m.W_y = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES});
+    m.b_y = ParametersAdd(p, 1, (int[]){NUM_CLASSES});
     TensorXavier(m.E);
     TensorXavier(m.U_z); TensorXavier(m.U_r); TensorXavier(m.U_h);
     TensorXavier(m.W_y);
+    printf("Train Samples: %d\n", trainSamples);
+    printf("Test Samples:  %d\n", testSamples);
+    printf("Parameters:    %d\n\n", ParametersCount(p));
 
     // One-hot encoding of yTrain needed to compute cross entropy loss
     Tensor oneHot = TensorOneHot(yTrain, NUM_CLASSES); // [trainSamples, NUM_CLASSES]
@@ -126,15 +130,7 @@ int main(void)
             Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f);            // [] (Scalar)
 
             TensorBackward(loss);
-            TensorAdam(m.E,   LR, BETA1, BETA2, EPSILON, 0);
-            TensorAdam(m.U_z, LR, BETA1, BETA2, EPSILON, 0);
-            TensorAdam(m.b_z, LR, BETA1, BETA2, EPSILON, 0);
-            TensorAdam(m.U_r, LR, BETA1, BETA2, EPSILON, 0);
-            TensorAdam(m.b_r, LR, BETA1, BETA2, EPSILON, 0);
-            TensorAdam(m.U_h, LR, BETA1, BETA2, EPSILON, 0);
-            TensorAdam(m.b_h, LR, BETA1, BETA2, EPSILON, 0);
-            TensorAdam(m.W_y, LR, BETA1, BETA2, EPSILON, 0);
-            TensorAdam(m.b_y, LR, BETA1, BETA2, EPSILON, 0);
+            ParametersAdam(p, LR, BETA1, BETA2, EPSILON, 0);
 
             if (((batch + 1) % LOG == 0) || (batch + 1 == trainBatches)) {
                 printf("Epoch %2d | Batch %4d/%d | Loss: ", epoch, batch + 1, trainBatches);
@@ -163,11 +159,7 @@ int main(void)
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
     }
 
-    TensorFree(m.E);
-    TensorFree(m.U_z); TensorFree(m.b_z);
-    TensorFree(m.U_r); TensorFree(m.b_r);
-    TensorFree(m.U_h); TensorFree(m.b_h);
-    TensorFree(m.W_y); TensorFree(m.b_y);
+    ParametersFree(p);
     TensorFree(oneHot);
     TensorFree(xTrain); TensorFree(xTest);
     TensorFree(train); TensorFree(test);

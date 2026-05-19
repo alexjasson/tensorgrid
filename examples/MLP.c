@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "tensorgrid.h"
+#include "Parameters.h"
 
 #define NUM_CLASSES 10
 #define IMAGE_SIZE  784
@@ -45,7 +46,6 @@ int main(void)
     int testSamples  = TensorShape(xTest, 0);
     int trainBatches = (trainSamples + BATCH_SIZE - 1) / BATCH_SIZE;
     int testBatches  = (testSamples  + BATCH_SIZE - 1) / BATCH_SIZE;
-    printf("Train: %d  Test: %d\n\n", trainSamples, testSamples);
 
     // Reshape data Tensors from [..., 28, 28] to [..., 784] and scale entries from [0, 255] to [0, 1]
     xTrain = TensorReshape(xTrain, 2, (int[]){trainSamples, IMAGE_SIZE}); // [60000, 784]
@@ -54,12 +54,17 @@ int main(void)
     TensorScale(xTest,  1.0f / 255.0f);
 
     // Create and initialize hidden and output layer weights/biases
+    Parameters p = ParametersNew();
     Model m;
-    m.W_h = TensorNew(2, (int[]){IMAGE_SIZE,  HIDDEN_SIZE}, TRUE); // [784, 128]
-    m.b_h = TensorNew(1, (int[]){HIDDEN_SIZE}, TRUE);              // [128]
-    m.W_y = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE); // [128, 10]
-    m.b_y = TensorNew(1, (int[]){NUM_CLASSES}, TRUE);              // [10]
+    m.W_h = ParametersAdd(p, 2, (int[]){IMAGE_SIZE,  HIDDEN_SIZE}); // [784, 128]
+    m.b_h = ParametersAdd(p, 1, (int[]){HIDDEN_SIZE});              // [128]
+    m.W_y = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES}); // [128, 10]
+    m.b_y = ParametersAdd(p, 1, (int[]){NUM_CLASSES});              // [10]
     TensorXavier(m.W_h); TensorXavier(m.W_y);
+    
+    printf("Train Samples: %d\n", trainSamples);
+    printf("Test Samples:  %d\n", testSamples);
+    printf("Parameters:    %d\n\n", ParametersCount(p));
 
     // One-hot encoding of yTrain needed to compute cross entropy loss
     Tensor oneHot = TensorOneHot(yTrain, NUM_CLASSES); // [60000, 10]
@@ -80,10 +85,7 @@ int main(void)
             Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f);         // [] (Scalar)
 
             TensorBackward(loss);
-            TensorSGD(m.W_h, LR, MOMENTUM);
-            TensorSGD(m.b_h, LR, MOMENTUM);
-            TensorSGD(m.W_y, LR, MOMENTUM);
-            TensorSGD(m.b_y, LR, MOMENTUM);
+            ParametersSGD(p, LR, MOMENTUM);
             
             if (((batch + 1) % LOG == 0) || (batch + 1 == trainBatches)) {
                 printf("Epoch %2d | Batch %3d/%d | Loss: ", epoch, batch + 1, trainBatches);
@@ -112,7 +114,7 @@ int main(void)
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
     }
 
-    TensorFree(m.W_h); TensorFree(m.b_h); TensorFree(m.W_y); TensorFree(m.b_y);
+    ParametersFree(p);
     TensorFree(oneHot);
     TensorFree(xTrain); TensorFree(yTrain);
     TensorFree(xTest);  TensorFree(yTest);

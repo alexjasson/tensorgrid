@@ -29,7 +29,7 @@ CFLAGS = -Wall -Wextra -Werror -pedantic -Ofast -march=native -flto
 LIBDIR     = /usr/local/lib
 INCLUDEDIR = /usr/local/include
 
-SRC = src/tensorgrid.c src/Operation.c src/ThreadPool.c src/DynamicArray.c src/utility.c
+SRC = src/tensorgrid.c src/Operation.c src/ThreadPool.c src/DynamicArray.c src/utility.c src/Parameters.c
 OBJ = $(SRC:.c=.o)
 LIB = libtensorgrid.a
 
@@ -46,8 +46,10 @@ install: $(LIB)
 	install -d $(LIBDIR) $(INCLUDEDIR)
 	install -m 644 $(LIB) $(LIBDIR)
 	install -m 644 src/tensorgrid.h $(INCLUDEDIR)
+	install -m 644 src/Parameters.h $(INCLUDEDIR)
 	rm -f $(LIB)
 
 uninstall:
 	rm -f $(LIBDIR)/$(LIB)
 	rm -f $(INCLUDEDIR)/tensorgrid.h
+	rm -f $(INCLUDEDIR)/Parameters.h
