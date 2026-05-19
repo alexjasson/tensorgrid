@@ -1,5 +1,5 @@
 #include <stdlib.h>
-#include "Parameters.h"
+#include "tensorgrid.h"
 #include "DynamicArray.h"
 
 struct parameters {

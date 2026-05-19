@@ -1,7 +1,5 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include "tensorgrid.h"
-#include "Parameters.h"
 
 #define NUM_CLASSES 10
 #define IMAGE_SIZE  784

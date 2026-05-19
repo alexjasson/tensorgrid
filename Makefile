@@ -46,10 +46,8 @@ install: $(LIB)
 	install -d $(LIBDIR) $(INCLUDEDIR)
 	install -m 644 $(LIB) $(LIBDIR)
 	install -m 644 src/tensorgrid.h $(INCLUDEDIR)
-	install -m 644 src/Parameters.h $(INCLUDEDIR)
 	rm -f $(LIB)
 
 uninstall:
 	rm -f $(LIBDIR)/$(LIB)
 	rm -f $(INCLUDEDIR)/tensorgrid.h
-	rm -f $(INCLUDEDIR)/Parameters.h

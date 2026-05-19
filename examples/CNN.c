@@ -1,7 +1,5 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include "tensorgrid.h"
-#include "Parameters.h"
 
 #define NUM_CLASSES 10
 #define BATCH_SIZE  64
@@ -81,7 +79,7 @@ int main(void)
     m.b_y = ParametersAdd(p, 1, (int[]){NUM_CLASSES});                    // [10]
     TensorXavier(m.K_1); TensorXavier(m.K_2);
     TensorXavier(m.W_h); TensorXavier(m.W_y);
-    
+
     printf("Train Samples: %d\n", trainSamples);
     printf("Test Samples:  %d\n", testSamples);
     printf("Parameters:    %d\n\n", ParametersCount(p));

@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include "tensorgrid.h"
-#include "Parameters.h"
 
 #define NUM_CLASSES 65
 #define SEQ_LENGTH  16
@@ -77,7 +76,7 @@ int main(void)
     m.W_y = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES});
     m.b_y = ParametersAdd(p, 1, (int[]){NUM_CLASSES});
     TensorXavier(m.E); TensorXavier(m.U_h); TensorXavier(m.W_y);
-    
+
     printf("Train Samples: %d\n", trainSamples);
     printf("Test Samples:  %d\n", testSamples);
     printf("Parameters:    %d\n\n", ParametersCount(p));
