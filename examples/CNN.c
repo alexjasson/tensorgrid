@@ -81,17 +81,15 @@ int main(void)
     m.b_y = ParametersAdd(p, 1, (int[]){NUM_CLASSES});                    // [10]
     TensorXavier(m.K_1); TensorXavier(m.K_2);
     TensorXavier(m.W_h); TensorXavier(m.W_y);
+    
     printf("Train Samples: %d\n", trainSamples);
     printf("Test Samples:  %d\n", testSamples);
     printf("Parameters:    %d\n\n", ParametersCount(p));
 
-    // One-hot encoding of yTrain needed to compute cross entropy loss
-    Tensor oneHot = TensorOneHot(yTrain, NUM_CLASSES); // [60000, 10]
-
     for (int epoch = 1; epoch <= EPOCHS; epoch++) {
         // Shuffle training data using epoch as seed
         Tensor xShuffled = TensorShuffle(xTrain, epoch); // [60000, 1, 28, 28]
-        Tensor yShuffled = TensorShuffle(oneHot, epoch); // [60000, 10]
+        Tensor yShuffled = TensorShuffle(yTrain, epoch); // [60000]
 
         for (int batch = 0; batch < trainBatches; batch++) {
             // Cap final batch size so we don't slice past the end of dataset
@@ -99,7 +97,7 @@ int main(void)
             int N = remaining > BATCH_SIZE ? BATCH_SIZE : remaining;
 
             Tensor X = TensorSlice(xShuffled, batch * BATCH_SIZE, N); // [N, 1, 28, 28]
-            Tensor Y = TensorSlice(yShuffled, batch * BATCH_SIZE, N); // [N, 10]
+            Tensor Y = TensorOneHot(TensorSlice(yShuffled, batch * BATCH_SIZE, N), NUM_CLASSES);
             Tensor Z    = forward(X, &m);                             // [N, 10]
             Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f);         // [] (Scalar)
 
@@ -111,7 +109,7 @@ int main(void)
                 TensorPrint(loss);
             }
 
-            TensorFree(Z); TensorFree(loss);
+            TensorFree(Y); TensorFree(Z); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
 
@@ -134,7 +132,6 @@ int main(void)
     }
 
     ParametersFree(p);
-    TensorFree(oneHot);
     TensorFree(xTrain); TensorFree(yTrain);
     TensorFree(xTest);  TensorFree(yTest);
     return 0;
