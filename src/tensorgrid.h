@@ -284,8 +284,8 @@ Tensor TensorCopy(Tensor A);
 Tensor TensorMap(Univariate f, Tensor A);
 
 /*
- * out = f(A, B). Shapes must match, except axes of size 1, which are broadcasted
- * to the other tensor's size.
+ * out = f(A, B). Shapes are right-aligned (the input with fewer dimensions gains leading size-1
+ * axes), then any axis of size 1 is broadcast to the other tensor's size along that axis.
  */
 Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
 
@@ -304,7 +304,7 @@ Tensor TensorMultiply(Tensor A, Tensor B);
 * indices: [s_0, ..., s_m]             (integer values in [0, n), encoded as Entry)
 * out:     [..., n, ...]
 */
-Tensor TensorGather(Tensor A, int axis, Tensor indices);
+Tensor TensorGather(Tensor A, Tensor indices, int axis);
 
 /*
  * Write values from A into positions given by indices.
@@ -314,7 +314,7 @@ Tensor TensorGather(Tensor A, int axis, Tensor indices);
  * indices: [s_0, ..., s_m]             (integer values in [0, K), encoded as Entry)
  * out:     [..., s_0, ..., s_m, ...]
  */
-Tensor TensorScatter(Bivariate f, Entry initial, Tensor A, int axis, Tensor indices, int n);
+Tensor TensorScatter(Bivariate f, Tensor A, Tensor indices, Entry initial, int axis, int n);
 
 /*
  * Moves a fH x fW window across the height and width of each input, and flattens each window
@@ -327,7 +327,7 @@ Tensor TensorScatter(Bivariate f, Entry initial, Tensor A, int axis, Tensor indi
  * output height = (input height + 2*padding - fH) / stride + 1
  * output width  = (input width  + 2*padding - fW) / stride + 1
  */
-Tensor TensorUnfold(Tensor input, int fH, int fW, int stride, int padding, Entry fill);
+Tensor TensorUnfold(Tensor input, Entry fill, int fH, int fW, int stride, int padding);
 
 
 /*=============================================================================================

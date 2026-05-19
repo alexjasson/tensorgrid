@@ -197,7 +197,7 @@ Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides, int of
 Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
 {
     Tensor indices = TensorNew(1, (int[]){A.shape[axis]}, FALSE);
-    Tensor out     = TensorScatter(f, initial, A, axis, indices, 1);
+    Tensor out     = TensorScatter(f, A, indices, initial, axis, 1);
     TensorFree(indices);
     return out;
 }
@@ -205,15 +205,15 @@ Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
 Tensor TensorMap(Univariate f, Tensor A)                                     { return OperationMap(f, A);                    }
 Tensor TensorZip(Bivariate f, Tensor A, Tensor B)                            { return OperationZip(f, A, B);                 }
 Tensor TensorMultiply(Tensor A, Tensor B)                                    { return OperationMultiply(A, B);               }
-Tensor TensorGather(Tensor A, int axis, Tensor indices)                      { return OperationGather(A, axis, indices);     }
-Tensor TensorScatter(Bivariate f, Entry e, Tensor A, int a, Tensor i, int n) { return OperationScatter(f, e, A, a, i, n);    }
-Tensor TensorUnfold(Tensor A, int H, int W, int s, int p, Entry fill)        { return OperationUnfold(A, H, W, s, p, fill);  }
+Tensor TensorGather(Tensor A, Tensor indices, int axis)                      { return OperationGather(A, indices, axis);     }
+Tensor TensorScatter(Bivariate f, Tensor A, Tensor i, Entry e, int a, int n) { return OperationScatter(f, A, i, e, a, n);    }
+Tensor TensorUnfold(Tensor A, Entry fill, int H, int W, int s, int p)        { return OperationUnfold(A, fill, H, W, s, p);  }
 
 Tensor TensorCopy(Tensor A)                                                  { return TensorMap(IDENTITY, A);                }
 Tensor TensorAdd(Tensor A, Tensor B)                                         { return TensorZip(ADD, A, B);                  }
 Tensor TensorSubtract(Tensor A, Tensor B)                                    { return TensorZip(SUBTRACT, A, B);             }
 Tensor TensorHadamard(Tensor A, Tensor B)                                    { return TensorZip(MULTIPLY, A, B);             }
-Tensor TensorEmbedding(Tensor table, Tensor indices)                         { return TensorGather(table, 0, indices);       }
+Tensor TensorEmbedding(Tensor table, Tensor indices)                         { return TensorGather(table, indices, 0);       }
 Tensor TensorMaxPool(Tensor A, int k, int s, int p)                          { return TensorPool(MAX, -FLT_MAX, A, k, s, p); }
 
 Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Univariate f)
@@ -241,7 +241,7 @@ Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding)
     int Wout = (W + 2 * padding - fW) / stride + 1;
     int K    = Cin * fH * fW;
 
-    Tensor windows     = TensorUnfold(input, fH, fW, stride, padding, 0.0f);
+    Tensor windows     = TensorUnfold(input, 0.0f, fH, fW, stride, padding);
     Tensor matrixInput = TensorReshape(filter, 2, (int[]){Cout, K});
     Tensor output      = TensorMultiply(matrixInput, windows);  // [N, Cout, S]
     TensorFree(windows);
@@ -272,7 +272,7 @@ Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride
     int Wout = (W + 2 * padding - size) / stride + 1;
 
     Tensor flat   = TensorReshape(input, 4, (int[]){N * C, 1, H, W});
-    Tensor cols   = TensorUnfold(flat, size, size, stride, padding, initial);  // [N*C, size*size, Hout*Wout]
+    Tensor cols   = TensorUnfold(flat, initial, size, size, stride, padding);  // [N*C, size*size, Hout*Wout]
     Tensor pooled = TensorReduce(f, initial, cols, 1);                         // [N*C, 1, Hout*Wout]
     Tensor out    = TensorReshape(pooled, 4, (int[]){N, C, Hout, Wout});
     TensorFree(cols);
@@ -304,7 +304,7 @@ Tensor TensorBroadcast(Tensor A, int axis, int n)
         exit(EXIT_FAILURE);
     }
     Tensor indices = TensorNew(1, (int[]){n}, FALSE);
-    Tensor out     = TensorGather(A, axis, indices);
+    Tensor out     = TensorGather(A, indices, axis);
     TensorFree(indices);
     return out;
 }

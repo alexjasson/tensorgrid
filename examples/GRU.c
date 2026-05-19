@@ -24,10 +24,10 @@
  */
 typedef struct {
     Tensor E;        // [NUM_CLASSES, HIDDEN_SIZE]
-    Tensor U_z, b_z; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, HIDDEN_SIZE]
-    Tensor U_r, b_r; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, HIDDEN_SIZE]
-    Tensor U_h, b_h; // [HIDDEN_SIZE, HIDDEN_SIZE], [1, HIDDEN_SIZE]
-    Tensor W_y, b_y; // [HIDDEN_SIZE, NUM_CLASSES], [1, NUM_CLASSES]
+    Tensor U_z, b_z; // [HIDDEN_SIZE, HIDDEN_SIZE], [HIDDEN_SIZE]
+    Tensor U_r, b_r; // [HIDDEN_SIZE, HIDDEN_SIZE], [HIDDEN_SIZE]
+    Tensor U_h, b_h; // [HIDDEN_SIZE, HIDDEN_SIZE], [HIDDEN_SIZE]
+    Tensor W_y, b_y; // [HIDDEN_SIZE, NUM_CLASSES], [NUM_CLASSES]
 } Model;
 
 // X: [N, SEQ_LENGTH]
@@ -98,13 +98,13 @@ int main(void)
     Model m;
     m.E   = TensorNew(2, (int[]){NUM_CLASSES, HIDDEN_SIZE}, TRUE);
     m.U_z = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_z = TensorNew(2, (int[]){1, HIDDEN_SIZE}, TRUE);
+    m.b_z = TensorNew(1, (int[]){HIDDEN_SIZE}, TRUE);
     m.U_r = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_r = TensorNew(2, (int[]){1, HIDDEN_SIZE}, TRUE);
+    m.b_r = TensorNew(1, (int[]){HIDDEN_SIZE}, TRUE);
     m.U_h = TensorNew(2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_h = TensorNew(2, (int[]){1, HIDDEN_SIZE}, TRUE);
+    m.b_h = TensorNew(1, (int[]){HIDDEN_SIZE}, TRUE);
     m.W_y = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE);
-    m.b_y = TensorNew(2, (int[]){1, NUM_CLASSES}, TRUE);
+    m.b_y = TensorNew(1, (int[]){NUM_CLASSES}, TRUE);
     TensorXavier(m.E);
     TensorXavier(m.U_z); TensorXavier(m.U_r); TensorXavier(m.U_h);
     TensorXavier(m.W_y);

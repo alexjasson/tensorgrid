@@ -8,9 +8,8 @@ typedef struct {
     Tensor out, A, B;
     enum { Map, Zip, Multiply, Unfold, Gather, Scatter } type;
     union { Univariate u; Bivariate b; };
-    int   axis;                    // Reduce axis (Gather, Scatter)
-    Entry initial;                 // Identity value (Scatter, Unfold)
-    int   fH, fW, stride, padding; // Unfold arguments
+    Entry fill;
+    int   axis, fH, fW, stride, padding;
 } Operation;
 
 /*
@@ -22,9 +21,9 @@ typedef struct {
 Tensor OperationMap(Univariate f, Tensor A);
 Tensor OperationZip(Bivariate f, Tensor A, Tensor B);
 Tensor OperationMultiply(Tensor A, Tensor B);
-Tensor OperationGather(Tensor A, int axis, Tensor indices);
-Tensor OperationScatter(Bivariate f, Entry initial, Tensor A, int axis, Tensor indices, int n);
-Tensor OperationUnfold(Tensor input, int fH, int fW, int stride, int padding, Entry fill);
+Tensor OperationGather(Tensor A, Tensor B, int axis);
+Tensor OperationScatter(Bivariate f, Tensor A, Tensor B, Entry fill, int axis, int n);
+Tensor OperationUnfold(Tensor A, Entry fill, int fH, int fW, int stride, int padding);
 
 /*
  * Starts with loss tensor, takes mean for each entry, then propagates gradients

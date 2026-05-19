@@ -308,7 +308,7 @@ static void unfoldForward(void *arg, int start, int end)
     int sC     = op->A.strides[1];
     int sH     = op->A.strides[2];
     int sW     = op->A.strides[3];
-    Entry        fill    = op->initial;
+    Entry        fill    = op->fill;
     const Entry *input   = op->A.entries;
     Entry       *windows = op->out.entries;
 
@@ -493,7 +493,7 @@ static void scatterForward(void *arg, int start, int end)
             int kTarget = rem % n;
             int outer   = rem / n;
 
-            Entry acc = op->initial;
+            Entry acc = op->fill;
             for (int ix = 0; ix < idxSize; ix++) {
                 if ((int)I.entries[ix] == kTarget)
                     acc = op->b.f(acc, A.entries[(outer * idxSize + ix) * innerSize + inner]);
@@ -513,7 +513,7 @@ static void scatterForward(void *arg, int start, int end)
                               : unravel(inner, A.shape + axis + I.dimensions,
                                         A.strides + axis + I.dimensions, aInnerDims);
 
-            Entry acc = op->initial;
+            Entry acc = op->fill;
             for (int ix = 0; ix < idxSize; ix++) {
                 int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
                 if ((int)I.entries[idxOff] == kTarget) {
@@ -558,7 +558,7 @@ static void scatterBackward(void *arg, int start, int end)
         }
 
         Entry chain[idxSize + 1];
-        chain[0] = op->initial;
+        chain[0] = op->fill;
         int count = 0;
         for (int ix = 0; ix < idxSize; ix++) {
             int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
@@ -739,16 +739,27 @@ Tensor OperationZip(Bivariate f, Tensor A, Tensor B)
     int freeA = FALSE;
     int freeB = FALSE;
 
-    if (A.dimensions != B.dimensions) {
-        fprintf(stderr, "OperationZip inputs must have the same number of dimensions!\n");
-        exit(EXIT_FAILURE);
+    // Right-align shapes
+    int outDims = A.dimensions >= B.dimensions ? A.dimensions : B.dimensions;
+    Tensor *inputs[2] = { &zipA, &zipB };
+    for (int n = 0; n < 2; n++) {
+        Tensor *t = inputs[n];
+        int pad = outDims - t->dimensions;
+        for (int i = outDims - 1; i >= pad; i--) {
+            t->shape[i]   = t->shape[i - pad];
+            t->strides[i] = t->strides[i - pad];
+        }
+        for (int i = pad - 1; i >= 0; i--) {
+            t->shape[i]   = 1;
+            t->strides[i] = t->strides[i + 1] * t->shape[i + 1];
+        }
+        t->dimensions = outDims;
     }
 
-    int outDims = A.dimensions;
     int outShape[MAX_DIMENSIONS];
     for (int axis = 0; axis < outDims; axis++) {
-        int aSize = A.shape[axis];
-        int bSize = B.shape[axis];
+        int aSize = zipA.shape[axis];
+        int bSize = zipB.shape[axis];
         if (aSize != bSize && aSize != 1 && bSize != 1) {
             fprintf(stderr, "OperationZip shapes are not compatible!\n");
             exit(EXIT_FAILURE);
@@ -800,53 +811,53 @@ Tensor OperationMultiply(Tensor A, Tensor B)
     return out;
 }
 
-Tensor OperationGather(Tensor A, int axis, Tensor indices)
+Tensor OperationGather(Tensor A, Tensor B, int axis)
 {
-    int outDims = A.dimensions - 1 + indices.dimensions;
+    int outDims = A.dimensions - 1 + B.dimensions;
     int outShape[MAX_DIMENSIONS];
     int p = 0;
     for (int d = 0; d < axis; d++) outShape[p++] = A.shape[d];
-    for (int d = 0; d < indices.dimensions; d++) outShape[p++] = indices.shape[d];
+    for (int d = 0; d < B.dimensions; d++) outShape[p++] = B.shape[d];
     for (int d = axis + 1; d < A.dimensions; d++) outShape[p++] = A.shape[d];
 
     Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
 
-    Operation op = { .type=Gather, .out=out, .A=A, .B=indices, .axis=axis };
+    Operation op = { .type=Gather, .out=out, .A=A, .B=B, .axis=axis };
     operationForward(op);
     return out;
 }
 
-Tensor OperationScatter(Bivariate f, Entry initial, Tensor A, int axis, Tensor indices, int n)
+Tensor OperationScatter(Bivariate f, Tensor A, Tensor B, Entry fill, int axis, int n)
 {
-    int outDims = A.dimensions - indices.dimensions + 1;
+    int outDims = A.dimensions - B.dimensions + 1;
     int outShape[MAX_DIMENSIONS];
     int p = 0;
     for (int d = 0; d < axis; d++) outShape[p++] = A.shape[d];
     outShape[p++] = n;
-    for (int d = axis + indices.dimensions; d < A.dimensions; d++) outShape[p++] = A.shape[d];
+    for (int d = axis + B.dimensions; d < A.dimensions; d++) outShape[p++] = A.shape[d];
 
     Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
 
-    Operation op = { .type=Scatter, .out=out, .A=A, .B=indices, .axis=axis, .initial=initial, .b=f };
+    Operation op = { .type=Scatter, .out=out, .A=A, .B=B, .axis=axis, .fill=fill, .b=f };
     operationForward(op);
     return out;
 }
 
-Tensor OperationUnfold(Tensor input, int fH, int fW, int stride, int padding, Entry fill)
+Tensor OperationUnfold(Tensor A, Entry fill, int fH, int fW, int stride, int padding)
 {
-    int N    = input.shape[0];
-    int Cin  = input.shape[1];
-    int H    = input.shape[2];
-    int W    = input.shape[3];
+    int N    = A.shape[0];
+    int Cin  = A.shape[1];
+    int H    = A.shape[2];
+    int W    = A.shape[3];
     int Hout = (H + 2 * padding - fH) / stride + 1;
     int Wout = (W + 2 * padding - fW) / stride + 1;
     int K    = Cin * fH * fW;
     int S    = Hout * Wout;
 
-    Tensor windows = TensorNew(3, (int[]){N, K, S}, input.gradients != NULL);
+    Tensor windows = TensorNew(3, (int[]){N, K, S}, A.gradients != NULL);
 
-    Operation op = { .type=Unfold, .out=windows, .A=input,
-                     .stride=stride, .padding=padding, .fH=fH, .fW=fW, .initial=fill };
+    Operation op = { .type=Unfold, .out=windows, .A=A,
+                     .stride=stride, .padding=padding, .fH=fH, .fW=fW, .fill=fill };
     operationForward(op);
     return windows;
 }

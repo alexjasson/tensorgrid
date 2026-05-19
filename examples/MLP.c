@@ -18,8 +18,8 @@
  * Z = h @ W_y + b_y
  */
 typedef struct {
-    Tensor W_h, b_h; // [IMAGE_SIZE, HIDDEN_SIZE],  [1, HIDDEN_SIZE]
-    Tensor W_y, b_y; // [HIDDEN_SIZE, NUM_CLASSES], [1, NUM_CLASSES]
+    Tensor W_h, b_h; // [IMAGE_SIZE, HIDDEN_SIZE],  [HIDDEN_SIZE]
+    Tensor W_y, b_y; // [HIDDEN_SIZE, NUM_CLASSES], [NUM_CLASSES]
 } Model;
 
 // X: [N, IMAGE_SIZE]
@@ -56,9 +56,9 @@ int main(void)
     // Create and initialize hidden and output layer weights/biases
     Model m;
     m.W_h = TensorNew(2, (int[]){IMAGE_SIZE,  HIDDEN_SIZE}, TRUE); // [784, 128]
-    m.b_h = TensorNew(2, (int[]){1, HIDDEN_SIZE}, TRUE);           // [1, 128]
+    m.b_h = TensorNew(1, (int[]){HIDDEN_SIZE}, TRUE);              // [128]
     m.W_y = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE); // [128, 10]
-    m.b_y = TensorNew(2, (int[]){1, NUM_CLASSES}, TRUE);           // [1, 10]
+    m.b_y = TensorNew(1, (int[]){NUM_CLASSES}, TRUE);              // [10]
     TensorXavier(m.W_h); TensorXavier(m.W_y);
 
     // One-hot encoding of yTrain needed to compute cross entropy loss

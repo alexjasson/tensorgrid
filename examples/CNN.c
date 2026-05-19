@@ -23,10 +23,10 @@
  * Z   = h @ W_y + b_y
  */
 typedef struct {
-    Tensor K_1, b_1; // [C1_CHANNELS, 1, 3, 3],           [1, C1_CHANNELS, 1, 1]
-    Tensor K_2, b_2; // [C2_CHANNELS, C1_CHANNELS, 3, 3], [1, C2_CHANNELS, 1, 1]
-    Tensor W_h, b_h; // [FEATURES, HIDDEN_SIZE],          [1, HIDDEN_SIZE]
-    Tensor W_y, b_y; // [HIDDEN_SIZE, NUM_CLASSES],       [1, NUM_CLASSES]
+    Tensor K_1, b_1; // [C1_CHANNELS, 1, 3, 3],           [C1_CHANNELS, 1, 1]
+    Tensor K_2, b_2; // [C2_CHANNELS, C1_CHANNELS, 3, 3], [C2_CHANNELS, 1, 1]
+    Tensor W_h, b_h; // [FEATURES, HIDDEN_SIZE],          [HIDDEN_SIZE]
+    Tensor W_y, b_y; // [HIDDEN_SIZE, NUM_CLASSES],       [NUM_CLASSES]
 } Model;
 
 // X: [N, 1, 28, 28]
@@ -71,13 +71,13 @@ int main(void)
     // Create and initialize convolution filters, weights and biases
     Model m;
     m.K_1 = TensorNew(4, (int[]){C1_CHANNELS,  1, 3, 3}, TRUE);          // [16, 1, 3, 3]
-    m.b_1 = TensorNew(4, (int[]){1, C1_CHANNELS, 1, 1}, TRUE);           // [1, 16, 1, 1]
+    m.b_1 = TensorNew(3, (int[]){C1_CHANNELS, 1, 1}, TRUE);              // [16, 1, 1]
     m.K_2 = TensorNew(4, (int[]){C2_CHANNELS, C1_CHANNELS, 3, 3}, TRUE); // [32, 16, 3, 3]
-    m.b_2 = TensorNew(4, (int[]){1, C2_CHANNELS, 1, 1}, TRUE);           // [1, 32, 1, 1]
+    m.b_2 = TensorNew(3, (int[]){C2_CHANNELS, 1, 1}, TRUE);              // [32, 1, 1]
     m.W_h = TensorNew(2, (int[]){FEATURES, HIDDEN_SIZE}, TRUE);          // [32*7*7, 128]
-    m.b_h = TensorNew(2, (int[]){1, HIDDEN_SIZE}, TRUE);                 // [1, 128]
+    m.b_h = TensorNew(1, (int[]){HIDDEN_SIZE}, TRUE);                    // [128]
     m.W_y = TensorNew(2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE);       // [128, 10]
-    m.b_y = TensorNew(2, (int[]){1, NUM_CLASSES}, TRUE);                 // [1, 10]
+    m.b_y = TensorNew(1, (int[]){NUM_CLASSES}, TRUE);                    // [10]
     TensorXavier(m.K_1); TensorXavier(m.K_2);
     TensorXavier(m.W_h); TensorXavier(m.W_y);
 

@@ -42,67 +42,67 @@
  * Z = Y @ E^T
  */
 typedef struct {
-    Tensor W_LN1, b_LN1; // [1, 1, EMBED_SIZE]
-    Tensor W_q, b_q;     // [EMBED_SIZE, EMBED_SIZE], [1, 1, EMBED_SIZE]
+    Tensor g_LN1, b_LN1; // [EMBED_SIZE], [EMBED_SIZE]
+    Tensor W_q, b_q;     // [EMBED_SIZE, EMBED_SIZE], [EMBED_SIZE]
     Tensor W_k, b_k;
     Tensor W_v, b_v;
     Tensor W_o, b_o;
-    Tensor W_LN2, b_LN2;
-    Tensor W_1, b_1;     // [EMBED_SIZE, MLP_HIDDEN], [1, 1, MLP_HIDDEN]
-    Tensor W_2, b_2;     // [MLP_HIDDEN, EMBED_SIZE], [1, 1, EMBED_SIZE]
+    Tensor g_LN2, b_LN2;
+    Tensor W_1, b_1;     // [EMBED_SIZE, MLP_HIDDEN], [MLP_HIDDEN]
+    Tensor W_2, b_2;     // [MLP_HIDDEN, EMBED_SIZE], [EMBED_SIZE]
 } Block;
 
 typedef struct {
     Tensor E;            // [NUM_CLASSES, EMBED_SIZE]
-    Tensor P;            // [1, SEQ_LENGTH, EMBED_SIZE]
+    Tensor P;            // [SEQ_LENGTH, EMBED_SIZE]
     Block  blocks[NUM_LAYERS];
-    Tensor W_LNf, b_LNf; // [1, 1, EMBED_SIZE]
+    Tensor g_LNf, b_LNf; // [EMBED_SIZE], [EMBED_SIZE]
 } Model;
 
 static void newBlock(Block *b)
 {
-    b->W_LN1 = TensorNew(3, (int[]){1, 1, EMBED_SIZE}, TRUE);
-    b->b_LN1 = TensorNew(3, (int[]){1, 1, EMBED_SIZE}, TRUE);
+    b->g_LN1 = TensorNew(1, (int[]){EMBED_SIZE}, TRUE);
+    b->b_LN1 = TensorNew(1, (int[]){EMBED_SIZE}, TRUE);
     b->W_q   = TensorNew(2, (int[]){EMBED_SIZE, EMBED_SIZE}, TRUE);
-    b->b_q   = TensorNew(3, (int[]){1, 1, EMBED_SIZE}, TRUE);
+    b->b_q   = TensorNew(1, (int[]){EMBED_SIZE}, TRUE);
     b->W_k   = TensorNew(2, (int[]){EMBED_SIZE, EMBED_SIZE}, TRUE);
-    b->b_k   = TensorNew(3, (int[]){1, 1, EMBED_SIZE}, TRUE);
+    b->b_k   = TensorNew(1, (int[]){EMBED_SIZE}, TRUE);
     b->W_v   = TensorNew(2, (int[]){EMBED_SIZE, EMBED_SIZE}, TRUE);
-    b->b_v   = TensorNew(3, (int[]){1, 1, EMBED_SIZE}, TRUE);
+    b->b_v   = TensorNew(1, (int[]){EMBED_SIZE}, TRUE);
     b->W_o   = TensorNew(2, (int[]){EMBED_SIZE, EMBED_SIZE}, TRUE);
-    b->b_o   = TensorNew(3, (int[]){1, 1, EMBED_SIZE}, TRUE);
-    b->W_LN2 = TensorNew(3, (int[]){1, 1, EMBED_SIZE}, TRUE);
-    b->b_LN2 = TensorNew(3, (int[]){1, 1, EMBED_SIZE}, TRUE);
+    b->b_o   = TensorNew(1, (int[]){EMBED_SIZE}, TRUE);
+    b->g_LN2 = TensorNew(1, (int[]){EMBED_SIZE}, TRUE);
+    b->b_LN2 = TensorNew(1, (int[]){EMBED_SIZE}, TRUE);
     b->W_1   = TensorNew(2, (int[]){EMBED_SIZE, MLP_HIDDEN}, TRUE);
-    b->b_1   = TensorNew(3, (int[]){1, 1, MLP_HIDDEN}, TRUE);
+    b->b_1   = TensorNew(1, (int[]){MLP_HIDDEN}, TRUE);
     b->W_2   = TensorNew(2, (int[]){MLP_HIDDEN, EMBED_SIZE}, TRUE);
-    b->b_2   = TensorNew(3, (int[]){1, 1, EMBED_SIZE}, TRUE);
-    TensorFill(b->W_LN1, 1.0f); TensorFill(b->W_LN2, 1.0f);
+    b->b_2   = TensorNew(1, (int[]){EMBED_SIZE}, TRUE);
+    TensorFill(b->g_LN1, 1.0f); TensorFill(b->g_LN2, 1.0f);
     TensorXavier(b->W_q); TensorXavier(b->W_k); TensorXavier(b->W_v); TensorXavier(b->W_o);
     TensorXavier(b->W_1); TensorXavier(b->W_2);
 }
 
 static void freeBlock(Block *b)
 {
-    TensorFree(b->W_LN1); TensorFree(b->b_LN1);
+    TensorFree(b->g_LN1); TensorFree(b->b_LN1);
     TensorFree(b->W_q);   TensorFree(b->b_q);
     TensorFree(b->W_k);   TensorFree(b->b_k);
     TensorFree(b->W_v);   TensorFree(b->b_v);
     TensorFree(b->W_o);   TensorFree(b->b_o);
-    TensorFree(b->W_LN2); TensorFree(b->b_LN2);
+    TensorFree(b->g_LN2); TensorFree(b->b_LN2);
     TensorFree(b->W_1);   TensorFree(b->b_1);
     TensorFree(b->W_2);   TensorFree(b->b_2);
 }
 
 static void optimizeBlock(Block *b)
 {
-    TensorAdam(b->W_LN1, LR, BETA1, BETA2, EPSILON, 0);
+    TensorAdam(b->g_LN1, LR, BETA1, BETA2, EPSILON, 0);
     TensorAdam(b->b_LN1, LR, BETA1, BETA2, EPSILON, 0);
     TensorAdam(b->W_q,   LR, BETA1, BETA2, EPSILON, 0); TensorAdam(b->b_q, LR, BETA1, BETA2, EPSILON, 0);
     TensorAdam(b->W_k,   LR, BETA1, BETA2, EPSILON, 0); TensorAdam(b->b_k, LR, BETA1, BETA2, EPSILON, 0);
     TensorAdam(b->W_v,   LR, BETA1, BETA2, EPSILON, 0); TensorAdam(b->b_v, LR, BETA1, BETA2, EPSILON, 0);
     TensorAdam(b->W_o,   LR, BETA1, BETA2, EPSILON, 0); TensorAdam(b->b_o, LR, BETA1, BETA2, EPSILON, 0);
-    TensorAdam(b->W_LN2, LR, BETA1, BETA2, EPSILON, 0);
+    TensorAdam(b->g_LN2, LR, BETA1, BETA2, EPSILON, 0);
     TensorAdam(b->b_LN2, LR, BETA1, BETA2, EPSILON, 0);
     TensorAdam(b->W_1,   LR, BETA1, BETA2, EPSILON, 0); TensorAdam(b->b_1, LR, BETA1, BETA2, EPSILON, 0);
     TensorAdam(b->W_2,   LR, BETA1, BETA2, EPSILON, 0); TensorAdam(b->b_2, LR, BETA1, BETA2, EPSILON, 0);
@@ -113,7 +113,7 @@ static Tensor forwardBlock(Tensor H, Block *b)
     Tensor causalMask = TensorCausalMask(SEQ_LENGTH);                      // [T, T]
     causalMask = TensorReshape(causalMask, 3, (int[]){1, SEQ_LENGTH, SEQ_LENGTH});
 
-    Tensor LN_H = TensorLayerNorm(H, b->W_LN1, b->b_LN1, LN_EPSILON);      // [N, T, D]
+    Tensor LN_H = TensorLayerNorm(H, b->g_LN1, b->b_LN1, LN_EPSILON);      // [N, T, D]
     Tensor Q    = TensorLinearLayer(LN_H, b->W_q, b->b_q, IDENTITY);       // [N, T, D]
     Tensor K    = TensorLinearLayer(LN_H, b->W_k, b->b_k, IDENTITY);
     Tensor V    = TensorLinearLayer(LN_H, b->W_v, b->b_v, IDENTITY);
@@ -138,7 +138,7 @@ static Tensor forwardBlock(Tensor H, Block *b)
     Tensor U = TensorAdd(H, A);                                            // U_l = H_{l-1} + A_l
     TensorFree(A);
 
-    Tensor LN_U = TensorLayerNorm(U, b->W_LN2, b->b_LN2, LN_EPSILON);
+    Tensor LN_U = TensorLayerNorm(U, b->g_LN2, b->b_LN2, LN_EPSILON);
     Tensor mlp  = TensorLinearLayer(LN_U, b->W_1, b->b_1, GELU);           // gelu(LN_U @ W_1 + b_1)
     Tensor M    = TensorLinearLayer(mlp, b->W_2, b->b_2, IDENTITY);        // M_l = ... @ W_2 + b_2
     TensorFree(LN_U); TensorFree(mlp);
@@ -161,7 +161,7 @@ static Tensor forward(Tensor X, Model *m)
         H = next;
     }
 
-    Tensor Y   = TensorLayerNorm(H, m->W_LNf, m->b_LNf, LN_EPSILON);     // Y = layerNorm(H_L)
+    Tensor Y   = TensorLayerNorm(H, m->g_LNf, m->b_LNf, LN_EPSILON);     // Y = layerNorm(H_L)
     Tensor E_T = TensorTranspose(m->E);                                  // E^T, [D, NUM_CLASSES]
     Tensor Z   = TensorMultiply(Y, E_T);                                 // Z = Y @ E^T, [N, T, NUM_CLASSES]
     TensorFree(H); TensorFree(Y); TensorFree(E_T);
@@ -188,12 +188,12 @@ int main(void)
 
     Model m;
     m.E = TensorNew(2, (int[]){NUM_CLASSES, EMBED_SIZE}, TRUE);
-    m.P = TensorNew(3, (int[]){1, SEQ_LENGTH, EMBED_SIZE}, TRUE);
+    m.P = TensorNew(2, (int[]){SEQ_LENGTH, EMBED_SIZE}, TRUE);
     for (int l = 0; l < NUM_LAYERS; l++) newBlock(&m.blocks[l]);
-    m.W_LNf = TensorNew(3, (int[]){1, 1, EMBED_SIZE}, TRUE);
-    m.b_LNf = TensorNew(3, (int[]){1, 1, EMBED_SIZE}, TRUE);
+    m.g_LNf = TensorNew(1, (int[]){EMBED_SIZE}, TRUE);
+    m.b_LNf = TensorNew(1, (int[]){EMBED_SIZE}, TRUE);
     TensorXavier(m.E); TensorXavier(m.P);
-    TensorFill(m.W_LNf, 1.0f);
+    TensorFill(m.g_LNf, 1.0f);
 
     for (int epoch = 1; epoch <= EPOCHS; epoch++) {
         Tensor xShuffled = TensorShuffle(xTrain, epoch); // [trainSamples, SEQ_LENGTH]
@@ -212,7 +212,7 @@ int main(void)
             TensorAdam(m.E, LR, BETA1, BETA2, EPSILON, 0);
             TensorAdam(m.P, LR, BETA1, BETA2, EPSILON, 0);
             for (int l = 0; l < NUM_LAYERS; l++) optimizeBlock(&m.blocks[l]);
-            TensorAdam(m.W_LNf, LR, BETA1, BETA2, EPSILON, 0);
+            TensorAdam(m.g_LNf, LR, BETA1, BETA2, EPSILON, 0);
             TensorAdam(m.b_LNf, LR, BETA1, BETA2, EPSILON, 0);
 
             if (((batch + 1) % LOG == 0) || (batch + 1 == trainBatches)) {
@@ -244,7 +244,7 @@ int main(void)
 
     TensorFree(m.E); TensorFree(m.P);
     for (int l = 0; l < NUM_LAYERS; l++) freeBlock(&m.blocks[l]);
-    TensorFree(m.W_LNf); TensorFree(m.b_LNf);
+    TensorFree(m.g_LNf); TensorFree(m.b_LNf);
     TensorFree(xTrain); TensorFree(xTest);
     TensorFree(train);  TensorFree(test);
     return 0;
