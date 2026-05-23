@@ -44,9 +44,25 @@ typedef struct {
 Tensor TensorNew(int dimensions, int *shape, int autograd);
 
 /*
+ * Creates an empty parameter registry.
+ */
+Parameters ParametersNew(void);
+
+/*
+ * Allocates a new autograd-enabled tensor, registers it in the collection and
+ * returns it.
+ */
+Tensor ParametersAdd(Parameters p, int dimensions, int *shape);
+
+/*
  * Frees a tensor from memory.
  */
 void TensorFree(Tensor A);
+
+/*
+ * Frees every registered tensor and the registry itself.
+ */
+void ParametersFree(Parameters p);
 
 /*
  * Reads a .npy file and returns it as a tensor. Data is cast to the Entry
@@ -68,6 +84,11 @@ void TensorWrite(Tensor A, char *path);
  * Returns the total number of entries in the tensor.
  */
 int TensorSize(Tensor A);
+
+/*
+ * Adds the total number of entries in each registered tensor and returns it.
+ */
+int ParametersCount(Parameters p);
 
 /*
  * Returns the size of the tensor along the given axis.
@@ -399,6 +420,11 @@ void TensorBackward(Tensor loss);
 void TensorSGD(Tensor A, float lr, float momentum);
 
 /*
+ * Applies a single SGD optimizer step to every registered tensor.
+ */
+void ParametersSGD(Parameters p, float lr, float momentum);
+
+/*
  * Adam optimizer with optional weight decay. Set weightDecay to 0 for Adam
  * and weightDecay > 0 for AdamW. Must be called after TensorBackward.
  *
@@ -408,36 +434,9 @@ void TensorSGD(Tensor A, float lr, float momentum);
  */
 void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, float weightDecay);
 
-
-/*=============================================================================================
- *                                        Parameters
- *=============================================================================================*/
-
 /*
- * Creates an empty parameter registry
+ * Applies a single Adam optimizer step to every registered tensor.
  */
-Parameters ParametersNew(void);
-
-/*
- * Allocates a new autograd-enabled tensor, registers it in the collection and
- * returns it.
- */
-Tensor ParametersAdd(Parameters p, int dimensions, int *shape);
-
-/*
- * Adds the total number of entries in each Tensor and returns it
- */
-int ParametersCount(Parameters p);
-
-/*
- * Applies a single optimizer step to every registered tensor
- */
-void ParametersSGD(Parameters p, float lr, float momentum);
 void ParametersAdam(Parameters p, float lr, float beta1, float beta2, float epsilon, float weightDecay);
-
-/*
- * Frees every registered tensor and the registry itself
- */
-void ParametersFree(Parameters p);
 
 #endif

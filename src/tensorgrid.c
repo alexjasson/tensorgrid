@@ -6,7 +6,8 @@
 #include <float.h>
 #include <stdint.h>
 #include "tensorgrid.h"
-#include "Operation.h"
+#include "autograd.h"
+#include "DynamicArray.h"
 #include "utility.h"
 
 // Univariate functions and derivatives
@@ -68,12 +69,24 @@ typedef struct optimizer {
     int    t;     // Adam timestep
 } optimizer;
 
+struct parameters {
+    DynamicArray tensors;
+};
+
 int TensorSize(Tensor A)
 {
     int size = 1;
     for (int i = 0; i < A.dimensions; i++)
         size *= A.shape[i];
     return size;
+}
+
+int ParametersCount(Parameters p)
+{
+    int total = 0;
+    for (int i = 0; i < DynamicArraySize(p->tensors); i++)
+        total += TensorSize(*(Tensor *)DynamicArrayGet(p->tensors, i));
+    return total;
 }
 
 int TensorShape(Tensor A, int axis)
@@ -104,6 +117,20 @@ Tensor TensorNew(int dimensions, int *shape, int autograd)
     return t;
 }
 
+Parameters ParametersNew(void)
+{
+    Parameters p = malloc(sizeof(struct parameters));
+    p->tensors = DynamicArrayNew(sizeof(Tensor));
+    return p;
+}
+
+Tensor ParametersAdd(Parameters p, int dimensions, int *shape)
+{
+    Tensor t = TensorNew(dimensions, shape, TRUE);
+    DynamicArrayPush(p->tensors, &t);
+    return t;
+}
+
 void TensorFree(Tensor A)
 {
     if (!A.refcount || --(*A.refcount) > 0) return;
@@ -115,6 +142,14 @@ void TensorFree(Tensor A)
         free(A.optimizer);
     }
     free(A.refcount);
+}
+
+void ParametersFree(Parameters p)
+{
+    for (int i = 0; i < DynamicArraySize(p->tensors); i++)
+        TensorFree(*(Tensor *)DynamicArrayGet(p->tensors, i));
+    DynamicArrayFree(p->tensors);
+    free(p);
 }
 
 Tensor TensorSlice(Tensor A, int index, int length)
@@ -202,12 +237,12 @@ Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
     return out;
 }
 
-Tensor TensorMap(Univariate f, Tensor A)                                     { return OperationMap(f, A);                    }
-Tensor TensorZip(Bivariate f, Tensor A, Tensor B)                            { return OperationZip(f, A, B);                 }
-Tensor TensorMultiply(Tensor A, Tensor B)                                    { return OperationMultiply(A, B);               }
-Tensor TensorGather(Tensor A, Tensor indices, int axis)                      { return OperationGather(A, indices, axis);     }
-Tensor TensorScatter(Bivariate f, Tensor A, Tensor i, Entry e, int a, int n) { return OperationScatter(f, A, i, e, a, n);    }
-Tensor TensorUnfold(Tensor A, Entry fill, int H, int W, int s, int p)        { return OperationUnfold(A, fill, H, W, s, p);  }
+Tensor TensorMap(Univariate f, Tensor A)                                     { return autogradMap(f, A);                     }
+Tensor TensorZip(Bivariate f, Tensor A, Tensor B)                            { return autogradZip(f, A, B);                  }
+Tensor TensorMultiply(Tensor A, Tensor B)                                    { return autogradMultiply(A, B);                }
+Tensor TensorGather(Tensor A, Tensor indices, int axis)                      { return autogradGather(A, indices, axis);      }
+Tensor TensorScatter(Bivariate f, Tensor A, Tensor i, Entry e, int a, int n) { return autogradScatter(f, A, i, e, a, n);     }
+Tensor TensorUnfold(Tensor A, Entry fill, int H, int W, int s, int p)        { return autogradUnfold(A, fill, H, W, s, p);   }
 
 Tensor TensorCopy(Tensor A)                                                  { return TensorMap(IDENTITY, A);                }
 Tensor TensorAdd(Tensor A, Tensor B)                                         { return TensorZip(ADD, A, B);                  }
@@ -775,6 +810,12 @@ void TensorSGD(Tensor A, float lr, float momentum)
     }
 }
 
+void ParametersSGD(Parameters p, float lr, float momentum)
+{
+    for (int i = 0; i < DynamicArraySize(p->tensors); i++)
+        TensorSGD(*(Tensor *)DynamicArrayGet(p->tensors, i), lr, momentum);
+}
+
 void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, float weightDecay)
 {
     int size = TensorSize(A);
@@ -802,7 +843,13 @@ void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, flo
     }
 }
 
+void ParametersAdam(Parameters p, float lr, float beta1, float beta2, float epsilon, float weightDecay)
+{
+    for (int i = 0; i < DynamicArraySize(p->tensors); i++)
+        TensorAdam(*(Tensor *)DynamicArrayGet(p->tensors, i), lr, beta1, beta2, epsilon, weightDecay);
+}
+
 void TensorBackward(Tensor loss)
 {
-    OperationBackward(loss);
+    autogradBackward(loss);
 }

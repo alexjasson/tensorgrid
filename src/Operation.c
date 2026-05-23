@@ -1,12 +1,8 @@
 // https://github.com/alexjasson/tensorgrid
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include "Operation.h"
 #include "utility.h"
 #include "ThreadPool.h"
-#include "DynamicArray.h"
 
 // Register tile sizes for the multiply kernel
 #if defined(__AVX512F__)
@@ -36,13 +32,6 @@ static void multiplyBackwardDb(void *arg, int start, int end);
 static void unfoldBackward(void *arg, int start, int end);
 static void gatherBackward(void *arg, int start, int end);
 static void scatterBackward(void *arg, int start, int end);
-
-// Operation array for autograd + dispatchers
-static DynamicArray operationArrayGet(void);
-static void         operationArrayClear(DynamicArray arr);
-static void         operationArrayPush(Operation op);
-static void         operationForward(Operation op);
-static void         operationBackward(Operation op);
 
 static void mapForward(void *arg, int start, int end)
 {
@@ -85,14 +74,14 @@ static void multiplyForward(void *arg, int start, int end)
 
     int i = start;
     while (i < end) {
-        int batch        = i / m;
-        int row          = i % m;
-        int batchEnd     = (batch + 1) * m;
-        int chunkEnd     = (end < batchEnd) ? end : batchEnd;
-        int chunkLen     = chunkEnd - i;
-        Entry *A_batch   = op->A.entries  + batch * batchStrideA;
-        Entry *B_batch   = op->B.entries  + batch * batchStrideB;
-        Entry *C_batch   = op->out.entries + batch * m * n;
+        int batch      = i / m;
+        int row        = i % m;
+        int batchEnd   = (batch + 1) * m;
+        int chunkEnd   = (end < batchEnd) ? end : batchEnd;
+        int chunkLen   = chunkEnd - i;
+        Entry *A_batch = op->A.entries   + batch * batchStrideA;
+        Entry *B_batch = op->B.entries   + batch * batchStrideB;
+        Entry *C_batch = op->out.entries + batch * m * n;
 
         int blocked = chunkLen - (chunkLen % MR);
         int r = 0;
@@ -319,7 +308,7 @@ static void unfoldForward(void *arg, int start, int end)
         int fh = (k / fW) % fH;
         int fw = k % fW;
         Entry       *windowRow = windows + (n * K + k) * S;
-        const Entry *inPlane  = input + n * sN + ci * sC;
+        const Entry *inPlane   = input + n * sN + ci * sC;
 
         for (int oh = 0; oh < Hout; oh++) {
             int ih = oh * stride - padding + fh;
@@ -353,7 +342,7 @@ static void unfoldBackward(void *arg, int start, int end)
     int sC     = op->A.strides[1];
     int sH     = op->A.strides[2];
     int sW     = op->A.strides[3];
-    Entry       *dInput   = op->A.gradients;
+    Entry       *dInput  = op->A.gradients;
     const Entry *dWindow = op->out.gradients;
 
     for (int i = start; i < end; i++) {
@@ -438,10 +427,10 @@ static void gatherBackward(void *arg, int start, int end)
     int iC = isContiguous(I.shape, I.strides, I.dimensions);
 
     for (int i = start; i < end; i++) {
-        int inner    = i % innerSize;
-        int rem      = i / innerSize;
-        int kTarget  = rem % axisSize;
-        int outer    = rem / axisSize;
+        int inner   = i % innerSize;
+        int rem     = i / innerSize;
+        int kTarget = rem % axisSize;
+        int outer   = rem / axisSize;
 
         int outerOff, innerOff, aStride;
         if (aC) {
@@ -588,44 +577,7 @@ static void scatterBackward(void *arg, int start, int end)
     }
 }
 
-static DynamicArray operationArrayGet(void)
-{
-    static DynamicArray arr = NULL;
-    if (!arr) arr = DynamicArrayNew(sizeof(Operation));
-    return arr;
-}
-
-static void operationArrayClear(DynamicArray arr)
-{
-    for (int i = 0; i < DynamicArraySize(arr); i++) {
-        Operation *op = DynamicArrayGet(arr, i);
-        TensorFree(op->out);
-        TensorFree(op->A);
-        TensorFree(op->B);
-    }
-    DynamicArrayClear(arr);
-}
-
-static void operationArrayPush(Operation op)
-{
-    DynamicArray arr = operationArrayGet();
-
-    // Clears the array if the last operation is only referenced by the array
-    // itself - meaning the user finished a forward pass without calling TensorBackward
-    int size = DynamicArraySize(arr);
-    if (size > 0) {
-        Operation *last = DynamicArrayGet(arr, size - 1);
-        if (last->out.refcount && *last->out.refcount == 1)
-            operationArrayClear(arr);
-    }
-
-    if (op.out.refcount) (*op.out.refcount)++;
-    if (op.A.refcount)   (*op.A.refcount)++;
-    if (op.B.refcount)   (*op.B.refcount)++;
-    DynamicArrayPush(arr, &op);
-}
-
-static void operationForward(Operation op)
+void OperationForward(Operation op)
 {
     ThreadPool pool = ThreadPoolGet();
     switch (op.type) {
@@ -652,11 +604,9 @@ static void operationForward(Operation op)
             ThreadPoolMap(pool, scatterForward, &op, TensorSize(op.out));
             break;
     }
-
-    if (op.out.gradients) operationArrayPush(op);
 }
 
-static void operationBackward(Operation op)
+void OperationBackward(Operation op)
 {
     ThreadPool pool = ThreadPoolGet();
     switch (op.type) {
@@ -698,166 +648,4 @@ static void operationBackward(Operation op)
                 ThreadPoolMap(pool, scatterBackward, &op, TensorSize(op.out));
             break;
     }
-}
-
-void OperationBackward(Tensor loss)
-{
-    DynamicArray arr = operationArrayGet();
-
-    // Zero all input gradients
-    for (int i = 0; i < DynamicArraySize(arr); i++) {
-        Operation *node = DynamicArrayGet(arr, i);
-        if (node->A.gradients) memset(node->A.gradients, 0, TensorSize(node->A) * sizeof(Entry));
-        if (node->B.gradients) memset(node->B.gradients, 0, TensorSize(node->B) * sizeof(Entry));
-    }
-
-    // Take mean over all loss entries
-    int lossSize = TensorSize(loss);
-    for (int i = 0; i < lossSize; i++)
-        loss.gradients[i] = 1.0f / lossSize;
-
-    // Accumulate gradients backwards
-    for (int i = DynamicArraySize(arr) - 1; i >= 0; i--)
-        operationBackward(*(Operation *)DynamicArrayGet(arr, i));
-
-    operationArrayClear(arr);
-}
-
-Tensor OperationMap(Univariate f, Tensor A)
-{
-    Tensor out = TensorNew(A.dimensions, A.shape, A.gradients != NULL);
-
-    Operation op = { .type=Map, .out=out, .A=A, .u=f };
-    operationForward(op);
-    return out;
-}
-
-Tensor OperationZip(Bivariate f, Tensor A, Tensor B)
-{
-    Tensor zipA = A;
-    Tensor zipB = B;
-    int freeA = FALSE;
-    int freeB = FALSE;
-
-    // Right-align shapes
-    int outDims = A.dimensions >= B.dimensions ? A.dimensions : B.dimensions;
-    Tensor *inputs[2] = { &zipA, &zipB };
-    for (int n = 0; n < 2; n++) {
-        Tensor *t = inputs[n];
-        int pad = outDims - t->dimensions;
-        for (int i = outDims - 1; i >= pad; i--) {
-            t->shape[i]   = t->shape[i - pad];
-            t->strides[i] = t->strides[i - pad];
-        }
-        for (int i = pad - 1; i >= 0; i--) {
-            t->shape[i]   = 1;
-            t->strides[i] = t->strides[i + 1] * t->shape[i + 1];
-        }
-        t->dimensions = outDims;
-    }
-
-    int outShape[MAX_DIMENSIONS];
-    for (int axis = 0; axis < outDims; axis++) {
-        int aSize = zipA.shape[axis];
-        int bSize = zipB.shape[axis];
-        if (aSize != bSize && aSize != 1 && bSize != 1) {
-            fprintf(stderr, "OperationZip shapes are not compatible!\n");
-            exit(EXIT_FAILURE);
-        }
-        outShape[axis] = aSize >= bSize ? aSize : bSize;
-    }
-
-    for (int axis = 0; axis < outDims; axis++) {
-        if (zipA.shape[axis] != outShape[axis]) {
-            Tensor next = TensorBroadcast(zipA, axis, outShape[axis]);
-            if (freeA) TensorFree(zipA);
-            zipA = next;
-            freeA = TRUE;
-        }
-        if (zipB.shape[axis] != outShape[axis]) {
-            Tensor next = TensorBroadcast(zipB, axis, outShape[axis]);
-            if (freeB) TensorFree(zipB);
-            zipB = next;
-            freeB = TRUE;
-        }
-    }
-
-    int autograd = zipA.gradients != NULL || zipB.gradients != NULL;
-    Tensor out = TensorNew(outDims, outShape, autograd);
-
-    Operation op = { .type=Zip, .out=out, .A=zipA, .B=zipB, .b=f };
-    operationForward(op);
-
-    if (freeA) TensorFree(zipA);
-    if (freeB) TensorFree(zipB);
-    return out;
-}
-
-Tensor OperationMultiply(Tensor A, Tensor B)
-{
-    int dimsA   = A.dimensions;
-    int dimsB   = B.dimensions;
-    int dimsOut = dimsA >= dimsB ? dimsA : dimsB;
-    int outShape[MAX_DIMENSIONS];
-    for (int i = 0; i < dimsOut - 2; i++)
-        outShape[i] = (dimsA >= dimsB) ? A.shape[i] : B.shape[i];
-    outShape[dimsOut - 2] = A.shape[dimsA - 2];
-    outShape[dimsOut - 1] = B.shape[dimsB - 1];
-    int autograd = A.gradients != NULL || B.gradients != NULL;
-    Tensor out = TensorNew(dimsOut, outShape, autograd);
-
-    Operation op = { .type=Multiply, .out=out, .A=A, .B=B };
-    operationForward(op);
-    return out;
-}
-
-Tensor OperationGather(Tensor A, Tensor B, int axis)
-{
-    int outDims = A.dimensions - 1 + B.dimensions;
-    int outShape[MAX_DIMENSIONS];
-    int p = 0;
-    for (int d = 0; d < axis; d++) outShape[p++] = A.shape[d];
-    for (int d = 0; d < B.dimensions; d++) outShape[p++] = B.shape[d];
-    for (int d = axis + 1; d < A.dimensions; d++) outShape[p++] = A.shape[d];
-
-    Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
-
-    Operation op = { .type=Gather, .out=out, .A=A, .B=B, .axis=axis };
-    operationForward(op);
-    return out;
-}
-
-Tensor OperationScatter(Bivariate f, Tensor A, Tensor B, Entry fill, int axis, int n)
-{
-    int outDims = A.dimensions - B.dimensions + 1;
-    int outShape[MAX_DIMENSIONS];
-    int p = 0;
-    for (int d = 0; d < axis; d++) outShape[p++] = A.shape[d];
-    outShape[p++] = n;
-    for (int d = axis + B.dimensions; d < A.dimensions; d++) outShape[p++] = A.shape[d];
-
-    Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
-
-    Operation op = { .type=Scatter, .out=out, .A=A, .B=B, .axis=axis, .fill=fill, .b=f };
-    operationForward(op);
-    return out;
-}
-
-Tensor OperationUnfold(Tensor A, Entry fill, int fH, int fW, int stride, int padding)
-{
-    int N    = A.shape[0];
-    int Cin  = A.shape[1];
-    int H    = A.shape[2];
-    int W    = A.shape[3];
-    int Hout = (H + 2 * padding - fH) / stride + 1;
-    int Wout = (W + 2 * padding - fW) / stride + 1;
-    int K    = Cin * fH * fW;
-    int S    = Hout * Wout;
-
-    Tensor windows = TensorNew(3, (int[]){N, K, S}, A.gradients != NULL);
-
-    Operation op = { .type=Unfold, .out=windows, .A=A,
-                     .stride=stride, .padding=padding, .fH=fH, .fW=fW, .fill=fill };
-    operationForward(op);
-    return windows;
 }
