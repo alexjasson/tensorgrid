@@ -1,6 +1,7 @@
 #ifndef UTILITY_H
 #define UTILITY_H
 
+int min(int a, int b);
 float randomFloat(float lower, float upper);
 float fastExp(float x);
 float fastLog(float x);

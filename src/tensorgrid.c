@@ -240,6 +240,7 @@ Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
 Tensor TensorMap(Univariate f, Tensor A)                                     { return autogradMap(f, A);                     }
 Tensor TensorZip(Bivariate f, Tensor A, Tensor B)                            { return autogradZip(f, A, B);                  }
 Tensor TensorMultiply(Tensor A, Tensor B)                                    { return autogradMultiply(A, B);                }
+Tensor TensorAffine(Univariate f, Tensor A, Tensor bias, int inner)          { return autogradAffine(f, A, bias, inner);     }
 Tensor TensorGather(Tensor A, Tensor indices, int axis)                      { return autogradGather(A, indices, axis);      }
 Tensor TensorScatter(Bivariate f, Tensor A, Tensor i, Entry e, int a, int n) { return autogradScatter(f, A, i, e, a, n);     }
 Tensor TensorUnfold(Tensor A, Entry fill, int H, int W, int s, int p)        { return autogradUnfold(A, fill, H, W, s, p);   }
@@ -254,13 +255,9 @@ Tensor TensorMaxPool(Tensor A, int k, int s, int p)                          { r
 Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Univariate f)
 {
     Tensor product = TensorMultiply(in, weight);
-    Tensor out = TensorZip(ADD, product, bias);
+    Tensor out = TensorAffine(f, product, bias, 1);
     TensorFree(product);
-    if (f.f == IDENTITY.f && f.da == IDENTITY.da) return out;
-
-    Tensor activated = TensorMap(f, out);
-    TensorFree(out);
-    return activated;
+    return out;
 }
 
 Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding)
@@ -287,13 +284,9 @@ Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding)
 Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Univariate f)
 {
     Tensor conv = TensorConvolution(in, filter, stride, padding);
-    Tensor out = TensorZip(ADD, conv, bias);
+    Tensor out = TensorAffine(f, conv, bias, conv.shape[2] * conv.shape[3]);
     TensorFree(conv);
-    if (f.f == IDENTITY.f && f.da == IDENTITY.da) return out;
-
-    Tensor activated = TensorMap(f, out);
-    TensorFree(out);
-    return activated;
+    return out;
 }
 
 

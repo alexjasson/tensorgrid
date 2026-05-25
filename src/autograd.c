@@ -162,6 +162,17 @@ Tensor autogradMultiply(Tensor A, Tensor B)
     return out;
 }
 
+Tensor autogradAffine(Univariate f, Tensor product, Tensor bias, int inner)
+{
+    int autograd = product.gradients != NULL || bias.gradients != NULL;
+    Tensor out = TensorNew(product.dimensions, product.shape, autograd);
+
+    Operation op = { .type=Affine, .out=out, .A=product, .B=bias, .u=f, .inner=inner };
+    OperationForward(op);
+    if (op.out.gradients) operationArrayPush(op);
+    return out;
+}
+
 Tensor autogradGather(Tensor A, Tensor B, int axis)
 {
     int outDims = A.dimensions - 1 + B.dimensions;

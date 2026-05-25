@@ -320,6 +320,15 @@ Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
 Tensor TensorMultiply(Tensor A, Tensor B);
 
 /*
+ * out = f(A + bias)
+ *
+ * A:    [..., biasSize, ...] (TensorSize(A) == outer * biasSize * inner)
+ * bias: [biasSize]
+ * out:  [..., biasSize, ...]
+ */
+Tensor TensorAffine(Univariate f, Tensor A, Tensor bias, int inner);
+
+/*
 * Read from A at positions given by indices.
 *
 * A:       [..., s_0, ..., s_m, ...]   (indices shape lives at axis)

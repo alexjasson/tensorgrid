@@ -5,6 +5,8 @@
 #include <time.h>
 #include "utility.h"
 
+int min(int a, int b) { return a < b ? a : b; }
+
 float randomFloat(float lower, float upper)
 {
     static uint32_t state = 0;
