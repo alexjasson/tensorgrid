@@ -293,22 +293,17 @@ static void affineForward(void *arg, int start, int end)
     int biasSize   = TensorSize(op->B);
     int inner      = op->inner;
     UnivariateFn f = op->u.f;
-    int isRelu = (f == RELU.f), isId = (f == IDENTITY.f);
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
-            if (isId)        for (int c = 0; c < biasSize; c++) out[base + c] = A[base + c] + bias[c];
-            else if (isRelu) for (int c = 0; c < biasSize; c++) { Entry v = A[base + c] + bias[c]; out[base + c] = v > 0.0f ? v : 0.0f; }
-            else             for (int c = 0; c < biasSize; c++) out[base + c] = f(A[base + c] + bias[c]);
+            for (int c = 0; c < biasSize; c++) out[base + c] = f(A[base + c] + bias[c]);
         }
     } else {
         for (int o = start; o < end; o++)
             for (int c = 0; c < biasSize; c++) {
                 Entry bc = bias[c];
                 size_t base = ((size_t)o * biasSize + c) * inner;
-                if (isId)        for (int i = 0; i < inner; i++) out[base + i] = A[base + i] + bc;
-                else if (isRelu) for (int i = 0; i < inner; i++) { Entry v = A[base + i] + bc; out[base + i] = v > 0.0f ? v : 0.0f; }
-                else             for (int i = 0; i < inner; i++) out[base + i] = f(A[base + i] + bc);
+                for (int i = 0; i < inner; i++) out[base + i] = f(A[base + i] + bc);
             }
     }
 }
@@ -323,23 +318,18 @@ static void affineBackwardDa(void *arg, int start, int end)
     Entry     *dout = op->out.gradients;
     int biasSize   = TensorSize(op->B);
     int inner      = op->inner;
-    UnivariateFn f = op->u.f, da = op->u.da;
-    int isRelu = (f == RELU.f), isId = (f == IDENTITY.f);
+    UnivariateFn da = op->u.da;
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
-            if (isId)        for (int c = 0; c < biasSize; c++) dA[base + c] += dout[base + c];
-            else if (isRelu) for (int c = 0; c < biasSize; c++) { if (A[base + c] + bias[c] > 0.0f) dA[base + c] += dout[base + c]; }
-            else             for (int c = 0; c < biasSize; c++) dA[base + c] += dout[base + c] * da(A[base + c] + bias[c]);
+            for (int c = 0; c < biasSize; c++) dA[base + c] += dout[base + c] * da(A[base + c] + bias[c]);
         }
     } else {
         for (int o = start; o < end; o++)
             for (int c = 0; c < biasSize; c++) {
                 Entry bc = bias[c];
                 size_t base = ((size_t)o * biasSize + c) * inner;
-                if (isId)        for (int i = 0; i < inner; i++) dA[base + i] += dout[base + i];
-                else if (isRelu) for (int i = 0; i < inner; i++) { if (A[base + i] + bc > 0.0f) dA[base + i] += dout[base + i]; }
-                else             for (int i = 0; i < inner; i++) dA[base + i] += dout[base + i] * da(A[base + i] + bc);
+                for (int i = 0; i < inner; i++) dA[base + i] += dout[base + i] * da(A[base + i] + bc);
             }
     }
 }
@@ -355,15 +345,12 @@ static void affineBackwardDb(void *arg, int start, int end)
     int biasSize   = TensorSize(op->B);
     int inner      = op->inner;
     int outer      = TensorSize(op->out) / (biasSize * inner);
-    UnivariateFn f = op->u.f, da = op->u.da;
-    int isRelu = (f == RELU.f), isId = (f == IDENTITY.f);
+    UnivariateFn da = op->u.da;
     for (int c = start; c < end; c++) {
         Entry s = 0, bc = bias[c];
         for (int o = 0; o < outer; o++) {
             size_t base = ((size_t)o * biasSize + c) * inner;
-            if (isId)        for (int i = 0; i < inner; i++) s += dout[base + i];
-            else if (isRelu) for (int i = 0; i < inner; i++) { if (A[base + i] + bc > 0.0f) s += dout[base + i]; }
-            else             for (int i = 0; i < inner; i++) s += dout[base + i] * da(A[base + i] + bc);
+            for (int i = 0; i < inner; i++) s += dout[base + i] * da(A[base + i] + bc);
         }
         dB[c] += s;
     }
