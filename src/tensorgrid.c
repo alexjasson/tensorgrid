@@ -254,10 +254,7 @@ Tensor TensorMaxPool(Tensor A, int k, int s, int p)                          { r
 
 Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Univariate f)
 {
-    Tensor product = TensorMultiply(in, weight);
-    Tensor out = TensorAffine(f, product, bias, 1);
-    TensorFree(product);
-    return out;
+    return autogradLinear(in, weight, bias, f);
 }
 
 Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding)

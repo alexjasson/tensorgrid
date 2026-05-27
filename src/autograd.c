@@ -25,6 +25,8 @@ static void operationArrayClear(DynamicArray arr)
         TensorFree(op->out);
         TensorFree(op->A);
         TensorFree(op->B);
+        TensorFree(op->bias);
+        TensorFree(op->product);
     }
     DynamicArrayClear(arr);
 }
@@ -42,9 +44,11 @@ static void operationArrayPush(Operation op)
             operationArrayClear(arr);
     }
 
-    if (op.out.refcount) (*op.out.refcount)++;
-    if (op.A.refcount)   (*op.A.refcount)++;
-    if (op.B.refcount)   (*op.B.refcount)++;
+    if (op.out.refcount)     (*op.out.refcount)++;
+    if (op.A.refcount)       (*op.A.refcount)++;
+    if (op.B.refcount)       (*op.B.refcount)++;
+    if (op.bias.refcount)    (*op.bias.refcount)++;
+    if (op.product.refcount) (*op.product.refcount)++;
     DynamicArrayPush(arr, &op);
 }
 
@@ -57,6 +61,8 @@ void autogradBackward(Tensor loss)
         Operation *node = DynamicArrayGet(arr, i);
         if (node->A.gradients) memset(node->A.gradients, 0, TensorSize(node->A) * sizeof(Entry));
         if (node->B.gradients) memset(node->B.gradients, 0, TensorSize(node->B) * sizeof(Entry));
+        if (node->bias.gradients) memset(node->bias.gradients, 0, TensorSize(node->bias) * sizeof(Entry));
+        if (node->product.gradients) memset(node->product.gradients, 0, TensorSize(node->product) * sizeof(Entry));
     }
 
     // Take mean over all loss entries
@@ -159,6 +165,30 @@ Tensor autogradMultiply(Tensor A, Tensor B)
     Operation op = { .type=Multiply, .out=out, .A=A, .B=B };
     OperationForward(op);
     if (op.out.gradients) operationArrayPush(op);
+    return out;
+}
+
+Tensor autogradLinear(Tensor in, Tensor weight, Tensor bias, Univariate f)
+{
+    // Output shape matches in @ weight (broadcasting the leading batch dims)
+    int dimsA   = in.dimensions;
+    int dimsB   = weight.dimensions;
+    int dimsOut = dimsA >= dimsB ? dimsA : dimsB;
+    int outShape[MAX_DIMENSIONS];
+    for (int i = 0; i < dimsOut - 2; i++)
+        outShape[i] = (dimsA >= dimsB) ? in.shape[i] : weight.shape[i];
+    outShape[dimsOut - 2] = in.shape[dimsA - 2];
+    outShape[dimsOut - 1] = weight.shape[dimsB - 1];
+
+    int autograd = in.gradients != NULL || weight.gradients != NULL || bias.gradients != NULL;
+    Tensor product = TensorNew(dimsOut, outShape, autograd); // cached pre-activation in @ weight
+    Tensor out     = TensorNew(dimsOut, outShape, autograd);
+
+    Operation op = { .type=Linear, .out=out, .A=in, .B=weight,
+                     .bias=bias, .product=product, .u=f, .inner=1 };
+    OperationForward(op);
+    if (op.out.gradients) operationArrayPush(op);
+    TensorFree(product); // tape (when recorded) holds the remaining reference
     return out;
 }
 

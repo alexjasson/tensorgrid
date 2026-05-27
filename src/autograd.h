@@ -11,6 +11,7 @@ Tensor autogradMap(Univariate f, Tensor A);
 Tensor autogradZip(Bivariate f, Tensor A, Tensor B);
 Tensor autogradMultiply(Tensor A, Tensor B);
 Tensor autogradAffine(Univariate f, Tensor product, Tensor bias, int inner);
+Tensor autogradLinear(Tensor in, Tensor weight, Tensor bias, Univariate f);
 Tensor autogradGather(Tensor A, Tensor B, int axis);
 Tensor autogradScatter(Bivariate f, Tensor A, Tensor B, Entry fill, int axis, int n);
 Tensor autogradUnfold(Tensor A, Entry fill, int fH, int fW, int stride, int padding);

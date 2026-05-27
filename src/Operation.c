@@ -761,6 +761,15 @@ void OperationForward(Operation op)
             dispatch(affineForward, &op, outer, TensorSize(op.out));
             break;
         }
+        case Linear: {
+            // out = f(A @ B + bias): matmul into the cached product, then affine
+            Operation mul = { .type=Multiply, .out=op.product, .A=op.A, .B=op.B };
+            OperationForward(mul);
+            Operation aff = { .type=Affine, .out=op.out, .A=op.product, .B=op.bias,
+                              .u=op.u, .inner=op.inner };
+            OperationForward(aff);
+            break;
+        }
         case Unfold:
             dispatch(unfoldForward, &op, op.out.shape[0] * op.out.shape[1], TensorSize(op.out));
             break;
@@ -806,6 +815,14 @@ void OperationBackward(Operation op)
                 dispatch(affineBackwardDa, &op, outer, TensorSize(op.out));
             if (op.B.gradients)
                 dispatch(affineBackwardDb, &op, biasSize, TensorSize(op.out));
+            break;
+        }
+        case Linear: {
+            Operation aff = { .type=Affine, .out=op.out, .A=op.product, .B=op.bias,
+                              .u=op.u, .inner=op.inner };
+            OperationBackward(aff);
+            Operation mul = { .type=Multiply, .out=op.product, .A=op.A, .B=op.B };
+            OperationBackward(mul);
             break;
         }
         case Unfold:
