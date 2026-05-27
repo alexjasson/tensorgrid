@@ -554,12 +554,20 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
 
     Tensor out = TensorNew(A.dimensions, A.shape, 0);
     int rowSize = TensorSize(A) / n;
-    int innerDims = A.dimensions - 1;
-    for (int i = 0; i < n; i++) {
-        int srcRowOff = perm[i] * A.strides[0];
-        for (int j = 0; j < rowSize; j++) {
-            int innerOff = unravel(j, A.shape + 1, A.strides + 1, innerDims);
-            out.entries[i * rowSize + j] = A.entries[srcRowOff + innerOff];
+    if (isContiguous(A.shape, A.strides, A.dimensions)) {
+        // Each row is contiguous, so permute rows with a single copy each
+        for (int i = 0; i < n; i++)
+            memcpy(out.entries + (size_t)i * rowSize,
+                   A.entries + (size_t)perm[i] * rowSize,
+                   (size_t)rowSize * sizeof(Entry));
+    } else {
+        int innerDims = A.dimensions - 1;
+        for (int i = 0; i < n; i++) {
+            int srcRowOff = perm[i] * A.strides[0];
+            for (int j = 0; j < rowSize; j++) {
+                int innerOff = unravel(j, A.shape + 1, A.strides + 1, innerDims);
+                out.entries[i * rowSize + j] = A.entries[srcRowOff + innerOff];
+            }
         }
     }
     free(perm);
