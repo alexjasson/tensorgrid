@@ -1,44 +1,27 @@
 // https://github.com/alexjasson/tensorgrid
 
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include "Operation.h"
 #include "utility.h"
 #include "ThreadPool.h"
-
-// Use the SIMD microkernel when AVX2 or AVX512 is available.
-#if defined(__AVX512F__) || defined(__AVX2__)
-#define SIMD 1
-#include <immintrin.h>
-#endif
+#include "Vec.h"
 
 // Microkernel tile sizes. NR tracks the SIMD width, MR keeps the accumulator tile in registers.
 #if !defined(SIMD)
 #define MR 4
 #define NR 8
 #elif defined(__AVX512F__)
-typedef __m512 Vector;
 #define MR 8
 #define NR 16
-#define VW 16
-#define VLOAD(p)    _mm512_loadu_ps(p)
-#define VSTORE(p,x) _mm512_storeu_ps((p), (x))
-#define VBCAST(x)   _mm512_set1_ps(x)
-#define VFMA(a,b,c) _mm512_fmadd_ps((a), (b), (c))
-#define VZERO()     _mm512_setzero_ps()
 #elif defined(__AVX2__)
-typedef __m256 Vector;
 #define MR 6
 #define NR 16
-#define VW 8
-#define VLOAD(p)    _mm256_loadu_ps(p)
-#define VSTORE(p,x) _mm256_storeu_ps((p), (x))
-#define VBCAST(x)   _mm256_set1_ps(x)
-#define VFMA(a,b,c) _mm256_fmadd_ps((a), (b), (c))
-#define VZERO()     _mm256_setzero_ps()
 #endif
 
 #if defined(SIMD)
-#define NRV (NR / VW)
+#define NRV (NR / VEC_DIMS)
 #endif
 
 // Cache block sizes for the temporary packed A/B blocks used by GEMM
@@ -62,6 +45,8 @@ static void mapForward(void *arg, int start, int end);
 static void zipForward(void *arg, int start, int end);
 static void multiplyForward(void *arg, int start, int end);
 static void affineForward(void *arg, int start, int end);
+static void convolutionForward(void *arg, int start, int end);
+static void poolForward(void *arg, int start, int end);
 static void unfoldForward(void *arg, int start, int end);
 static void gatherForward(void *arg, int start, int end);
 static void scatterForward(void *arg, int start, int end);
@@ -73,6 +58,9 @@ static void multiplyBackwardDa(void *arg, int start, int end);
 static void multiplyBackwardDb(void *arg, int start, int end);
 static void affineBackwardDa(void *arg, int start, int end);
 static void affineBackwardDb(void *arg, int start, int end);
+static void convolutionBackwardDb(void *arg, int start, int end);
+static void convolutionBackwardDa(void *arg, int start, int end);
+static void poolBackward(void *arg, int start, int end);
 static void unfoldBackward(void *arg, int start, int end);
 static void gatherBackward(void *arg, int start, int end);
 static void scatterBackward(void *arg, int start, int end);
@@ -82,7 +70,7 @@ static void mapForward(void *arg, int start, int end)
     Operation *op  = arg;
     Entry     *out = op->out.entries;
     Entry     *A   = op->A.entries;
-    UnivariateFn f = op->u.f;
+    UnaryScalar f = op->u.f;
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
         for (int i = start; i < end; i++)
             out[i] = f(A[i]);
@@ -100,7 +88,7 @@ static void zipForward(void *arg, int start, int end)
     Entry     *out = op->out.entries;
     Entry     *A   = op->A.entries;
     Entry     *B   = op->B.entries;
-    BivariateFn f  = op->b.f;
+    BinaryScalar f  = op->b.f;
     int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
     int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
     for (int i = start; i < end; i++) {
@@ -146,26 +134,26 @@ static void packA(Entry *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock)
 static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, int nValid)
 {
 #if defined(SIMD)
-    Vector acc[MR][NRV];
+    Vec acc[MR][NRV];
     for (int mr = 0; mr < MR; mr++)
         for (int v = 0; v < NRV; v++)
-            acc[mr][v] = VZERO();
+            acc[mr][v] = VecZero();
 
     for (int p = 0; p < kBlock; p++) {
-        Vector b[NRV];
+        Vec b[NRV];
         for (int v = 0; v < NRV; v++)
-            b[v] = VLOAD(Bp + p * NR + v * VW);
+            b[v] = VecLoad(Bp + p * NR + v * VEC_DIMS);
         for (int mr = 0; mr < MR; mr++) {
-            Vector a = VBCAST(Ap[p * MR + mr]);
+            Vec a = VecBcast(Ap[p * MR + mr]);
             for (int v = 0; v < NRV; v++)
-                acc[mr][v] = VFMA(a, b[v], acc[mr][v]);
+                acc[mr][v] = VecFma(a, b[v], acc[mr][v]);
         }
     }
 
     _Alignas(64) Entry tile[MR][NR];
     for (int mr = 0; mr < MR; mr++)
         for (int v = 0; v < NRV; v++)
-            VSTORE(&tile[mr][v * VW], acc[mr][v]);
+            VecStore(&tile[mr][v * VEC_DIMS], acc[mr][v]);
     for (int mr = 0; mr < mValid; mr++)
         for (int nr = 0; nr < nValid; nr++)
             C.data[mr * C.sRow + nr * C.sCol] += tile[mr][nr];
@@ -250,7 +238,7 @@ static void mapBackward(void *arg, int start, int end)
     Entry       *A  = op->A.entries;
     Entry       *dA = op->A.gradients;
     Entry     *dout = op->out.gradients;
-    UnivariateFn da = op->u.da;
+    UnaryScalar da = op->u.da;
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
         for (int j = start; j < end; j++)
             dA[j] += dout[j] * da(A[j]);
@@ -270,8 +258,8 @@ static void zipBackward(void *arg, int start, int end)
     Entry      *dA = op->A.gradients;
     Entry      *dB = op->B.gradients;
     Entry    *dout = op->out.gradients;
-    BivariateFn da = op->b.da;
-    BivariateFn db = op->b.db;
+    BinaryScalar da = op->b.da;
+    BinaryScalar db = op->b.db;
     int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
     int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
     for (int j = start; j < end; j++) {
@@ -286,24 +274,37 @@ static void zipBackward(void *arg, int start, int end)
 // out = f(A + bias)
 static void affineForward(void *arg, int start, int end)
 {
-    Operation *op   = arg;
-    Entry     *out  = op->out.entries;
-    Entry     *A    = op->A.entries;
-    Entry     *bias = op->B.entries;
-    int biasSize   = TensorSize(op->B);
-    int inner      = op->inner;
-    UnivariateFn f = op->u.f;
+    Operation *op = arg;
+    Entry *out = op->out.entries, *A = op->A.entries, *bias = op->B.entries;
+    int biasSize = TensorSize(op->B), inner = op->inner;
+    UnaryScalar f = op->u.f;
+#if defined(SIMD)
+    Vec (*fv)(Vec) = (Vec (*)(Vec))op->u.fv;
+#endif
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
-            for (int c = 0; c < biasSize; c++) out[base + c] = f(A[base + c] + bias[c]);
+            int c = 0;
+#if defined(SIMD)
+            if (fv) for (; c + VEC_DIMS <= biasSize; c += VEC_DIMS)
+                VecStore(out + base + c, fv(VecAdd(VecLoad(A + base + c), VecLoad(bias + c))));
+#endif
+            for (; c < biasSize; c++) out[base + c] = f(A[base + c] + bias[c]);
         }
     } else {
         for (int o = start; o < end; o++)
             for (int c = 0; c < biasSize; c++) {
                 Entry bc = bias[c];
                 size_t base = ((size_t)o * biasSize + c) * inner;
-                for (int i = 0; i < inner; i++) out[base + i] = f(A[base + i] + bc);
+                int i = 0;
+#if defined(SIMD)
+                if (fv) {
+                    Vec bcv = VecBcast(bc);
+                    for (; i + VEC_DIMS <= inner; i += VEC_DIMS)
+                        VecStore(out + base + i, fv(VecAdd(VecLoad(A + base + i), bcv)));
+                }
+#endif
+                for (; i < inner; i++) out[base + i] = f(A[base + i] + bc);
             }
     }
 }
@@ -311,25 +312,41 @@ static void affineForward(void *arg, int start, int end)
 // dA += dout * f'(A + bias)
 static void affineBackwardDa(void *arg, int start, int end)
 {
-    Operation *op   = arg;
-    Entry     *A    = op->A.entries;
-    Entry     *bias = op->B.entries;
-    Entry     *dA   = op->A.gradients;
-    Entry     *dout = op->out.gradients;
-    int biasSize   = TensorSize(op->B);
-    int inner      = op->inner;
-    UnivariateFn da = op->u.da;
+    Operation *op = arg;
+    Entry *A = op->A.entries, *bias = op->B.entries, *dA = op->A.gradients, *dout = op->out.gradients;
+    int biasSize = TensorSize(op->B), inner = op->inner;
+    UnaryScalar da = op->u.da;
+#if defined(SIMD)
+    Vec (*dav)(Vec) = (Vec (*)(Vec))op->u.dav;
+#endif
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
-            for (int c = 0; c < biasSize; c++) dA[base + c] += dout[base + c] * da(A[base + c] + bias[c]);
+            int c = 0;
+#if defined(SIMD)
+            if (dav) for (; c + VEC_DIMS <= biasSize; c += VEC_DIMS) {
+                Vec v = VecAdd(VecLoad(A + base + c), VecLoad(bias + c));
+                VecStore(dA + base + c, VecFma(VecLoad(dout + base + c), dav(v), VecLoad(dA + base + c)));
+            }
+#endif
+            for (; c < biasSize; c++) { Entry v = A[base + c] + bias[c]; dA[base + c] += dout[base + c] * da(v); }
         }
     } else {
         for (int o = start; o < end; o++)
             for (int c = 0; c < biasSize; c++) {
                 Entry bc = bias[c];
                 size_t base = ((size_t)o * biasSize + c) * inner;
-                for (int i = 0; i < inner; i++) dA[base + i] += dout[base + i] * da(A[base + i] + bc);
+                int i = 0;
+#if defined(SIMD)
+                if (dav) {
+                    Vec bcv = VecBcast(bc);
+                    for (; i + VEC_DIMS <= inner; i += VEC_DIMS) {
+                        Vec v = VecAdd(VecLoad(A + base + i), bcv);
+                        VecStore(dA + base + i, VecFma(VecLoad(dout + base + i), dav(v), VecLoad(dA + base + i)));
+                    }
+                }
+#endif
+                for (; i < inner; i++) { Entry v = A[base + i] + bc; dA[base + i] += dout[base + i] * da(v); }
             }
     }
 }
@@ -337,21 +354,36 @@ static void affineBackwardDa(void *arg, int start, int end)
 // dB[c] += sum(dout * f'(A + bias[c]))
 static void affineBackwardDb(void *arg, int start, int end)
 {
-    Operation *op   = arg;
-    Entry     *A    = op->A.entries;
-    Entry     *bias = op->B.entries;
-    Entry     *dB   = op->B.gradients;
-    Entry     *dout = op->out.gradients;
-    int biasSize   = TensorSize(op->B);
-    int inner      = op->inner;
-    int outer      = TensorSize(op->out) / (biasSize * inner);
-    UnivariateFn da = op->u.da;
+    Operation *op = arg;
+    Entry *A = op->A.entries, *bias = op->B.entries, *dB = op->B.gradients, *dout = op->out.gradients;
+    int biasSize = TensorSize(op->B), inner = op->inner;
+    int outer = TensorSize(op->out) / (biasSize * inner);
+    UnaryScalar da = op->u.da;
+#if defined(SIMD)
+    Vec (*dav)(Vec) = (Vec (*)(Vec))op->u.dav;
+#endif
     for (int c = start; c < end; c++) {
         Entry s = 0, bc = bias[c];
+#if defined(SIMD)
+        Vec sv = VecZero();
+#endif
         for (int o = 0; o < outer; o++) {
             size_t base = ((size_t)o * biasSize + c) * inner;
-            for (int i = 0; i < inner; i++) s += dout[base + i] * da(A[base + i] + bc);
+            int i = 0;
+#if defined(SIMD)
+            if (dav) {
+                Vec bcv = VecBcast(bc);
+                for (; i + VEC_DIMS <= inner; i += VEC_DIMS) {
+                    Vec v = VecAdd(VecLoad(A + base + i), bcv);
+                    sv = VecFma(VecLoad(dout + base + i), dav(v), sv);
+                }
+            }
+#endif
+            for (; i < inner; i++) { Entry v = A[base + i] + bc; s += dout[base + i] * da(v); }
         }
+#if defined(SIMD)
+        s += VecHsum(sv);
+#endif
         dB[c] += s;
     }
 }
@@ -432,6 +464,319 @@ static void multiplyBackwardDb(void *arg, int start, int end)
             Entry *dout = op->out.gradients + (size_t)batch * m * n;
             gemm(n, m, (Matrix){A, aColStride, aRowStride}, (Matrix){dout, n, 1},
                        (Matrix){op->B.gradients, bRowStride, bColStride}, start, end);
+        }
+    }
+}
+
+static void im2col(Operation *op, Entry *patches, int n)
+{
+    Tensor A   = op->A;
+    int Cin    = op->B.shape[1];
+    int fH     = op->fH,     fW      = op->fW;
+    int H      = A.shape[2], W       = A.shape[3];
+    int Hout   = op->out.shape[2], Wout = op->out.shape[3];
+    int stride = op->stride, padding = op->padding;
+    int sN = A.strides[0], sC = A.strides[1], sH = A.strides[2], sW = A.strides[3];
+    Entry *input = A.entries;
+    int S = Hout * Wout;
+    int K = Cin * fH * fW;
+    for (int k = 0; k < K; k++) {
+        int ci = k / (fH * fW);
+        int fh = (k / fW) % fH;
+        int fw = k % fW;
+        Entry *row     = patches + (size_t)k * S;
+        Entry *inPlane = input + (size_t)n * sN + (size_t)ci * sC;
+        for (int oh = 0; oh < Hout; oh++) {
+            Entry *outRow = row + (size_t)oh * Wout;
+            int ih = oh * stride - padding + fh;
+            if (ih < 0 || ih >= H) {
+                memset(outRow, 0, (size_t)Wout * sizeof(Entry));
+                continue;
+            }
+            Entry *inRow = inPlane + (size_t)ih * sH;
+            if (stride == 1 && sW == 1) {
+                int ow0 = padding - fw;     if (ow0 < 0)    ow0 = 0;
+                int ow1 = W + padding - fw; if (ow1 > Wout) ow1 = Wout;
+                if (ow0 > 0)    memset(outRow, 0, (size_t)ow0 * sizeof(Entry));
+                if (ow1 > ow0)  memcpy(outRow + ow0, inRow + (ow0 - padding + fw),
+                                       (size_t)(ow1 - ow0) * sizeof(Entry));
+                if (ow1 < Wout) memset(outRow + ow1, 0, (size_t)(Wout - ow1) * sizeof(Entry));
+            } else {
+                for (int ow = 0; ow < Wout; ow++) {
+                    int iw = ow * stride - padding + fw;
+                    outRow[ow] = (iw >= 0 && iw < W) ? inRow[(size_t)iw * sW] : 0.0f;
+                }
+            }
+        }
+    }
+}
+
+static void convolutionForward(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    int Cin    = op->B.shape[1];
+    int Cout   = op->B.shape[0];
+    int fH     = op->fH, fW = op->fW;
+    int S      = op->out.shape[2] * op->out.shape[3];
+    int K      = Cin * fH * fW;
+    Entry *filter = op->B.entries;
+    Entry patches[(size_t)K * S];
+
+    for (int n = start; n < end; n++) {
+        im2col(op, patches, n);
+        Entry *prod = op->product.entries + (size_t)n * Cout * S;
+        memset(prod, 0, (size_t)Cout * S * sizeof(Entry));
+        gemm(S, K, (Matrix){filter, K, 1}, (Matrix){patches, S, 1},
+                   (Matrix){prod, S, 1}, 0, Cout);
+    }
+}
+
+static void convolutionBackwardDb(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    int Cin    = op->B.shape[1];
+    int Cout   = op->B.shape[0];
+    int fH     = op->fH, fW = op->fW;
+    int S      = op->out.shape[2] * op->out.shape[3];
+    int K      = Cin * fH * fW;
+    Entry *dProd = op->product.gradients;
+    Entry patches[(size_t)K * S];
+
+    for (int n = start; n < end; n++) {
+        im2col(op, patches, n);
+        Entry *partial = op->scratch.entries + (size_t)n * Cout * K;
+        Entry *dProd_n = dProd       + (size_t)n * Cout * S;
+        memset(partial, 0, (size_t)Cout * K * sizeof(Entry));
+        gemm(K, S, (Matrix){dProd_n, S, 1}, (Matrix){patches, 1, S},
+                   (Matrix){partial, K, 1}, 0, Cout);
+    }
+}
+
+static void convolutionBackwardDa(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    Tensor A = op->A;
+    int Cin  = op->B.shape[1];
+    int Cout = op->B.shape[0];
+    int H    = A.shape[2];
+    int W    = A.shape[3];
+    int fH   = op->fH,  fW = op->fW;
+    int stride = op->stride, padding = op->padding;
+    int Hout = op->out.shape[2];
+    int Wout = op->out.shape[3];
+    int S    = Hout * Wout;
+    int K    = Cin * fH * fW;
+    int sN = A.strides[0], sC = A.strides[1], sH = A.strides[2], sW = A.strides[3];
+    Entry *filter = op->B.entries;
+    Entry *dProd  = op->product.gradients;
+    Entry *dInput = A.gradients;
+
+    Entry dWin[(size_t)K * S];
+
+    for (int n = start; n < end; n++) {
+        Entry *dProd_n = dProd + (size_t)n * Cout * S;
+        memset(dWin, 0, (size_t)K * S * sizeof(Entry));
+        gemm(S, Cout, (Matrix){filter, 1, K}, (Matrix){dProd_n, S, 1},
+                      (Matrix){dWin, S, 1}, 0, K);
+
+        for (int ci = 0; ci < Cin; ci++) {
+            Entry *plane = dInput + (size_t)n * sN + (size_t)ci * sC;
+            for (int fh = 0; fh < fH; fh++) {
+                for (int fw = 0; fw < fW; fw++) {
+                    int k = (ci * fH + fh) * fW + fw;
+                    Entry *winRow = dWin + (size_t)k * S;
+                    for (int oh = 0; oh < Hout; oh++) {
+                        int ih = oh * stride - padding + fh;
+                        if (ih < 0 || ih >= H) continue;
+                        Entry *dRow = plane + (size_t)ih * sH;
+                        Entry *winR = winRow + (size_t)oh * Wout;
+                        if (stride == 1 && sW == 1) {
+                            int ow0 = padding - fw;     if (ow0 < 0)    ow0 = 0;
+                            int ow1 = W + padding - fw; if (ow1 > Wout) ow1 = Wout;
+                            Entry *dst = dRow + (ow0 - padding + fw);
+                            for (int ow = ow0; ow < ow1; ow++)
+                                dst[ow - ow0] += winR[ow];
+                        } else {
+                            for (int ow = 0; ow < Wout; ow++) {
+                                int iw = ow * stride - padding + fw;
+                                if (iw >= 0 && iw < W)
+                                    dRow[(size_t)iw * sW] += winR[ow];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void poolForward(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    Tensor A = op->A;
+    int C    = A.shape[1];
+    int H    = A.shape[2];
+    int W    = A.shape[3];
+    int size = op->fH;
+    int stride = op->stride, padding = op->padding;
+    int Hout = op->out.shape[2];
+    int Wout = op->out.shape[3];
+    int sN = A.strides[0], sC = A.strides[1], sH = A.strides[2], sW = A.strides[3];
+    Entry *input  = A.entries;
+    Entry *out    = op->out.entries;
+    Entry *argIdx = op->product.entries;
+    Entry fill    = op->fill;
+    BinaryScalar f = op->b.f;
+
+    for (int p = start; p < end; p++) {
+        int c = p % C, n = p / C;
+        Entry *plane   = input + (size_t)n * sN + (size_t)c * sC;
+        size_t outBase = (size_t)p * Hout * Wout;
+        for (int oh = 0; oh < Hout; oh++)
+            for (int ow = 0; ow < Wout; ow++) {
+                size_t outIdx = outBase + (size_t)oh * Wout + ow;
+                Entry acc = fill;
+                int   bl  = -1;
+                for (int fh = 0; fh < size; fh++) {
+                    int ih = oh * stride - padding + fh;
+                    if (ih < 0 || ih >= H) continue;
+                    Entry *r = plane + (size_t)ih * sH;
+                    for (int fw = 0; fw < size; fw++) {
+                        int iw = ow * stride - padding + fw;
+                        if (iw < 0 || iw >= W) continue;
+                        Entry v = r[(size_t)iw * sW];
+                        int local = fh * size + fw;
+                        if      (f == MAX.f) { if (v > acc) { acc = v; bl = local; } }
+                        else if (f == MIN.f) { if (v < acc) { acc = v; bl = local; } }
+                        else if (f == ADD.f) { acc += v; }
+                        else                 { acc = f(acc, v); }
+                    }
+                }
+                out[outIdx] = acc;
+                if ((f == MAX.f || f == MIN.f) && argIdx)
+                    argIdx[outIdx] = (Entry)bl;
+            }
+    }
+}
+
+static void poolBackward(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    Tensor A      = op->A;
+    int C    = A.shape[1];
+    int H    = A.shape[2];
+    int W    = A.shape[3];
+    int size = op->fH;
+    int stride = op->stride, padding = op->padding;
+    int Hout = op->out.shape[2];
+    int Wout = op->out.shape[3];
+    int sN = A.strides[0], sC = A.strides[1], sH = A.strides[2], sW = A.strides[3];
+    Entry *input  = A.entries;
+    Entry *dInput = A.gradients;
+    Entry *dOut   = op->out.gradients;
+    Entry *argIdx = op->product.entries;
+    Entry fill    = op->fill;
+    BinaryScalar f = op->b.f, da = op->b.da, db = op->b.db;
+
+    // Fast paths for max, min and sum
+    if (f == MAX.f || f == MIN.f) {
+        if (stride >= size) {
+            for (int p = start; p < end; p++) {
+                int c = p % C, n = p / C;
+                Entry *plane   = dInput + (size_t)n * sN + (size_t)c * sC;
+                size_t outBase = (size_t)p * Hout * Wout;
+                for (int oh = 0; oh < Hout; oh++)
+                    for (int ow = 0; ow < Wout; ow++) {
+                        size_t outIdx = outBase + (size_t)oh * Wout + ow;
+                        int local = (int)argIdx[outIdx];
+                        if (local < 0) continue;
+                        int ih = oh * stride - padding + local / size;
+                        int iw = ow * stride - padding + local % size;
+                        if (ih >= 0 && ih < H && iw >= 0 && iw < W)
+                            plane[(size_t)ih * sH + (size_t)iw * sW] += dOut[outIdx];
+                    }
+            }
+        } else {
+            for (int p = start; p < end; p++) {
+                int c = p % C, n = p / C;
+                Entry *plane   = dInput + (size_t)n * sN + (size_t)c * sC;
+                size_t outBase = (size_t)p * Hout * Wout;
+                for (int ih = 0; ih < H; ih++)
+                    for (int iw = 0; iw < W; iw++) {
+                        int ohMinRaw = ih + padding - size + 1;
+                        int ohStart  = ohMinRaw <= 0 ? 0 : (ohMinRaw + stride - 1) / stride;
+                        int ohEnd    = (ih + padding) / stride;
+                        int owMinRaw = iw + padding - size + 1;
+                        int owStart  = owMinRaw <= 0 ? 0 : (owMinRaw + stride - 1) / stride;
+                        int owEnd    = (iw + padding) / stride;
+                        if (ohEnd >= Hout) ohEnd = Hout - 1;
+                        if (owEnd >= Wout) owEnd = Wout - 1;
+
+                        Entry grad = 0.0f;
+                        for (int oh = ohStart; oh <= ohEnd; oh++)
+                            for (int ow = owStart; ow <= owEnd; ow++) {
+                                int fh = ih + padding - oh * stride;
+                                int fw = iw + padding - ow * stride;
+                                size_t outOff = outBase + (size_t)oh * Wout + ow;
+                                if ((int)argIdx[outOff] == fh * size + fw)
+                                    grad += dOut[outOff];
+                            }
+                        plane[(size_t)ih * sH + (size_t)iw * sW] += grad;
+                    }
+            }
+        }
+    } else if (f == ADD.f) {
+        for (int p = start; p < end; p++) {
+            int c = p % C, n = p / C;
+            Entry *plane   = dInput + (size_t)n * sN + (size_t)c * sC;
+            size_t outBase = (size_t)p * Hout * Wout;
+            for (int oh = 0; oh < Hout; oh++)
+                for (int ow = 0; ow < Wout; ow++) {
+                    Entry g = dOut[outBase + (size_t)oh * Wout + ow];
+                    for (int fh = 0; fh < size; fh++) {
+                        int ih = oh * stride - padding + fh;
+                        if (ih < 0 || ih >= H) continue;
+                        Entry *dr = plane + (size_t)ih * sH;
+                        for (int fw = 0; fw < size; fw++) {
+                            int iw = ow * stride - padding + fw;
+                            if (iw >= 0 && iw < W) dr[(size_t)iw * sW] += g;
+                        }
+                    }
+                }
+        }
+    } else {
+        Entry chain[size * size + 1];
+        Entry vals[size * size];
+        size_t offs[size * size];
+        for (int p = start; p < end; p++) {
+            int c = p % C, n = p / C;
+            Entry *inPlane = input  + (size_t)n * sN + (size_t)c * sC;
+            Entry *dPlane  = dInput + (size_t)n * sN + (size_t)c * sC;
+            size_t outBase = (size_t)p * Hout * Wout;
+            for (int oh = 0; oh < Hout; oh++)
+                for (int ow = 0; ow < Wout; ow++) {
+                    chain[0] = fill;
+                    int cnt = 0;
+                    for (int fh = 0; fh < size; fh++) {
+                        int ih = oh * stride - padding + fh;
+                        if (ih < 0 || ih >= H) continue;
+                        for (int fw = 0; fw < size; fw++) {
+                            int iw = ow * stride - padding + fw;
+                            if (iw < 0 || iw >= W) continue;
+                            size_t off = (size_t)ih * sH + (size_t)iw * sW;
+                            Entry v = inPlane[off];
+                            chain[cnt + 1] = f(chain[cnt], v);
+                            vals[cnt] = v;
+                            offs[cnt] = off;
+                            cnt++;
+                        }
+                    }
+                    Entry dres = dOut[outBase + (size_t)oh * Wout + ow];
+                    for (int j = cnt - 1; j >= 0; j--) {
+                        dPlane[offs[j]] += dres * db(chain[j], vals[j]);
+                        dres *= da(chain[j], vals[j]);
+                    }
+                }
         }
     }
 }
@@ -770,6 +1115,21 @@ void OperationForward(Operation op)
             OperationForward(aff);
             break;
         }
+        case Convolution: {
+            int Cout = op.B.shape[0];
+            int K    = op.B.shape[1] * op.fH * op.fW;
+            int S    = op.out.shape[2] * op.out.shape[3];
+            int N    = op.out.shape[0];
+            dispatch(convolutionForward, &op, N, (long)N * Cout * S * K);
+            Operation aff = { .type=Affine, .out=op.out, .A=op.product, .B=op.bias,
+                              .u=op.u, .inner=S };
+            OperationForward(aff);
+            break;
+        }
+        case Pool:
+            dispatch(poolForward, &op, op.out.shape[0] * op.out.shape[1],
+                     (long)TensorSize(op.out) * op.fH * op.fW);
+            break;
         case Unfold:
             dispatch(unfoldForward, &op, op.out.shape[0] * op.out.shape[1], TensorSize(op.out));
             break;
@@ -825,6 +1185,34 @@ void OperationBackward(Operation op)
             OperationBackward(mul);
             break;
         }
+        case Convolution: {
+            int Cout = op.B.shape[0];
+            int K    = op.B.shape[1] * op.fH * op.fW;
+            int S    = op.out.shape[2] * op.out.shape[3];
+            int N    = op.out.shape[0];
+            long gemmWork = (long)N * Cout * S * K;
+            Operation aff = { .type=Affine, .out=op.out, .A=op.product, .B=op.bias,
+                              .u=op.u, .inner=S };
+            OperationBackward(aff);
+            if (op.B.gradients) {
+                int CK = Cout * K;
+                op.scratch = TensorNew(2, (int[]){N, CK}, FALSE);
+                dispatch(convolutionBackwardDb, &op, N, gemmWork);
+                for (int n = 0; n < N; n++)
+                    for (int j = 0; j < CK; j++)
+                        op.B.gradients[j] += op.scratch.entries[(size_t)n * CK + j];
+                TensorFree(op.scratch);
+            }
+            if (op.A.gradients)
+                dispatch(convolutionBackwardDa, &op, N, gemmWork);
+            break;
+        }
+        case Pool:
+            if (op.A.gradients) {
+                int planes = op.A.shape[0] * op.A.shape[1];
+                dispatch(poolBackward, &op, planes, (long)TensorSize(op.A) * op.fH * op.fW);
+            }
+            break;
         case Unfold:
             if (op.A.gradients)
                 dispatch(unfoldBackward, &op, op.A.shape[0] * op.A.shape[1], TensorSize(op.A));

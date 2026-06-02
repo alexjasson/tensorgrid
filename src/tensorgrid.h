@@ -7,15 +7,16 @@
 #define INFINITE 1e+38
 #define PI 3.141592653589793f
 
-typedef float Entry;                        // Change data type of entry as needed
-typedef Entry (*UnivariateFn)(Entry);       // y = f(a) on an entry in A
-typedef Entry (*BivariateFn)(Entry, Entry); // y = f(a,b) on entries in A and B
-typedef struct { UnivariateFn f; UnivariateFn da; } Univariate;              // y = f(a) and dy/da
-typedef struct { BivariateFn f; BivariateFn da; BivariateFn db; } Bivariate; // y = f(a,b), dy/da and dy/db
+typedef float Entry;                         // Change data type of entry as needed
+typedef Entry (*UnaryScalar)(Entry);         // y = f(a) on an entry in A
+typedef Entry (*BinaryScalar)(Entry, Entry); // y = f(a,b) on entries in A and B
+typedef void  (*UnaryVec)(void);
+typedef struct { UnaryScalar f, da; UnaryVec fv, dav; } Unary;
+typedef struct { BinaryScalar f; BinaryScalar da; BinaryScalar db; } Binary; // y = f(a,b), dy/da and dy/db
 
-// Univariate/Bivariate functions to be applied to tensors - add more as needed
-extern Univariate RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
-extern Bivariate  ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX;
+// Unary/Binary functions to be applied to tensors - add more as needed
+extern Unary RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
+extern Binary  ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
 
 typedef struct parameters *Parameters;
 typedef struct optimizer Optimizer;
@@ -156,13 +157,13 @@ Tensor TensorEmbedding(Tensor table, Tensor indices);
  * Dense layer with optional activation function. Pass IDENTITY for no activation.
  * out = f(in @ weight + bias)
  */
-Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Univariate f);
+Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Unary f);
 
 /*
  * Convolution layer with optional activation function. Pass IDENTITY for no activation.
  * out = f(conv(in, filter) + bias)
  */
-Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Univariate f);
+Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Unary f);
 
 /*
  * Max-pooling over the spatial dimensions.
@@ -257,7 +258,7 @@ Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding);
  * output height = (input height + 2*padding - size) / stride + 1
  * output width  = (input width  + 2*padding - size) / stride + 1
  */
-Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride, int padding);
+Tensor TensorPool(Binary f, Entry initial, Tensor input, int size, int stride, int padding);
 
 /*
  * Broadcasts the given axis from size 1 to size n; all entries are replicated
@@ -273,7 +274,7 @@ Tensor TensorBroadcast(Tensor A, int axis, int n);
  * A:   [..., k, ...]
  * out: [..., 1, ...]
  */
-Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis);
+Tensor TensorReduce(Binary f, Entry initial, Tensor A, int axis);
 
 /*
  * Element-wise addition. out = A + B
@@ -303,13 +304,13 @@ Tensor TensorCopy(Tensor A);
 /*
  * out = f(A).
  */
-Tensor TensorMap(Univariate f, Tensor A);
+Tensor TensorMap(Unary f, Tensor A);
 
 /*
  * out = f(A, B). Shapes are right-aligned (the input with fewer dimensions gains leading size-1
  * axes), then any axis of size 1 is broadcast to the other tensor's size along that axis.
  */
-Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
+Tensor TensorZip(Binary f, Tensor A, Tensor B);
 
 /*
  * Multiply A by B using the last two dimensions as matrices.
@@ -318,15 +319,6 @@ Tensor TensorZip(Bivariate f, Tensor A, Tensor B);
  * out: [..., m, n]
  */
 Tensor TensorMultiply(Tensor A, Tensor B);
-
-/*
- * out = f(A + bias)
- *
- * A:    [..., biasSize, ...] (TensorSize(A) == outer * biasSize * inner)
- * bias: [biasSize]
- * out:  [..., biasSize, ...]
- */
-Tensor TensorAffine(Univariate f, Tensor A, Tensor bias, int inner);
 
 /*
 * Read from A at positions given by indices.
@@ -345,7 +337,7 @@ Tensor TensorGather(Tensor A, Tensor indices, int axis);
  * indices: [s_0, ..., s_m]             (integer values in [0, K), encoded as Entry)
  * out:     [..., s_0, ..., s_m, ...]
  */
-Tensor TensorScatter(Bivariate f, Tensor A, Tensor indices, Entry initial, int axis, int n);
+Tensor TensorScatter(Binary f, Tensor A, Tensor indices, Entry initial, int axis, int n);
 
 /*
  * Moves a fH x fW window across the height and width of each input, and flattens each window

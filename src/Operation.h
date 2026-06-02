@@ -6,11 +6,11 @@
 // Represents a primitive operation on a tensor
 typedef struct {
     Tensor out, A, B;
-    enum { Map, Zip, Multiply, Affine, Linear, Unfold, Gather, Scatter } type;
-    union { Univariate u; Bivariate b; };
+    enum { Map, Zip, Multiply, Affine, Linear, Convolution, Pool, Unfold, Gather, Scatter } type;
+    union { Unary u; Binary b; };
     Entry fill;
     int axis, fH, fW, stride, padding, inner;
-    Tensor bias, product;
+    Tensor bias, product, scratch;
 } Operation;
 
 void OperationForward(Operation op);

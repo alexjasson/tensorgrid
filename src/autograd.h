@@ -7,13 +7,14 @@
  * Autograd wrapper functions for the primitive tensor operations. Each function allocates
  * the output tensor, executes the operation and records it on the autograd tape.
  */
-Tensor autogradMap(Univariate f, Tensor A);
-Tensor autogradZip(Bivariate f, Tensor A, Tensor B);
+Tensor autogradMap(Unary f, Tensor A);
+Tensor autogradZip(Binary f, Tensor A, Tensor B);
 Tensor autogradMultiply(Tensor A, Tensor B);
-Tensor autogradAffine(Univariate f, Tensor product, Tensor bias, int inner);
-Tensor autogradLinear(Tensor in, Tensor weight, Tensor bias, Univariate f);
+Tensor autogradLinear(Tensor in, Tensor weight, Tensor bias, Unary f);
+Tensor autogradConvolution(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Unary f);
+Tensor autogradPool(Binary f, Entry initial, Tensor in, int size, int stride, int padding);
 Tensor autogradGather(Tensor A, Tensor B, int axis);
-Tensor autogradScatter(Bivariate f, Tensor A, Tensor B, Entry fill, int axis, int n);
+Tensor autogradScatter(Binary f, Tensor A, Tensor B, Entry fill, int axis, int n);
 Tensor autogradUnfold(Tensor A, Entry fill, int fH, int fW, int stride, int padding);
 
 /*

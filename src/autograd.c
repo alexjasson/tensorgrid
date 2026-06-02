@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <float.h>
 #include "autograd.h"
 #include "Operation.h"
 #include "DynamicArray.h"
@@ -77,7 +78,7 @@ void autogradBackward(Tensor loss)
     operationArrayClear(arr);
 }
 
-Tensor autogradMap(Univariate f, Tensor A)
+Tensor autogradMap(Unary f, Tensor A)
 {
     Tensor out = TensorNew(A.dimensions, A.shape, A.gradients != NULL);
 
@@ -87,7 +88,7 @@ Tensor autogradMap(Univariate f, Tensor A)
     return out;
 }
 
-Tensor autogradZip(Bivariate f, Tensor A, Tensor B)
+Tensor autogradZip(Binary f, Tensor A, Tensor B)
 {
     Tensor zipA = A;
     Tensor zipB = B;
@@ -168,7 +169,7 @@ Tensor autogradMultiply(Tensor A, Tensor B)
     return out;
 }
 
-Tensor autogradLinear(Tensor in, Tensor weight, Tensor bias, Univariate f)
+Tensor autogradLinear(Tensor in, Tensor weight, Tensor bias, Unary f)
 {
     // Output shape matches in @ weight (broadcasting the leading batch dims)
     int dimsA   = in.dimensions;
@@ -192,14 +193,52 @@ Tensor autogradLinear(Tensor in, Tensor weight, Tensor bias, Univariate f)
     return out;
 }
 
-Tensor autogradAffine(Univariate f, Tensor product, Tensor bias, int inner)
+Tensor autogradConvolution(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Unary f)
 {
-    int autograd = product.gradients != NULL || bias.gradients != NULL;
-    Tensor out = TensorNew(product.dimensions, product.shape, autograd);
+    int N    = in.shape[0];
+    int H    = in.shape[2];
+    int W    = in.shape[3];
+    int Cout = filter.shape[0];
+    int fH   = filter.shape[2];
+    int fW   = filter.shape[3];
+    int Hout = (H + 2 * padding - fH) / stride + 1;
+    int Wout = (W + 2 * padding - fW) / stride + 1;
+    int autograd = in.gradients != NULL || filter.gradients != NULL || bias.gradients != NULL;
 
-    Operation op = { .type=Affine, .out=out, .A=product, .B=bias, .u=f, .inner=inner };
+    Tensor product = TensorNew(4, (int[]){N, Cout, Hout, Wout}, autograd);
+    Tensor out     = TensorNew(4, (int[]){N, Cout, Hout, Wout}, autograd);
+
+    Operation op = { .type=Convolution, .out=out, .A=in, .B=filter, .bias=bias,
+                     .product=product, .u=f, .stride=stride, .padding=padding,
+                     .fH=fH, .fW=fW };
     OperationForward(op);
     if (op.out.gradients) operationArrayPush(op);
+    TensorFree(product);
+    return out;
+}
+
+Tensor autogradPool(Binary f, Entry initial, Tensor in, int size, int stride, int padding)
+{
+    int N    = in.shape[0];
+    int C    = in.shape[1];
+    int H    = in.shape[2];
+    int W    = in.shape[3];
+    int Hout = (H + 2 * padding - size) / stride + 1;
+    int Wout = (W + 2 * padding - size) / stride + 1;
+    int autograd = in.gradients != NULL;
+    // Pools (max/min) cache the winning index so backward is O(1) per
+    // output. Other reductions replay the fold in backward.
+    int cacheArg = autograd && (f.f == MAX.f || f.f == MIN.f);
+
+    Tensor out     = TensorNew(4, (int[]){N, C, Hout, Wout}, autograd);
+    Tensor indices = cacheArg ? TensorNew(4, (int[]){N, C, Hout, Wout}, FALSE) : (Tensor){0};
+
+    Operation op = { .type=Pool, .out=out, .A=in, .b=f, .product=indices,
+                     .fH=size, .fW=size, .stride=stride, .padding=padding,
+                     .fill=initial };
+    OperationForward(op);
+    if (op.out.gradients) operationArrayPush(op);
+    if (indices.refcount) TensorFree(indices);
     return out;
 }
 
@@ -220,7 +259,7 @@ Tensor autogradGather(Tensor A, Tensor B, int axis)
     return out;
 }
 
-Tensor autogradScatter(Bivariate f, Tensor A, Tensor B, Entry fill, int axis, int n)
+Tensor autogradScatter(Binary f, Tensor A, Tensor B, Entry fill, int axis, int n)
 {
     int outDims = A.dimensions - B.dimensions + 1;
     int outShape[MAX_DIMENSIONS];

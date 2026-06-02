@@ -9,12 +9,14 @@
 #include "autograd.h"
 #include "DynamicArray.h"
 #include "utility.h"
+#include "MemoryPool.h"
+#include "Vec.h"
 
-// Univariate functions and derivatives
+// Unary functions and derivatives
 static Entry relu(Entry a)     { return a > 0.0f ? a : 0.0f; }
 static Entry drelu(Entry a)    { return a > 0.0f ? 1.0f : 0.0f; }
 static Entry sigmoid(Entry a)  { return 1.0f / (1.0f + fastExp(-a)); }
-static Entry dsigmoid(Entry a) { return sigmoid(a) * (1.0f - sigmoid(a)); }
+static Entry dsigmoid(Entry a) { Entry s = sigmoid(a); return s * (1.0f - s); }
 static Entry loge(Entry a)     { return fastLog(a); }
 static Entry dloge(Entry a)    { return 1.0f / a; }
 static Entry negate(Entry a)   { return -a; }
@@ -23,7 +25,7 @@ static Entry one(Entry a)      { (void)a; return  1.0f; }
 static Entry minusOne(Entry a) { (void)a; return -1.0f; }
 static Entry expe(Entry a)     { return fastExp(a); }
 static Entry tanhe(Entry a)    { return 2.0f / (1.0f + fastExp(-2.0f * a)) - 1.0f; }
-static Entry dtanhe(Entry a)   { return 1.0f - tanhe(a) * tanhe(a); }
+static Entry dtanhe(Entry a)   { Entry t = tanhe(a); return 1.0f - t * t; }
 static Entry sqrte(Entry a)    { return __builtin_sqrtf(a); }
 static Entry dsqrte(Entry a)   { return 0.5f / sqrte(a); }
 static Entry gelu(Entry a)     { return 0.5f * a * (1.0f + tanhe(sqrte(2.0f / PI) * (a + 0.044715f * a * a * a))); }
@@ -33,7 +35,7 @@ static Entry dgelu(Entry a)
     return 0.5f * (1.0f + u) + 0.5f * a * (1.0f - u * u) * sqrte(2.0f / PI) * (1.0f + 0.134145f * a * a);
 }
 
-// Bivariate functions and partial derivatives
+// Binary functions and partial derivatives
 static Entry add(Entry a, Entry b)       { return a + b; }
 static Entry subtract(Entry a, Entry b)  { return a - b; }
 static Entry multiply(Entry a, Entry b)  { return a * b; }
@@ -47,21 +49,53 @@ static Entry divideDa(Entry a, Entry b)  { (void)a; return 1.0f / b; }
 static Entry divideDb(Entry a, Entry b)  { return -a / (b * b); }
 static Entry maxDa(Entry a, Entry b)     { return a >= b ? 1.0f : 0.0f; }
 static Entry maxDb(Entry a, Entry b)     { return b > a ? 1.0f : 0.0f; }
+static Entry minf(Entry a, Entry b)      { return a < b ? a : b; }
+static Entry minDa(Entry a, Entry b)     { return a <= b ? 1.0f : 0.0f; }
+static Entry minDb(Entry a, Entry b)     { return b < a ? 1.0f : 0.0f; }
 
-Univariate RELU     = { relu,     drelu    };
-Univariate SIGMOID  = { sigmoid,  dsigmoid };
-Univariate TANH     = { tanhe,    dtanhe   };
-Univariate LOG      = { loge,     dloge    };
-Univariate EXP      = { expe,     expe     };
-Univariate NEGATE   = { negate,   minusOne };
-Univariate IDENTITY = { identity, one      };
-Univariate SQRT     = { sqrte,    dsqrte   };
-Univariate GELU     = { gelu,    dgelu   };
-Bivariate  ADD      = { add,      ones,      ones      };
-Bivariate  SUBTRACT = { subtract, ones,      minusOnes };
-Bivariate  MULTIPLY = { multiply, second,    first     };
-Bivariate  DIVIDE   = { divide,   divideDa,  divideDb  };
-Bivariate  MAX      = { max,      maxDa,     maxDb     };
+// Unary functions and derivatives for vectors
+static Vec reluV(Vec v)      { return VecMax(v, VecZero()); }
+static Vec dreluV(Vec v)     { return VecGt0(v); }
+static Vec identityV(Vec v)  { return v; }
+static Vec didentityV(Vec v) { (void)v; return VecBcast(1.0f); }
+static Vec negateV(Vec v)    { return VecSub(VecZero(), v); }
+static Vec dnegateV(Vec v)   { (void)v; return VecBcast(-1.0f); }
+static Vec sigmoidV(Vec v)   { return VecDiv(VecBcast(1.0f), VecAdd(VecBcast(1.0f), VecExp(VecSub(VecZero(), v)))); }
+static Vec dsigmoidV(Vec v)  { Vec s = sigmoidV(v); return VecMul(s, VecSub(VecBcast(1.0f), s)); }
+static Vec tanhV(Vec v)      { return VecSub(VecDiv(VecBcast(2.0f), VecAdd(VecBcast(1.0f), VecExp(VecMul(VecBcast(-2.0f), v)))), VecBcast(1.0f)); }
+static Vec dtanhV(Vec v)     { Vec t = tanhV(v); return VecSub(VecBcast(1.0f), VecMul(t, t)); }
+static Vec expV(Vec v)       { return VecExp(v); }
+static Vec logV(Vec v)       { return VecLog(v); }
+static Vec dlogV(Vec v)      { return VecDiv(VecBcast(1.0f), v); }
+static Vec sqrtV(Vec v)      { return VecSqrt(v); }
+static Vec dsqrtV(Vec v)     { return VecDiv(VecBcast(0.5f), VecSqrt(v)); }
+static Vec geluArg(Vec v)    { return VecMul(VecBcast(__builtin_sqrtf(2.0f / PI)), VecAdd(v, VecMul(VecBcast(0.044715f), VecMul(v, VecMul(v, v))))); }
+static Vec geluV(Vec v)      { return VecMul(VecBcast(0.5f), VecMul(v, VecAdd(VecBcast(1.0f), tanhV(geluArg(v))))); }
+static Vec dgeluV(Vec v)
+{
+    Vec c = VecBcast(__builtin_sqrtf(2.0f / PI));
+    Vec u = tanhV(geluArg(v));
+    Vec t1 = VecMul(VecBcast(0.5f), VecAdd(VecBcast(1.0f), u));                       // 0.5*(1+u)
+    Vec t2 = VecMul(VecMul(VecMul(VecBcast(0.5f), v), VecSub(VecBcast(1.0f), VecMul(u, u))), // 0.5*v*(1-u^2) *
+                     VecMul(c, VecAdd(VecBcast(1.0f), VecMul(VecBcast(0.134145f), VecMul(v, v))))); // c*(1+0.134145*v^2)
+    return VecAdd(t1, t2);
+}
+
+Unary  RELU     = { relu,     drelu,    (UnaryVec)reluV,     (UnaryVec)dreluV     };
+Unary  SIGMOID  = { sigmoid,  dsigmoid, (UnaryVec)sigmoidV,  (UnaryVec)dsigmoidV  };
+Unary  TANH     = { tanhe,    dtanhe,   (UnaryVec)tanhV,     (UnaryVec)dtanhV     };
+Unary  LOG      = { loge,     dloge,    (UnaryVec)logV,      (UnaryVec)dlogV      };
+Unary  EXP      = { expe,     expe,     (UnaryVec)expV,      (UnaryVec)expV      };
+Unary  NEGATE   = { negate,   minusOne, (UnaryVec)negateV,   (UnaryVec)dnegateV   };
+Unary  IDENTITY = { identity, one,      (UnaryVec)identityV, (UnaryVec)didentityV };
+Unary  SQRT     = { sqrte,    dsqrte,   (UnaryVec)sqrtV,     (UnaryVec)dsqrtV     };
+Unary  GELU     = { gelu,     dgelu,    (UnaryVec)geluV,     (UnaryVec)dgeluV     };
+Binary ADD      = { add,      ones,      ones      };
+Binary SUBTRACT = { subtract, ones,      minusOnes };
+Binary MULTIPLY = { multiply, second,    first     };
+Binary DIVIDE   = { divide,   divideDa,  divideDb  };
+Binary MAX      = { max,      maxDa,     maxDb     };
+Binary MIN      = { minf,     minDa,     minDb     };
 
 typedef struct optimizer {
     Entry *m;     // SGD momentum or Adam first moment
@@ -104,9 +138,11 @@ Tensor TensorNew(int dimensions, int *shape, int autograd)
         for (int i = dimensions - 2; i >= 0; i--)
             t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
     }
-    int size    = TensorSize(t);
-    t.entries   = calloc(size, sizeof(Entry));
-    t.gradients = autograd ? calloc(size, sizeof(Entry)) : NULL;
+    int size     = TensorSize(t);
+    size_t bytes = (size_t)size * sizeof(Entry);
+    MemoryPool pool = MemoryPoolGet();
+    t.entries   = MemoryPoolAlloc(pool, bytes);
+    t.gradients = autograd ? MemoryPoolAlloc(pool, bytes) : NULL;
     t.optimizer = autograd ? calloc(1, sizeof(optimizer)) : NULL;
     t.refcount  = malloc(sizeof(int));
     if (!t.entries || (autograd && (!t.gradients || !t.optimizer)) || !t.refcount) {
@@ -134,8 +170,10 @@ Tensor ParametersAdd(Parameters p, int dimensions, int *shape)
 void TensorFree(Tensor A)
 {
     if (!A.refcount || --(*A.refcount) > 0) return;
-    free(A.entries);
-    free(A.gradients);
+    size_t bytes = (size_t)TensorSize(A) * sizeof(Entry);
+    MemoryPool pool = MemoryPoolGet();
+    MemoryPoolFree(pool, A.entries, bytes);
+    MemoryPoolFree(pool, A.gradients, bytes);
     if (A.optimizer) {
         free(A.optimizer->m);
         free(A.optimizer->v);
@@ -229,7 +267,7 @@ Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides, int of
     return t;
 }
 
-Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
+Tensor TensorReduce(Binary f, Entry initial, Tensor A, int axis)
 {
     Tensor indices = TensorNew(1, (int[]){A.shape[axis]}, FALSE);
     Tensor out     = TensorScatter(f, A, indices, initial, axis, 1);
@@ -237,25 +275,20 @@ Tensor TensorReduce(Bivariate f, Entry initial, Tensor A, int axis)
     return out;
 }
 
-Tensor TensorMap(Univariate f, Tensor A)                                     { return autogradMap(f, A);                     }
-Tensor TensorZip(Bivariate f, Tensor A, Tensor B)                            { return autogradZip(f, A, B);                  }
-Tensor TensorMultiply(Tensor A, Tensor B)                                    { return autogradMultiply(A, B);                }
-Tensor TensorAffine(Univariate f, Tensor A, Tensor bias, int inner)          { return autogradAffine(f, A, bias, inner);     }
-Tensor TensorGather(Tensor A, Tensor indices, int axis)                      { return autogradGather(A, indices, axis);      }
-Tensor TensorScatter(Bivariate f, Tensor A, Tensor i, Entry e, int a, int n) { return autogradScatter(f, A, i, e, a, n);     }
-Tensor TensorUnfold(Tensor A, Entry fill, int H, int W, int s, int p)        { return autogradUnfold(A, fill, H, W, s, p);   }
+Tensor TensorMap(Unary f, Tensor A)                                       { return autogradMap(f, A);                     }
+Tensor TensorZip(Binary f, Tensor A, Tensor B)                            { return autogradZip(f, A, B);                  }
+Tensor TensorMultiply(Tensor A, Tensor B)                                 { return autogradMultiply(A, B);                }
+Tensor TensorGather(Tensor A, Tensor indices, int axis)                   { return autogradGather(A, indices, axis);      }
+Tensor TensorScatter(Binary f, Tensor A, Tensor i, Entry e, int a, int n) { return autogradScatter(f, A, i, e, a, n);     }
+Tensor TensorUnfold(Tensor A, Entry fill, int H, int W, int s, int p)     { return autogradUnfold(A, fill, H, W, s, p);   }
 
-Tensor TensorCopy(Tensor A)                                                  { return TensorMap(IDENTITY, A);                }
-Tensor TensorAdd(Tensor A, Tensor B)                                         { return TensorZip(ADD, A, B);                  }
-Tensor TensorSubtract(Tensor A, Tensor B)                                    { return TensorZip(SUBTRACT, A, B);             }
-Tensor TensorHadamard(Tensor A, Tensor B)                                    { return TensorZip(MULTIPLY, A, B);             }
-Tensor TensorEmbedding(Tensor table, Tensor indices)                         { return TensorGather(table, indices, 0);       }
-Tensor TensorMaxPool(Tensor A, int k, int s, int p)                          { return TensorPool(MAX, -FLT_MAX, A, k, s, p); }
-
-Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Univariate f)
-{
-    return autogradLinear(in, weight, bias, f);
-}
+Tensor TensorCopy(Tensor A)                                               { return TensorMap(IDENTITY, A);                }
+Tensor TensorAdd(Tensor A, Tensor B)                                      { return TensorZip(ADD, A, B);                  }
+Tensor TensorSubtract(Tensor A, Tensor B)                                 { return TensorZip(SUBTRACT, A, B);             }
+Tensor TensorHadamard(Tensor A, Tensor B)                                 { return TensorZip(MULTIPLY, A, B);             }
+Tensor TensorEmbedding(Tensor table, Tensor indices)                      { return TensorGather(table, indices, 0);       }
+Tensor TensorMaxPool(Tensor A, int k, int s, int p)                       { return TensorPool(MAX, -FLT_MAX, A, k, s, p); }
+Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Unary f)  { return autogradLinear(in, weight, bias, f);   }
 
 Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding)
 {
@@ -278,30 +311,15 @@ Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding)
     return TensorReshape(output, 4, (int[]){N, Cout, Hout, Wout});
 }
 
-Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Univariate f)
+Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Unary f)
 {
-    Tensor conv = TensorConvolution(in, filter, stride, padding);
-    Tensor out = TensorAffine(f, conv, bias, conv.shape[2] * conv.shape[3]);
-    TensorFree(conv);
-    return out;
+    return autogradConvolution(in, filter, bias, stride, padding, f);
 }
 
 
-Tensor TensorPool(Bivariate f, Entry initial, Tensor input, int size, int stride, int padding)
+Tensor TensorPool(Binary f, Entry initial, Tensor input, int size, int stride, int padding)
 {
-    int N    = input.shape[0];
-    int C    = input.shape[1];
-    int H    = input.shape[2];
-    int W    = input.shape[3];
-    int Hout = (H + 2 * padding - size) / stride + 1;
-    int Wout = (W + 2 * padding - size) / stride + 1;
-
-    Tensor flat   = TensorReshape(input, 4, (int[]){N * C, 1, H, W});
-    Tensor cols   = TensorUnfold(flat, initial, size, size, stride, padding);  // [N*C, size*size, Hout*Wout]
-    Tensor pooled = TensorReduce(f, initial, cols, 1);                         // [N*C, 1, Hout*Wout]
-    Tensor out    = TensorReshape(pooled, 4, (int[]){N, C, Hout, Wout});
-    TensorFree(cols);
-    return out;
+    return autogradPool(f, initial, input, size, stride, padding);
 }
 
 void TensorScale(Tensor A, float scalar)
