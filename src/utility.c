@@ -4,6 +4,9 @@
 #include <float.h>
 #include <time.h>
 #include "utility.h"
+#include "Vec.h"
+
+int min(int a, int b) { return a < b ? a : b; }
 
 float randomFloat(float lower, float upper)
 {
@@ -40,6 +43,21 @@ float fastExp(float x)
     return p * u.f;
 }
 
+// As above but for vectors instead of scalars
+Vec VecExp(Vec x)
+{
+    x = VecMin(VecMax(x, VecBcast(-87.3f)), VecBcast(88.7f));
+    Vec n = VecRound(VecMul(x, VecBcast(1.4426950408889634f)));
+    Vec r = VecFnmadd(n, VecBcast(0.6931471805599453f), x);
+    Vec p = VecBcast(1.0f / 120.0f);
+    p = VecFma(p, r, VecBcast(1.0f / 24.0f));
+    p = VecFma(p, r, VecBcast(1.0f / 6.0f));
+    p = VecFma(p, r, VecBcast(0.5f));
+    p = VecFma(p, r, VecBcast(1.0f));
+    p = VecFma(p, r, VecBcast(1.0f));
+    return VecMul(p, VecPow2i(n));
+}
+
 // log(x) with ~1e-5 relative error
 float fastLog(float x)
 {
@@ -56,6 +74,21 @@ float fastLog(float x)
     float l  = 2.0f * t * (1.0f + t2 * ((1.0f/3.0f) + t2 * ((1.0f/5.0f) + t2 * (1.0f/7.0f))));
 
     return l + (float)e * 0.6931471805599453f;
+}
+
+// As above but for vectors instead of scalars
+Vec VecLog(Vec x)
+{
+    Vec e = VecLog2i(x);
+    Vec m = VecMantissa(x);
+    Vec t = VecDiv(VecSub(m, VecBcast(1.0f)), VecAdd(m, VecBcast(1.0f)));
+    Vec t2 = VecMul(t, t);
+    Vec p = VecBcast(1.0f / 7.0f);
+    p = VecFma(p, t2, VecBcast(1.0f / 5.0f));
+    p = VecFma(p, t2, VecBcast(1.0f / 3.0f));
+    p = VecFma(p, t2, VecBcast(1.0f));
+    Vec l = VecMul(VecMul(VecBcast(2.0f), t), p);
+    return VecFma(e, VecBcast(0.6931471805599453f), l);  // l + e*ln2
 }
 
 float fastPow(float base, int exp)
