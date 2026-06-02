@@ -32,6 +32,7 @@
 
 // Strided matrix view of tensor data
 typedef struct { Entry *data; int sRow, sCol; } Matrix;
+typedef Vec (*UnaryFn)(Vec);
 
 // Helper functions
 static void packB(Entry *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock);
@@ -277,19 +278,22 @@ static void affineForward(void *arg, int start, int end)
     Operation *op = arg;
     Entry *out = op->out.entries, *A = op->A.entries, *bias = op->B.entries;
     int biasSize = TensorSize(op->B), inner = op->inner;
-    UnaryScalar f = op->u.f;
-#if defined(SIMD)
-    Vec (*fv)(Vec) = (Vec (*)(Vec))op->u.fv;
-#endif
+    UnaryFn fv = (UnaryFn)op->u.fv;
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
             int c = 0;
-#if defined(SIMD)
-            if (fv) for (; c + VEC_DIMS <= biasSize; c += VEC_DIMS)
+            for (; c + VEC_DIMS <= biasSize; c += VEC_DIMS)
                 VecStore(out + base + c, fv(VecAdd(VecLoad(A + base + c), VecLoad(bias + c))));
-#endif
-            for (; c < biasSize; c++) out[base + c] = f(A[base + c] + bias[c]);
+            if (c < biasSize) {
+                _Alignas(64) Entry x[VEC_DIMS], y[VEC_DIMS];
+                int tail = biasSize - c;
+                for (int t = 0; t < VEC_DIMS; t++)
+                    x[t] = t < tail ? A[base + c + t] + bias[c + t] : 0.0f;
+                VecStore(y, fv(VecLoad(x)));
+                for (int t = 0; t < tail; t++)
+                    out[base + c + t] = y[t];
+            }
         }
     } else {
         for (int o = start; o < end; o++)
@@ -297,14 +301,18 @@ static void affineForward(void *arg, int start, int end)
                 Entry bc = bias[c];
                 size_t base = ((size_t)o * biasSize + c) * inner;
                 int i = 0;
-#if defined(SIMD)
-                if (fv) {
-                    Vec bcv = VecBcast(bc);
-                    for (; i + VEC_DIMS <= inner; i += VEC_DIMS)
-                        VecStore(out + base + i, fv(VecAdd(VecLoad(A + base + i), bcv)));
+                Vec bcv = VecBcast(bc);
+                for (; i + VEC_DIMS <= inner; i += VEC_DIMS)
+                    VecStore(out + base + i, fv(VecAdd(VecLoad(A + base + i), bcv)));
+                if (i < inner) {
+                    _Alignas(64) Entry x[VEC_DIMS], y[VEC_DIMS];
+                    int tail = inner - i;
+                    for (int t = 0; t < VEC_DIMS; t++)
+                        x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
+                    VecStore(y, fv(VecLoad(x)));
+                    for (int t = 0; t < tail; t++)
+                        out[base + i + t] = y[t];
                 }
-#endif
-                for (; i < inner; i++) out[base + i] = f(A[base + i] + bc);
             }
     }
 }
@@ -315,21 +323,27 @@ static void affineBackwardDa(void *arg, int start, int end)
     Operation *op = arg;
     Entry *A = op->A.entries, *bias = op->B.entries, *dA = op->A.gradients, *dout = op->out.gradients;
     int biasSize = TensorSize(op->B), inner = op->inner;
-    UnaryScalar da = op->u.da;
-#if defined(SIMD)
-    Vec (*dav)(Vec) = (Vec (*)(Vec))op->u.dav;
-#endif
+    UnaryFn dav = (UnaryFn)op->u.dav;
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
             int c = 0;
-#if defined(SIMD)
-            if (dav) for (; c + VEC_DIMS <= biasSize; c += VEC_DIMS) {
+            for (; c + VEC_DIMS <= biasSize; c += VEC_DIMS) {
                 Vec v = VecAdd(VecLoad(A + base + c), VecLoad(bias + c));
                 VecStore(dA + base + c, VecFma(VecLoad(dout + base + c), dav(v), VecLoad(dA + base + c)));
             }
-#endif
-            for (; c < biasSize; c++) { Entry v = A[base + c] + bias[c]; dA[base + c] += dout[base + c] * da(v); }
+            if (c < biasSize) {
+                _Alignas(64) Entry x[VEC_DIMS], g[VEC_DIMS], old[VEC_DIMS], y[VEC_DIMS];
+                int tail = biasSize - c;
+                for (int t = 0; t < VEC_DIMS; t++) {
+                    x[t] = t < tail ? A[base + c + t] + bias[c + t] : 0.0f;
+                    g[t] = t < tail ? dout[base + c + t] : 0.0f;
+                    old[t] = t < tail ? dA[base + c + t] : 0.0f;
+                }
+                VecStore(y, VecFma(VecLoad(g), dav(VecLoad(x)), VecLoad(old)));
+                for (int t = 0; t < tail; t++)
+                    dA[base + c + t] = y[t];
+            }
         }
     } else {
         for (int o = start; o < end; o++)
@@ -337,16 +351,23 @@ static void affineBackwardDa(void *arg, int start, int end)
                 Entry bc = bias[c];
                 size_t base = ((size_t)o * biasSize + c) * inner;
                 int i = 0;
-#if defined(SIMD)
-                if (dav) {
-                    Vec bcv = VecBcast(bc);
-                    for (; i + VEC_DIMS <= inner; i += VEC_DIMS) {
-                        Vec v = VecAdd(VecLoad(A + base + i), bcv);
-                        VecStore(dA + base + i, VecFma(VecLoad(dout + base + i), dav(v), VecLoad(dA + base + i)));
-                    }
+                Vec bcv = VecBcast(bc);
+                for (; i + VEC_DIMS <= inner; i += VEC_DIMS) {
+                    Vec v = VecAdd(VecLoad(A + base + i), bcv);
+                    VecStore(dA + base + i, VecFma(VecLoad(dout + base + i), dav(v), VecLoad(dA + base + i)));
                 }
-#endif
-                for (; i < inner; i++) { Entry v = A[base + i] + bc; dA[base + i] += dout[base + i] * da(v); }
+                if (i < inner) {
+                    _Alignas(64) Entry x[VEC_DIMS], g[VEC_DIMS], old[VEC_DIMS], y[VEC_DIMS];
+                    int tail = inner - i;
+                    for (int t = 0; t < VEC_DIMS; t++) {
+                        x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
+                        g[t] = t < tail ? dout[base + i + t] : 0.0f;
+                        old[t] = t < tail ? dA[base + i + t] : 0.0f;
+                    }
+                    VecStore(y, VecFma(VecLoad(g), dav(VecLoad(x)), VecLoad(old)));
+                    for (int t = 0; t < tail; t++)
+                        dA[base + i + t] = y[t];
+                }
             }
     }
 }
@@ -358,32 +379,31 @@ static void affineBackwardDb(void *arg, int start, int end)
     Entry *A = op->A.entries, *bias = op->B.entries, *dB = op->B.gradients, *dout = op->out.gradients;
     int biasSize = TensorSize(op->B), inner = op->inner;
     int outer = TensorSize(op->out) / (biasSize * inner);
-    UnaryScalar da = op->u.da;
-#if defined(SIMD)
-    Vec (*dav)(Vec) = (Vec (*)(Vec))op->u.dav;
-#endif
+    UnaryFn dav = (UnaryFn)op->u.dav;
     for (int c = start; c < end; c++) {
         Entry s = 0, bc = bias[c];
-#if defined(SIMD)
         Vec sv = VecZero();
-#endif
         for (int o = 0; o < outer; o++) {
             size_t base = ((size_t)o * biasSize + c) * inner;
             int i = 0;
-#if defined(SIMD)
-            if (dav) {
-                Vec bcv = VecBcast(bc);
-                for (; i + VEC_DIMS <= inner; i += VEC_DIMS) {
-                    Vec v = VecAdd(VecLoad(A + base + i), bcv);
-                    sv = VecFma(VecLoad(dout + base + i), dav(v), sv);
-                }
+            Vec bcv = VecBcast(bc);
+            for (; i + VEC_DIMS <= inner; i += VEC_DIMS) {
+                Vec v = VecAdd(VecLoad(A + base + i), bcv);
+                sv = VecFma(VecLoad(dout + base + i), dav(v), sv);
             }
-#endif
-            for (; i < inner; i++) { Entry v = A[base + i] + bc; s += dout[base + i] * da(v); }
+            if (i < inner) {
+                _Alignas(64) Entry x[VEC_DIMS], g[VEC_DIMS], y[VEC_DIMS];
+                int tail = inner - i;
+                for (int t = 0; t < VEC_DIMS; t++) {
+                    x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
+                    g[t] = t < tail ? dout[base + i + t] : 0.0f;
+                }
+                VecStore(y, VecMul(VecLoad(g), dav(VecLoad(x))));
+                for (int t = 0; t < tail; t++)
+                    s += y[t];
+            }
         }
-#if defined(SIMD)
         s += VecHsum(sv);
-#endif
         dB[c] += s;
     }
 }

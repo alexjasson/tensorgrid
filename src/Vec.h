@@ -4,31 +4,7 @@
 #include <immintrin.h>
 #include <stdint.h>
 
-#if !defined(__AVX512F__) || defined(__AVX2__)
-
-typedef float Vec;
-#define VEC_DIMS 1
-static inline Vec   VecLoad(const float *p)        { return *p; }
-static inline void  VecStore(float *p, Vec x)      { *p = x; }
-static inline Vec   VecBcast(float x)              { return x; }
-static inline Vec   VecAdd(Vec a, Vec b)           { return a + b; }
-static inline Vec   VecSub(Vec a, Vec b)           { return a - b; }
-static inline Vec   VecMul(Vec a, Vec b)           { return a * b; }
-static inline Vec   VecDiv(Vec a, Vec b)           { return a / b; }
-static inline Vec   VecFma(Vec a, Vec b, Vec c)    { return a * b + c; }
-static inline Vec   VecZero(void)                  { return 0.0f; }
-static inline Vec   VecMax(Vec a, Vec b)           { return a > b ? a : b; }
-static inline Vec   VecMin(Vec a, Vec b)           { return a < b ? a : b; }
-static inline Vec   VecFnmadd(Vec a, Vec b, Vec c) { return c - a * b; }
-static inline Vec   VecRound(Vec x)                { return __builtin_rintf(x); }
-static inline Vec   VecPow2i(Vec n)                { return __builtin_ldexpf(1.0f, (int)n); }
-static inline Vec   VecSqrt(Vec x)                 { return __builtin_sqrtf(x); }
-static inline Vec   VecLog2i(Vec x)                { union { float f; int32_t i; } u = { .f = x }; return (Vec)(((u.i >> 23) & 0xFF) - 127); }
-static inline Vec   VecMantissa(Vec x)             { union { float f; int32_t i; } u = { .f = x }; u.i = (u.i & 0x007FFFFF) | 0x3F800000; return u.f; }
-static inline Vec   VecGt0(Vec v)                  { return v > 0.0f ? 1.0f : 0.0f; }
-static inline float VecHsum(Vec v)                 { return v; }
-
-#elif defined(__AVX512F__)
+#if defined(__AVX512F__)
 
 typedef __m512 Vec;
 #define VEC_DIMS 16
@@ -81,6 +57,30 @@ static inline float VecHsum(Vec v)
     s = _mm_hadd_ps(s, s);
     return _mm_cvtss_f32(s);
 }
+
+#else
+
+typedef float Vec;
+#define VEC_DIMS 1
+static inline Vec   VecLoad(const float *p)        { return *p; }
+static inline void  VecStore(float *p, Vec x)      { *p = x; }
+static inline Vec   VecBcast(float x)              { return x; }
+static inline Vec   VecAdd(Vec a, Vec b)           { return a + b; }
+static inline Vec   VecSub(Vec a, Vec b)           { return a - b; }
+static inline Vec   VecMul(Vec a, Vec b)           { return a * b; }
+static inline Vec   VecDiv(Vec a, Vec b)           { return a / b; }
+static inline Vec   VecFma(Vec a, Vec b, Vec c)    { return a * b + c; }
+static inline Vec   VecZero(void)                  { return 0.0f; }
+static inline Vec   VecMax(Vec a, Vec b)           { return a > b ? a : b; }
+static inline Vec   VecMin(Vec a, Vec b)           { return a < b ? a : b; }
+static inline Vec   VecFnmadd(Vec a, Vec b, Vec c) { return c - a * b; }
+static inline Vec   VecRound(Vec x)                { return __builtin_rintf(x); }
+static inline Vec   VecPow2i(Vec n)                { return __builtin_ldexpf(1.0f, (int)n); }
+static inline Vec   VecSqrt(Vec x)                 { return __builtin_sqrtf(x); }
+static inline Vec   VecLog2i(Vec x)                { union { float f; int32_t i; } u = { .f = x }; return (Vec)(((u.i >> 23) & 0xFF) - 127); }
+static inline Vec   VecMantissa(Vec x)             { union { float f; int32_t i; } u = { .f = x }; u.i = (u.i & 0x007FFFFF) | 0x3F800000; return u.f; }
+static inline Vec   VecGt0(Vec v)                  { return v > 0.0f ? 1.0f : 0.0f; }
+static inline float VecHsum(Vec v)                 { return v; }
 
 #endif
 
