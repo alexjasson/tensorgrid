@@ -71,14 +71,31 @@ static void mapForward(void *arg, int start, int end)
     Operation *op  = arg;
     Entry     *out = op->out.entries;
     Entry     *A   = op->A.entries;
-    UnaryScalar f = op->u.f;
+    UnaryFn fv = (UnaryFn)op->u.fv;
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
-        for (int i = start; i < end; i++)
-            out[i] = f(A[i]);
+        int i = start;
+        for (; i + VEC_DIMS <= end; i += VEC_DIMS)
+            VecStore(out + i, fv(VecLoad(A + i)));
+        if (i < end) {
+            Entry x[VEC_DIMS], y[VEC_DIMS];
+            int tail = end - i;
+            for (int t = 0; t < VEC_DIMS; t++)
+                x[t] = t < tail ? A[i + t] : 1.0f;
+            VecStore(y, fv(VecLoad(x)));
+            for (int t = 0; t < tail; t++)
+                out[i + t] = y[t];
+        }
     } else {
-        for (int i = start; i < end; i++) {
-            int aOff = unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
-            out[i] = f(A[aOff]);
+        for (int i = start; i < end; i += VEC_DIMS) {
+            Entry x[VEC_DIMS], y[VEC_DIMS];
+            int tail = end - i < VEC_DIMS ? end - i : VEC_DIMS;
+            for (int t = 0; t < VEC_DIMS; t++) {
+                int j = i + t;
+                x[t] = t < tail ? A[unravel(j, op->A.shape, op->A.strides, op->A.dimensions)] : 1.0f;
+            }
+            VecStore(y, fv(VecLoad(x)));
+            for (int t = 0; t < tail; t++)
+                out[i + t] = y[t];
         }
     }
 }
@@ -151,7 +168,7 @@ static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, 
         }
     }
 
-    _Alignas(64) Entry tile[MR][NR];
+    Entry tile[MR][NR];
     for (int mr = 0; mr < MR; mr++)
         for (int v = 0; v < NRV; v++)
             VecStore(&tile[mr][v * VEC_DIMS], acc[mr][v]);
@@ -176,8 +193,8 @@ static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, 
 // cache-blocked packed GEMM
 static void gemm(int N, int K, Matrix A, Matrix B, Matrix C, int r0, int r1)
 {
-    _Alignas(64) Entry packBufA[MC * KC];
-    _Alignas(64) Entry packBufB[NC * KC];
+    Entry packBufA[MC * KC];
+    Entry packBufB[NC * KC];
 
     for (int j0 = 0; j0 < N; j0 += NC) {
         int nBlock = min(NC, N - j0);
@@ -239,14 +256,42 @@ static void mapBackward(void *arg, int start, int end)
     Entry       *A  = op->A.entries;
     Entry       *dA = op->A.gradients;
     Entry     *dout = op->out.gradients;
-    UnaryScalar da = op->u.da;
+    UnaryFn dav = (UnaryFn)op->u.dav;
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
-        for (int j = start; j < end; j++)
-            dA[j] += dout[j] * da(A[j]);
+        int j = start;
+        for (; j + VEC_DIMS <= end; j += VEC_DIMS)
+            VecStore(dA + j, VecFma(VecLoad(dout + j), dav(VecLoad(A + j)), VecLoad(dA + j)));
+        if (j < end) {
+            Entry x[VEC_DIMS], g[VEC_DIMS], old[VEC_DIMS], y[VEC_DIMS];
+            int tail = end - j;
+            for (int t = 0; t < VEC_DIMS; t++) {
+                x[t] = t < tail ? A[j + t] : 1.0f;
+                g[t] = t < tail ? dout[j + t] : 0.0f;
+                old[t] = t < tail ? dA[j + t] : 0.0f;
+            }
+            VecStore(y, VecFma(VecLoad(g), dav(VecLoad(x)), VecLoad(old)));
+            for (int t = 0; t < tail; t++)
+                dA[j + t] = y[t];
+        }
     } else {
-        for (int j = start; j < end; j++) {
-            int aOff = unravel(j, op->A.shape, op->A.strides, op->A.dimensions);
-            dA[aOff] += dout[j] * da(A[aOff]);
+        for (int j = start; j < end; j += VEC_DIMS) {
+            Entry x[VEC_DIMS], g[VEC_DIMS], y[VEC_DIMS];
+            int offs[VEC_DIMS];
+            int tail = end - j < VEC_DIMS ? end - j : VEC_DIMS;
+            for (int t = 0; t < VEC_DIMS; t++) {
+                int i = j + t;
+                offs[t] = 0;
+                x[t] = 1.0f;
+                g[t] = 0.0f;
+                if (t < tail) {
+                    offs[t] = unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
+                    x[t] = A[offs[t]];
+                    g[t] = dout[i];
+                }
+            }
+            VecStore(y, VecMul(VecLoad(g), dav(VecLoad(x))));
+            for (int t = 0; t < tail; t++)
+                dA[offs[t]] += y[t];
         }
     }
 }
@@ -286,7 +331,7 @@ static void affineForward(void *arg, int start, int end)
             for (; c + VEC_DIMS <= biasSize; c += VEC_DIMS)
                 VecStore(out + base + c, fv(VecAdd(VecLoad(A + base + c), VecLoad(bias + c))));
             if (c < biasSize) {
-                _Alignas(64) Entry x[VEC_DIMS], y[VEC_DIMS];
+                Entry x[VEC_DIMS], y[VEC_DIMS];
                 int tail = biasSize - c;
                 for (int t = 0; t < VEC_DIMS; t++)
                     x[t] = t < tail ? A[base + c + t] + bias[c + t] : 0.0f;
@@ -305,7 +350,7 @@ static void affineForward(void *arg, int start, int end)
                 for (; i + VEC_DIMS <= inner; i += VEC_DIMS)
                     VecStore(out + base + i, fv(VecAdd(VecLoad(A + base + i), bcv)));
                 if (i < inner) {
-                    _Alignas(64) Entry x[VEC_DIMS], y[VEC_DIMS];
+                    Entry x[VEC_DIMS], y[VEC_DIMS];
                     int tail = inner - i;
                     for (int t = 0; t < VEC_DIMS; t++)
                         x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
@@ -333,7 +378,7 @@ static void affineBackwardDa(void *arg, int start, int end)
                 VecStore(dA + base + c, VecFma(VecLoad(dout + base + c), dav(v), VecLoad(dA + base + c)));
             }
             if (c < biasSize) {
-                _Alignas(64) Entry x[VEC_DIMS], g[VEC_DIMS], old[VEC_DIMS], y[VEC_DIMS];
+                Entry x[VEC_DIMS], g[VEC_DIMS], old[VEC_DIMS], y[VEC_DIMS];
                 int tail = biasSize - c;
                 for (int t = 0; t < VEC_DIMS; t++) {
                     x[t] = t < tail ? A[base + c + t] + bias[c + t] : 0.0f;
@@ -357,7 +402,7 @@ static void affineBackwardDa(void *arg, int start, int end)
                     VecStore(dA + base + i, VecFma(VecLoad(dout + base + i), dav(v), VecLoad(dA + base + i)));
                 }
                 if (i < inner) {
-                    _Alignas(64) Entry x[VEC_DIMS], g[VEC_DIMS], old[VEC_DIMS], y[VEC_DIMS];
+                    Entry x[VEC_DIMS], g[VEC_DIMS], old[VEC_DIMS], y[VEC_DIMS];
                     int tail = inner - i;
                     for (int t = 0; t < VEC_DIMS; t++) {
                         x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
@@ -392,7 +437,7 @@ static void affineBackwardDb(void *arg, int start, int end)
                 sv = VecFma(VecLoad(dout + base + i), dav(v), sv);
             }
             if (i < inner) {
-                _Alignas(64) Entry x[VEC_DIMS], g[VEC_DIMS], y[VEC_DIMS];
+                Entry x[VEC_DIMS], g[VEC_DIMS], y[VEC_DIMS];
                 int tail = inner - i;
                 for (int t = 0; t < VEC_DIMS; t++) {
                     x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
