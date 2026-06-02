@@ -33,6 +33,7 @@
 // Strided matrix view of tensor data
 typedef struct { Entry *data; int sRow, sCol; } Matrix;
 typedef Vec (*UnaryFn)(Vec);
+typedef Vec (*BinaryFn)(Vec, Vec);
 
 // Helper functions
 static void packB(Entry *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock);
@@ -106,13 +107,37 @@ static void zipForward(void *arg, int start, int end)
     Entry     *out = op->out.entries;
     Entry     *A   = op->A.entries;
     Entry     *B   = op->B.entries;
-    BinaryScalar f  = op->b.f;
+    BinaryFn fv = (BinaryFn)op->b.fv;
     int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
     int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
-    for (int i = start; i < end; i++) {
-        int aOff = aC ? i : unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
-        int bOff = bC ? i : unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
-        out[i] = f(A[aOff], B[bOff]);
+    if (aC && bC) {
+        int i = start;
+        for (; i + VEC_DIMS <= end; i += VEC_DIMS)
+            VecStore(out + i, fv(VecLoad(A + i), VecLoad(B + i)));
+        if (i < end) {
+            Entry x[VEC_DIMS], y[VEC_DIMS], z[VEC_DIMS];
+            int tail = end - i;
+            for (int t = 0; t < VEC_DIMS; t++) {
+                x[t] = t < tail ? A[i + t] : 1.0f;
+                y[t] = t < tail ? B[i + t] : 1.0f;
+            }
+            VecStore(z, fv(VecLoad(x), VecLoad(y)));
+            for (int t = 0; t < tail; t++)
+                out[i + t] = z[t];
+        }
+        return;
+    }
+    for (int i = start; i < end; i += VEC_DIMS) {
+        Entry x[VEC_DIMS], y[VEC_DIMS], z[VEC_DIMS];
+        int tail = end - i < VEC_DIMS ? end - i : VEC_DIMS;
+        for (int t = 0; t < VEC_DIMS; t++) {
+            int j = i + t;
+            x[t] = t < tail ? A[aC ? j : unravel(j, op->A.shape, op->A.strides, op->A.dimensions)] : 1.0f;
+            y[t] = t < tail ? B[bC ? j : unravel(j, op->B.shape, op->B.strides, op->B.dimensions)] : 1.0f;
+        }
+        VecStore(z, fv(VecLoad(x), VecLoad(y)));
+        for (int t = 0; t < tail; t++)
+            out[i + t] = z[t];
     }
 }
 
@@ -304,16 +329,73 @@ static void zipBackward(void *arg, int start, int end)
     Entry      *dA = op->A.gradients;
     Entry      *dB = op->B.gradients;
     Entry    *dout = op->out.gradients;
-    BinaryScalar da = op->b.da;
-    BinaryScalar db = op->b.db;
+    BinaryFn dav = (BinaryFn)op->b.dav;
+    BinaryFn dbv = (BinaryFn)op->b.dbv;
     int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
     int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
-    for (int j = start; j < end; j++) {
-        int aOff = aC ? j : unravel(j, op->A.shape, op->A.strides, op->A.dimensions);
-        int bOff = bC ? j : unravel(j, op->B.shape, op->B.strides, op->B.dimensions);
-        Entry g = dout[j];
-        if (dA) dA[aOff] += g * da(A[aOff], B[bOff]);
-        if (dB) dB[bOff] += g * db(A[aOff], B[bOff]);
+    if (aC && bC) {
+        int j = start;
+        for (; j + VEC_DIMS <= end; j += VEC_DIMS) {
+            Vec a = VecLoad(A + j);
+            Vec b = VecLoad(B + j);
+            Vec g = VecLoad(dout + j);
+            if (dA) VecStore(dA + j, VecFma(g, dav(a, b), VecLoad(dA + j)));
+            if (dB) VecStore(dB + j, VecFma(g, dbv(a, b), VecLoad(dB + j)));
+        }
+        if (j < end) {
+            Entry x[VEC_DIMS], y[VEC_DIMS], g[VEC_DIMS], r[VEC_DIMS], old[VEC_DIMS];
+            int tail = end - j;
+            for (int t = 0; t < VEC_DIMS; t++) {
+                x[t] = t < tail ? A[j + t] : 1.0f;
+                y[t] = t < tail ? B[j + t] : 1.0f;
+                g[t] = t < tail ? dout[j + t] : 0.0f;
+            }
+            if (dA) {
+                for (int t = 0; t < VEC_DIMS; t++)
+                    old[t] = t < tail ? dA[j + t] : 0.0f;
+                VecStore(r, VecFma(VecLoad(g), dav(VecLoad(x), VecLoad(y)), VecLoad(old)));
+                for (int t = 0; t < tail; t++)
+                    dA[j + t] = r[t];
+            }
+            if (dB) {
+                for (int t = 0; t < VEC_DIMS; t++)
+                    old[t] = t < tail ? dB[j + t] : 0.0f;
+                VecStore(r, VecFma(VecLoad(g), dbv(VecLoad(x), VecLoad(y)), VecLoad(old)));
+                for (int t = 0; t < tail; t++)
+                    dB[j + t] = r[t];
+            }
+        }
+        return;
+    }
+    for (int j = start; j < end; j += VEC_DIMS) {
+        Entry x[VEC_DIMS], y[VEC_DIMS], g[VEC_DIMS], r[VEC_DIMS];
+        int aOffs[VEC_DIMS], bOffs[VEC_DIMS];
+        int tail = end - j < VEC_DIMS ? end - j : VEC_DIMS;
+        for (int t = 0; t < VEC_DIMS; t++) {
+            int i = j + t;
+            aOffs[t] = 0;
+            bOffs[t] = 0;
+            x[t] = 1.0f;
+            y[t] = 1.0f;
+            g[t] = 0.0f;
+            if (t < tail) {
+                aOffs[t] = aC ? i : unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
+                bOffs[t] = bC ? i : unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
+                x[t] = A[aOffs[t]];
+                y[t] = B[bOffs[t]];
+                g[t] = dout[i];
+            }
+        }
+        if (dA) {
+            VecStore(r, VecMul(VecLoad(g), dav(VecLoad(x), VecLoad(y))));
+            for (int t = 0; t < tail; t++)
+                dA[aOffs[t]] += r[t];
+        }
+        if (dB) {
+            VecStore(r, VecMul(VecLoad(g), dbv(VecLoad(x), VecLoad(y))));
+            for (int t = 0; t < tail; t++)
+                dB[bOffs[t]] += r[t];
+        }
     }
 }
 
