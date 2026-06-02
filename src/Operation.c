@@ -8,27 +8,18 @@
 #include "ThreadPool.h"
 #include "Vec.h"
 
-// Microkernel tile sizes. NR tracks the SIMD width, MR keeps the accumulator tile in registers.
-#if !defined(SIMD)
-#define MR 4
-#define NR 8
-#elif defined(__AVX512F__)
-#define MR 8
-#define NR 16
-#elif defined(__AVX2__)
-#define MR 6
-#define NR 16
-#endif
-
-#if defined(SIMD)
-#define NRV (NR / VEC_DIMS)
-#endif
+// An MR x NRV block of vector registers, sized to fit the register file
+#define NRV 2
+#define NR  (NRV * VEC_DIMS)
+#define MR  ((VEC_CARD - NRV - 1) / NRV)
 
 // Cache block sizes for the temporary packed A/B blocks used by GEMM
 #define KC 256
 #define NC (NR * 16)
 #define MC (MR * 16)
-#define PARALLEL (1 << 18) // Parallel threshold
+
+// Parallel threshold
+#define PARALLEL (1 << 18)
 
 // Strided matrix view of tensor data
 typedef struct { Entry *data; int sRow, sCol; } Matrix;
@@ -176,7 +167,6 @@ static void packA(Entry *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock)
 // Compute one packed MR x NR tile and add the valid region back into C
 static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, int nValid)
 {
-#if defined(SIMD)
     Vec acc[MR][NRV];
     for (int mr = 0; mr < MR; mr++)
         for (int v = 0; v < NRV; v++)
@@ -200,19 +190,6 @@ static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, 
     for (int mr = 0; mr < mValid; mr++)
         for (int nr = 0; nr < nValid; nr++)
             C.data[mr * C.sRow + nr * C.sCol] += tile[mr][nr];
-#else
-    Entry acc[MR][NR] = {{0}};
-    for (int p = 0; p < kBlock; p++) {
-        Entry *a = Ap + p * MR;
-        Entry *b = Bp + p * NR;
-        for (int mr = 0; mr < MR; mr++)
-            for (int nr = 0; nr < NR; nr++)
-                acc[mr][nr] += a[mr] * b[nr];
-    }
-    for (int mr = 0; mr < mValid; mr++)
-        for (int nr = 0; nr < nValid; nr++)
-            C.data[mr * C.sRow + nr * C.sCol] += acc[mr][nr];
-#endif
 }
 
 // cache-blocked packed GEMM

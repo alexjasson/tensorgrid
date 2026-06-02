@@ -8,6 +8,7 @@
 
 typedef __m512 Vec;
 #define VEC_DIMS 16
+#define VEC_CARD 32
 static inline Vec   VecLoad(const float *p)        { return _mm512_loadu_ps(p); }
 static inline void  VecStore(float *p, Vec x)      { _mm512_storeu_ps(p, x); }
 static inline Vec   VecBcast(float x)              { return _mm512_set1_ps(x); }
@@ -32,6 +33,7 @@ static inline float VecHsum(Vec v)                 { return _mm512_reduce_add_ps
 
 typedef __m256 Vec;
 #define VEC_DIMS 8
+#define VEC_CARD 16
 static inline Vec   VecLoad(const float *p)        { return _mm256_loadu_ps(p); }
 static inline void  VecStore(float *p, Vec x)      { _mm256_storeu_ps(p, x); }
 static inline Vec   VecBcast(float x)              { return _mm256_set1_ps(x); }
@@ -62,6 +64,7 @@ static inline float VecHsum(Vec v)
 
 typedef float Vec;
 #define VEC_DIMS 1
+#define VEC_CARD 16
 static inline Vec   VecLoad(const float *p)        { return *p; }
 static inline void  VecStore(float *p, Vec x)      { *p = x; }
 static inline Vec   VecBcast(float x)              { return x; }
