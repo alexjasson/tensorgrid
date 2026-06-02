@@ -81,21 +81,39 @@ static Vec dgeluV(Vec v)
     return VecAdd(t1, t2);
 }
 
-Unary  RELU     = { relu,     drelu,    (UnaryVec)reluV,     (UnaryVec)dreluV     };
-Unary  SIGMOID  = { sigmoid,  dsigmoid, (UnaryVec)sigmoidV,  (UnaryVec)dsigmoidV  };
-Unary  TANH     = { tanhe,    dtanhe,   (UnaryVec)tanhV,     (UnaryVec)dtanhV     };
-Unary  LOG      = { loge,     dloge,    (UnaryVec)logV,      (UnaryVec)dlogV      };
-Unary  EXP      = { expe,     expe,     (UnaryVec)expV,      (UnaryVec)expV      };
-Unary  NEGATE   = { negate,   minusOne, (UnaryVec)negateV,   (UnaryVec)dnegateV   };
-Unary  IDENTITY = { identity, one,      (UnaryVec)identityV, (UnaryVec)didentityV };
-Unary  SQRT     = { sqrte,    dsqrte,   (UnaryVec)sqrtV,     (UnaryVec)dsqrtV     };
-Unary  GELU     = { gelu,     dgelu,    (UnaryVec)geluV,     (UnaryVec)dgeluV     };
-Binary ADD      = { add,      ones,      ones      };
-Binary SUBTRACT = { subtract, ones,      minusOnes };
-Binary MULTIPLY = { multiply, second,    first     };
-Binary DIVIDE   = { divide,   divideDa,  divideDb  };
-Binary MAX      = { max,      maxDa,     maxDb     };
-Binary MIN      = { minf,     minDa,     minDb     };
+// Binary functions and partial derivatives for vectors
+static Vec addV(Vec a, Vec b)       { return VecAdd(a, b); }
+static Vec subtractV(Vec a, Vec b)  { return VecSub(a, b); }
+static Vec multiplyV(Vec a, Vec b)  { return VecMul(a, b); }
+static Vec divideV(Vec a, Vec b)    { return VecDiv(a, b); }
+static Vec maxV(Vec a, Vec b)       { return VecMax(a, b); }
+static Vec firstV(Vec a, Vec b)     { (void)b; return a; }
+static Vec secondV(Vec a, Vec b)    { (void)a; return b; }
+static Vec onesV(Vec a, Vec b)      { (void)a; (void)b; return VecBcast(1.0f); }
+static Vec minusOnesV(Vec a, Vec b) { (void)a; (void)b; return VecBcast(-1.0f); }
+static Vec divideDaV(Vec a, Vec b)  { (void)a; return VecDiv(VecBcast(1.0f), b); }
+static Vec divideDbV(Vec a, Vec b)  { return VecSub(VecZero(), VecDiv(a, VecMul(b, b))); }
+static Vec maxDaV(Vec a, Vec b)     { return VecSub(VecBcast(1.0f), VecGt0(VecSub(b, a))); }
+static Vec maxDbV(Vec a, Vec b)     { return VecGt0(VecSub(b, a)); }
+static Vec minV(Vec a, Vec b)       { return VecMin(a, b); }
+static Vec minDaV(Vec a, Vec b)     { return VecSub(VecBcast(1.0f), VecGt0(VecSub(a, b))); }
+static Vec minDbV(Vec a, Vec b)     { return VecGt0(VecSub(a, b)); }
+
+Unary  RELU     = { relu,     drelu,                (UnaryVec)reluV,      (UnaryVec)dreluV     };
+Unary  SIGMOID  = { sigmoid,  dsigmoid,             (UnaryVec)sigmoidV,   (UnaryVec)dsigmoidV  };
+Unary  TANH     = { tanhe,    dtanhe,               (UnaryVec)tanhV,      (UnaryVec)dtanhV     };
+Unary  LOG      = { loge,     dloge,                (UnaryVec)logV,       (UnaryVec)dlogV      };
+Unary  EXP      = { expe,     expe,                 (UnaryVec)expV,       (UnaryVec)expV       };
+Unary  NEGATE   = { negate,   minusOne,             (UnaryVec)negateV,    (UnaryVec)dnegateV   };
+Unary  IDENTITY = { identity, one,                  (UnaryVec)identityV,  (UnaryVec)didentityV };
+Unary  SQRT     = { sqrte,    dsqrte,               (UnaryVec)sqrtV,      (UnaryVec)dsqrtV     };
+Unary  GELU     = { gelu,     dgelu,                (UnaryVec)geluV,      (UnaryVec)dgeluV     };
+Binary ADD      = { add,      ones,      ones,      (BinaryVec)addV,      (BinaryVec)onesV,      (BinaryVec)onesV      };
+Binary SUBTRACT = { subtract, ones,      minusOnes, (BinaryVec)subtractV, (BinaryVec)onesV,      (BinaryVec)minusOnesV };
+Binary MULTIPLY = { multiply, second,    first,     (BinaryVec)multiplyV, (BinaryVec)secondV,    (BinaryVec)firstV     };
+Binary DIVIDE   = { divide,   divideDa,  divideDb,  (BinaryVec)divideV,   (BinaryVec)divideDaV,  (BinaryVec)divideDbV  };
+Binary MAX      = { max,      maxDa,     maxDb,     (BinaryVec)maxV,      (BinaryVec)maxDaV,     (BinaryVec)maxDbV     };
+Binary MIN      = { minf,     minDa,     minDb,     (BinaryVec)minV,      (BinaryVec)minDaV,     (BinaryVec)minDbV     };
 
 typedef struct optimizer {
     Entry *m;     // SGD momentum or Adam first moment

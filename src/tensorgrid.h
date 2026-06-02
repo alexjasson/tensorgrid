@@ -11,8 +11,9 @@ typedef float Entry;                         // Change data type of entry as nee
 typedef Entry (*UnaryScalar)(Entry);         // y = f(a) on an entry in A
 typedef Entry (*BinaryScalar)(Entry, Entry); // y = f(a,b) on entries in A and B
 typedef void  (*UnaryVec)(void);
+typedef void  (*BinaryVec)(void);
 typedef struct { UnaryScalar f, da; UnaryVec fv, dav; } Unary;
-typedef struct { BinaryScalar f; BinaryScalar da; BinaryScalar db; } Binary; // y = f(a,b), dy/da and dy/db
+typedef struct { BinaryScalar f, da, db; BinaryVec fv, dav, dbv; } Binary; // y = f(a,b), dy/da and dy/db
 
 // Unary/Binary functions to be applied to tensors - add more as needed
 extern Unary RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
