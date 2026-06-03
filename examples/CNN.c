@@ -67,22 +67,22 @@ int main(void)
     TensorScale(xTest,  1.0f / 255.0f);
 
     // Create and initialize convolution filters, weights and biases
-    Parameters p = ParametersNew();
+    TensorArray parameters = TensorArrayNew();
     Model m;
-    m.K_1 = ParametersAdd(p, 4, (int[]){C1_CHANNELS,  1, 3, 3});          // [16, 1, 3, 3]
-    m.b_1 = ParametersAdd(p, 3, (int[]){C1_CHANNELS, 1, 1});              // [16, 1, 1]
-    m.K_2 = ParametersAdd(p, 4, (int[]){C2_CHANNELS, C1_CHANNELS, 3, 3}); // [32, 16, 3, 3]
-    m.b_2 = ParametersAdd(p, 3, (int[]){C2_CHANNELS, 1, 1});              // [32, 1, 1]
-    m.W_h = ParametersAdd(p, 2, (int[]){FEATURES, HIDDEN_SIZE});          // [32*7*7, 128]
-    m.b_h = ParametersAdd(p, 1, (int[]){HIDDEN_SIZE});                    // [128]
-    m.W_y = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES});       // [128, 10]
-    m.b_y = ParametersAdd(p, 1, (int[]){NUM_CLASSES});                    // [10]
+    m.K_1 = TensorArrayAdd(parameters, 4, (int[]){C1_CHANNELS,  1, 3, 3});          // [16, 1, 3, 3]
+    m.b_1 = TensorArrayAdd(parameters, 3, (int[]){C1_CHANNELS, 1, 1});              // [16, 1, 1]
+    m.K_2 = TensorArrayAdd(parameters, 4, (int[]){C2_CHANNELS, C1_CHANNELS, 3, 3}); // [32, 16, 3, 3]
+    m.b_2 = TensorArrayAdd(parameters, 3, (int[]){C2_CHANNELS, 1, 1});              // [32, 1, 1]
+    m.W_h = TensorArrayAdd(parameters, 2, (int[]){FEATURES, HIDDEN_SIZE});          // [32*7*7, 128]
+    m.b_h = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE});                    // [128]
+    m.W_y = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES});       // [128, 10]
+    m.b_y = TensorArrayAdd(parameters, 1, (int[]){NUM_CLASSES});                    // [10]
     TensorXavier(m.K_1); TensorXavier(m.K_2);
     TensorXavier(m.W_h); TensorXavier(m.W_y);
 
     printf("Train Samples: %d\n", trainSamples);
     printf("Test Samples:  %d\n", testSamples);
-    printf("Parameters:    %d\n\n", ParametersCount(p));
+    printf("Parameters:    %d\n\n", TensorArraySize(parameters));
 
     for (int epoch = 1; epoch <= EPOCHS; epoch++) {
         // Shuffle training data using epoch as seed
@@ -100,7 +100,7 @@ int main(void)
             Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f);         // [] (Scalar)
 
             TensorBackward(loss);
-            ParametersSGD(p, LR, MOMENTUM);
+            TensorArraySGD(parameters, LR, MOMENTUM);
 
             if (((batch + 1) % LOG == 0) || (batch + 1 == trainBatches)) {
                 printf("Epoch %2d | Batch %3d/%d | Loss: ", epoch, batch + 1, trainBatches);
@@ -129,7 +129,7 @@ int main(void)
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
     }
 
-    ParametersFree(p);
+    TensorArrayFree(parameters);
     TensorFree(xTrain); TensorFree(yTrain);
     TensorFree(xTest);  TensorFree(yTest);
     return 0;

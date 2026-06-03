@@ -20,7 +20,6 @@ extern Binary ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
 
 typedef float Entry; // Change data type of entry as needed
 typedef struct optimizer Optimizer;
-typedef struct parameters *Parameters;
 
 // Tensor representation
 typedef struct {
@@ -32,6 +31,8 @@ typedef struct {
     Optimizer *optimizer; // Optimizer state, NULL if no autograd
     int   *refcount;      // Number of references, NULL for views
 } Tensor;
+
+typedef struct tensorArray *TensorArray; // Array of tensors intended to be used for model parameters
 
 
 /*=============================================================================================
@@ -46,15 +47,14 @@ typedef struct {
 Tensor TensorNew(int dimensions, int *shape, int autograd);
 
 /*
- * Creates an empty parameter registry.
+ * Creates an empty tensor array.
  */
-Parameters ParametersNew(void);
+TensorArray TensorArrayNew(void);
 
 /*
- * Allocates a new autograd-enabled tensor, registers it in the collection and
- * returns it.
+ * Allocates a new autograd-enabled tensor, adds it to the array and returns it.
  */
-Tensor ParametersAdd(Parameters p, int dimensions, int *shape);
+Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape);
 
 /*
  * Frees a tensor from memory.
@@ -62,9 +62,9 @@ Tensor ParametersAdd(Parameters p, int dimensions, int *shape);
 void TensorFree(Tensor A);
 
 /*
- * Frees every registered tensor and the registry itself.
+ * Frees every tensor and the tensor array itself
  */
-void ParametersFree(Parameters p);
+void TensorArrayFree(TensorArray ta);
 
 /*
  * Reads a .npy file and returns it as a tensor. Data is cast to the Entry
@@ -88,9 +88,9 @@ void TensorWrite(Tensor A, char *path);
 int TensorSize(Tensor A);
 
 /*
- * Adds the total number of entries in each registered tensor and returns it.
+ * Adds the total number of entries in each tensor and returns it.
  */
-int ParametersCount(Parameters p);
+int TensorArraySize(TensorArray ta);
 
 /*
  * Returns the size of the tensor along the given axis.
@@ -422,9 +422,9 @@ void TensorBackward(Tensor loss);
 void TensorSGD(Tensor A, float lr, float momentum);
 
 /*
- * Applies a single SGD optimizer step to every registered tensor.
+ * Applies a single SGD optimizer step to every tensor in the array.
  */
-void ParametersSGD(Parameters p, float lr, float momentum);
+void TensorArraySGD(TensorArray ta, float lr, float momentum);
 
 /*
  * Adam optimizer with optional weight decay. Set weightDecay to 0 for Adam
@@ -437,8 +437,8 @@ void ParametersSGD(Parameters p, float lr, float momentum);
 void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, float weightDecay);
 
 /*
- * Applies a single Adam optimizer step to every registered tensor.
+ * Applies a single Adam optimizer step to every tensor in the array.
  */
-void ParametersAdam(Parameters p, float lr, float beta1, float beta2, float epsilon, float weightDecay);
+void TensorArrayAdam(TensorArray ta, float lr, float beta1, float beta2, float epsilon, float weightDecay);
 
 #endif

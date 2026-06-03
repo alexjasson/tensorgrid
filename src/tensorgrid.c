@@ -35,7 +35,7 @@ typedef struct optimizer {
     int    t;     // Adam timestep
 } optimizer;
 
-struct parameters {
+struct tensorArray {
     DynamicArray tensors;
 };
 
@@ -47,11 +47,11 @@ int TensorSize(Tensor A)
     return size;
 }
 
-int ParametersCount(Parameters p)
+int TensorArraySize(TensorArray ta)
 {
     int total = 0;
-    for (int i = 0; i < DynamicArraySize(p->tensors); i++)
-        total += TensorSize(*(Tensor *)DynamicArrayGet(p->tensors, i));
+    for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
+        total += TensorSize(*(Tensor *)DynamicArrayGet(ta->tensors, i));
     return total;
 }
 
@@ -85,17 +85,17 @@ Tensor TensorNew(int dimensions, int *shape, int autograd)
     return t;
 }
 
-Parameters ParametersNew(void)
+TensorArray TensorArrayNew(void)
 {
-    Parameters p = malloc(sizeof(struct parameters));
-    p->tensors = DynamicArrayNew(sizeof(Tensor));
-    return p;
+    TensorArray ta = malloc(sizeof(struct tensorArray));
+    ta->tensors = DynamicArrayNew(sizeof(Tensor));
+    return ta;
 }
 
-Tensor ParametersAdd(Parameters p, int dimensions, int *shape)
+Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape)
 {
     Tensor t = TensorNew(dimensions, shape, TRUE);
-    DynamicArrayPush(p->tensors, &t);
+    DynamicArrayPush(ta->tensors, &t);
     return t;
 }
 
@@ -114,12 +114,12 @@ void TensorFree(Tensor A)
     free(A.refcount);
 }
 
-void ParametersFree(Parameters p)
+void TensorArrayFree(TensorArray ta)
 {
-    for (int i = 0; i < DynamicArraySize(p->tensors); i++)
-        TensorFree(*(Tensor *)DynamicArrayGet(p->tensors, i));
-    DynamicArrayFree(p->tensors);
-    free(p);
+    for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
+        TensorFree(*(Tensor *)DynamicArrayGet(ta->tensors, i));
+    DynamicArrayFree(ta->tensors);
+    free(ta);
 }
 
 Tensor TensorSlice(Tensor A, int index, int length)
@@ -758,10 +758,10 @@ void TensorSGD(Tensor A, float lr, float momentum)
     }
 }
 
-void ParametersSGD(Parameters p, float lr, float momentum)
+void TensorArraySGD(TensorArray ta, float lr, float momentum)
 {
-    for (int i = 0; i < DynamicArraySize(p->tensors); i++)
-        TensorSGD(*(Tensor *)DynamicArrayGet(p->tensors, i), lr, momentum);
+    for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
+        TensorSGD(*(Tensor *)DynamicArrayGet(ta->tensors, i), lr, momentum);
 }
 
 // base raised to a non-negative integer exponent
@@ -803,10 +803,10 @@ void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, flo
     }
 }
 
-void ParametersAdam(Parameters p, float lr, float beta1, float beta2, float epsilon, float weightDecay)
+void TensorArrayAdam(TensorArray ta, float lr, float beta1, float beta2, float epsilon, float weightDecay)
 {
-    for (int i = 0; i < DynamicArraySize(p->tensors); i++)
-        TensorAdam(*(Tensor *)DynamicArrayGet(p->tensors, i), lr, beta1, beta2, epsilon, weightDecay);
+    for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
+        TensorAdam(*(Tensor *)DynamicArrayGet(ta->tensors, i), lr, beta1, beta2, epsilon, weightDecay);
 }
 
 void TensorBackward(Tensor loss)

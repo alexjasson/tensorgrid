@@ -101,26 +101,26 @@ int main(void)
     Tensor yTrain = TensorSlice(train, SEQ_LENGTH, trainSamples);
     Tensor yTest  = TensorSlice(test,  SEQ_LENGTH, testSamples);
 
-    Parameters p = ParametersNew();
+    TensorArray parameters = TensorArrayNew();
     Model m;
-    m.E   = ParametersAdd(p, 2, (int[]){NUM_CLASSES, HIDDEN_SIZE});
-    m.U_f = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
-    m.b_f = ParametersAdd(p, 1, (int[]){HIDDEN_SIZE});
-    m.U_i = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
-    m.b_i = ParametersAdd(p, 1, (int[]){HIDDEN_SIZE});
-    m.U_o = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
-    m.b_o = ParametersAdd(p, 1, (int[]){HIDDEN_SIZE});
-    m.U_c = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
-    m.b_c = ParametersAdd(p, 1, (int[]){HIDDEN_SIZE});
-    m.W_y = ParametersAdd(p, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES});
-    m.b_y = ParametersAdd(p, 1, (int[]){NUM_CLASSES});
+    m.E   = TensorArrayAdd(parameters, 2, (int[]){NUM_CLASSES, HIDDEN_SIZE});
+    m.U_f = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
+    m.b_f = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE});
+    m.U_i = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
+    m.b_i = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE});
+    m.U_o = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
+    m.b_o = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE});
+    m.U_c = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
+    m.b_c = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE});
+    m.W_y = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES});
+    m.b_y = TensorArrayAdd(parameters, 1, (int[]){NUM_CLASSES});
     TensorXavier(m.E);
     TensorXavier(m.U_f); TensorXavier(m.U_i); TensorXavier(m.U_o); TensorXavier(m.U_c);
     TensorXavier(m.W_y);
 
     printf("Train Samples: %d\n", trainSamples);
     printf("Test Samples:  %d\n", testSamples);
-    printf("Parameters:    %d\n\n", ParametersCount(p));
+    printf("Parameters:    %d\n\n", TensorArraySize(parameters));
 
     for (int epoch = 1; epoch <= EPOCHS; epoch++) {
         Tensor xShuffled = TensorShuffle(xTrain, epoch); // [trainSamples, SEQ_LENGTH]
@@ -136,7 +136,7 @@ int main(void)
             Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f);            // [] (Scalar)
 
             TensorBackward(loss);
-            ParametersAdam(p, LR, BETA1, BETA2, EPSILON, 0);
+            TensorArrayAdam(parameters, LR, BETA1, BETA2, EPSILON, 0);
 
             if (((batch + 1) % LOG == 0) || (batch + 1 == trainBatches)) {
                 printf("Epoch %2d | Batch %4d/%d | Loss: ", epoch, batch + 1, trainBatches);
@@ -165,7 +165,7 @@ int main(void)
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
     }
 
-    ParametersFree(p);
+    TensorArrayFree(parameters);
     TensorFree(xTrain); TensorFree(xTest);
     TensorFree(train); TensorFree(test);
     return 0;

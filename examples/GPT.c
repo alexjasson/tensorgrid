@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <math.h>
 #include "tensorgrid.h"
 
 #define NUM_CLASSES 65
@@ -59,24 +60,24 @@ typedef struct {
     Tensor g_LNf, b_LNf; // [EMBED_SIZE], [EMBED_SIZE]
 } Model;
 
-static void newBlock(Parameters p, Block *b)
+static void newBlock(TensorArray parameters, Block *b)
 {
-    b->g_LN1 = ParametersAdd(p, 1, (int[]){EMBED_SIZE});
-    b->b_LN1 = ParametersAdd(p, 1, (int[]){EMBED_SIZE});
-    b->W_q   = ParametersAdd(p, 2, (int[]){EMBED_SIZE, EMBED_SIZE});
-    b->b_q   = ParametersAdd(p, 1, (int[]){EMBED_SIZE});
-    b->W_k   = ParametersAdd(p, 2, (int[]){EMBED_SIZE, EMBED_SIZE});
-    b->b_k   = ParametersAdd(p, 1, (int[]){EMBED_SIZE});
-    b->W_v   = ParametersAdd(p, 2, (int[]){EMBED_SIZE, EMBED_SIZE});
-    b->b_v   = ParametersAdd(p, 1, (int[]){EMBED_SIZE});
-    b->W_o   = ParametersAdd(p, 2, (int[]){EMBED_SIZE, EMBED_SIZE});
-    b->b_o   = ParametersAdd(p, 1, (int[]){EMBED_SIZE});
-    b->g_LN2 = ParametersAdd(p, 1, (int[]){EMBED_SIZE});
-    b->b_LN2 = ParametersAdd(p, 1, (int[]){EMBED_SIZE});
-    b->W_1   = ParametersAdd(p, 2, (int[]){EMBED_SIZE, MLP_HIDDEN});
-    b->b_1   = ParametersAdd(p, 1, (int[]){MLP_HIDDEN});
-    b->W_2   = ParametersAdd(p, 2, (int[]){MLP_HIDDEN, EMBED_SIZE});
-    b->b_2   = ParametersAdd(p, 1, (int[]){EMBED_SIZE});
+    b->g_LN1 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE});
+    b->b_LN1 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE});
+    b->W_q   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE});
+    b->b_q   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE});
+    b->W_k   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE});
+    b->b_k   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE});
+    b->W_v   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE});
+    b->b_v   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE});
+    b->W_o   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE});
+    b->b_o   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE});
+    b->g_LN2 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE});
+    b->b_LN2 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE});
+    b->W_1   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, MLP_HIDDEN});
+    b->b_1   = TensorArrayAdd(parameters, 1, (int[]){MLP_HIDDEN});
+    b->W_2   = TensorArrayAdd(parameters, 2, (int[]){MLP_HIDDEN, EMBED_SIZE});
+    b->b_2   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE});
     TensorFill(b->g_LN1, 1.0f); TensorFill(b->g_LN2, 1.0f);
     TensorXavier(b->W_q); TensorXavier(b->W_k); TensorXavier(b->W_v); TensorXavier(b->W_o);
     TensorXavier(b->W_1); TensorXavier(b->W_2);
@@ -98,7 +99,7 @@ static Tensor forwardBlock(Tensor H, Block *b)
     TensorFree(Q); TensorFree(K); TensorFree(K_T);
 
     Tensor scale = TensorNew(scores.dimensions, scores.shape, FALSE);
-    TensorFill(scale, 1.0f / SQRT.f((float)EMBED_SIZE));
+    TensorFill(scale, 1.0f / sqrtf((float)EMBED_SIZE));
     Tensor scaled = TensorHadamard(scores, scale);                         // [N, T, T]
     TensorFree(scores); TensorFree(scale);
 
@@ -159,19 +160,19 @@ int main(void)
     Tensor xTest  = TensorRestride(test,  2, (int[]){testSamples,  SEQ_LENGTH}, (int[]){1, 1}, 0);
     Tensor yTest  = TensorRestride(test,  2, (int[]){testSamples,  SEQ_LENGTH}, (int[]){1, 1}, 1);
 
-    Parameters p = ParametersNew();
+    TensorArray parameters = TensorArrayNew();
     Model m;
-    m.E = ParametersAdd(p, 2, (int[]){NUM_CLASSES, EMBED_SIZE});
-    m.P = ParametersAdd(p, 2, (int[]){SEQ_LENGTH, EMBED_SIZE});
-    for (int l = 0; l < NUM_LAYERS; l++) newBlock(p, &m.blocks[l]);
-    m.g_LNf = ParametersAdd(p, 1, (int[]){EMBED_SIZE});
-    m.b_LNf = ParametersAdd(p, 1, (int[]){EMBED_SIZE});
+    m.E = TensorArrayAdd(parameters, 2, (int[]){NUM_CLASSES, EMBED_SIZE});
+    m.P = TensorArrayAdd(parameters, 2, (int[]){SEQ_LENGTH, EMBED_SIZE});
+    for (int l = 0; l < NUM_LAYERS; l++) newBlock(parameters, &m.blocks[l]);
+    m.g_LNf = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE});
+    m.b_LNf = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE});
     TensorXavier(m.E); TensorXavier(m.P);
     TensorFill(m.g_LNf, 1.0f);
 
     printf("Train Samples: %d\n", trainSamples);
     printf("Test Samples:  %d\n", testSamples);
-    printf("Parameters:    %d\n\n", ParametersCount(p));
+    printf("Parameters:    %d\n\n", TensorArraySize(parameters));
 
     for (int epoch = 1; epoch <= EPOCHS; epoch++) {
         Tensor xShuffled = TensorShuffle(xTrain, epoch); // [trainSamples, SEQ_LENGTH]
@@ -187,7 +188,7 @@ int main(void)
             Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f); // [] (Scalar)
 
             TensorBackward(loss);
-            ParametersAdam(p, LR, BETA1, BETA2, EPSILON, 0);
+            TensorArrayAdam(parameters, LR, BETA1, BETA2, EPSILON, 0);
 
             if (((batch + 1) % LOG == 0) || (batch + 1 == trainBatches)) {
                 printf("Epoch %2d | Batch %4d/%d | Loss: ", epoch, batch + 1, trainBatches);
@@ -216,7 +217,7 @@ int main(void)
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
     }
 
-    ParametersFree(p);
+    TensorArrayFree(parameters);
     TensorFree(xTrain); TensorFree(xTest);
     TensorFree(train);  TensorFree(test);
     return 0;
