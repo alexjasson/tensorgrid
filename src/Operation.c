@@ -8,7 +8,7 @@
 #include "ThreadPool.h"
 #include "Vector.h"
 
-static int min(int a, int b) { return a < b ? a : b; }
+static int imin(int a, int b) { return a < b ? a : b; }
 
 // An MR x NRV block of vector registers, used by microkernel
 #define NRV 2
@@ -199,19 +199,19 @@ static void gemm(int N, int K, Matrix A, Matrix B, Matrix C, int r0, int r1)
     Entry packBufB[NC * KC];
 
     for (int j0 = 0; j0 < N; j0 += NC) {
-        int nBlock = min(NC, N - j0);
+        int nBlock = imin(NC, N - j0);
         for (int p0 = 0; p0 < K; p0 += KC) {
-            int kBlock = min(KC, K - p0);
+            int kBlock = imin(KC, K - p0);
             packB(packBufB, B, p0, kBlock, j0, nBlock);
             for (int i0 = r0; i0 < r1; i0 += MC) {
-                int mBlock = min(MC, r1 - i0);
+                int mBlock = imin(MC, r1 - i0);
                 packA(packBufA, A, i0, mBlock, p0, kBlock);
                 for (int jr = 0; jr < nBlock; jr += NR) {
                     Entry *Bpanel = packBufB + (size_t)(jr / NR) * kBlock * NR;
                     for (int ir = 0; ir < mBlock; ir += MR) {
                         Entry *Apanel = packBufA + (size_t)(ir / MR) * kBlock * MR;
                         Matrix Ctile = { C.data + (size_t)(i0 + ir) * C.sRow + (size_t)(j0 + jr) * C.sCol, C.sRow, C.sCol };
-                        microKernel(Apanel, Bpanel, kBlock, Ctile, min(MR, mBlock - ir), min(NR, nBlock - jr));
+                        microKernel(Apanel, Bpanel, kBlock, Ctile, imin(MR, mBlock - ir), imin(NR, nBlock - jr));
                     }
                 }
             }

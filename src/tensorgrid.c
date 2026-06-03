@@ -11,47 +11,7 @@
 #include "utility.h"
 #include "MemoryPool.h"
 #include "Vector.h"
-
-// Unary functions and derivatives
-static Entry relu(Entry a)     { return a > 0.0f ? a : 0.0f; }
-static Entry drelu(Entry a)    { return a > 0.0f ? 1.0f : 0.0f; }
-static Entry sigmoid(Entry a)  { return 1.0f / (1.0f + fastExp(-a)); }
-static Entry dsigmoid(Entry a) { Entry s = sigmoid(a); return s * (1.0f - s); }
-static Entry loge(Entry a)     { return fastLog(a); }
-static Entry dloge(Entry a)    { return 1.0f / a; }
-static Entry negate(Entry a)   { return -a; }
-static Entry identity(Entry a) { return a; }
-static Entry one(Entry a)      { (void)a; return  1.0f; }
-static Entry minusOne(Entry a) { (void)a; return -1.0f; }
-static Entry expe(Entry a)     { return fastExp(a); }
-static Entry tanhe(Entry a)    { return 2.0f / (1.0f + fastExp(-2.0f * a)) - 1.0f; }
-static Entry dtanhe(Entry a)   { Entry t = tanhe(a); return 1.0f - t * t; }
-static Entry sqrte(Entry a)    { return __builtin_sqrtf(a); }
-static Entry dsqrte(Entry a)   { return 0.5f / sqrte(a); }
-static Entry gelu(Entry a)     { return 0.5f * a * (1.0f + tanhe(sqrte(2.0f / PI) * (a + 0.044715f * a * a * a))); }
-static Entry dgelu(Entry a)
-{
-    float u = tanhe(sqrte(2.0f / PI) * (a + 0.044715f * a * a * a));
-    return 0.5f * (1.0f + u) + 0.5f * a * (1.0f - u * u) * sqrte(2.0f / PI) * (1.0f + 0.134145f * a * a);
-}
-
-// Binary functions and partial derivatives
-static Entry add(Entry a, Entry b)       { return a + b; }
-static Entry subtract(Entry a, Entry b)  { return a - b; }
-static Entry multiply(Entry a, Entry b)  { return a * b; }
-static Entry divide(Entry a, Entry b)    { return a / b; }
-static Entry max(Entry a, Entry b)       { return a > b ? a : b; }
-static Entry first(Entry a, Entry b)     { (void)b; return a; }
-static Entry second(Entry a, Entry b)    { (void)a; return b; }
-static Entry ones(Entry a, Entry b)      { (void)a; (void)b; return  1.0f; }
-static Entry minusOnes(Entry a, Entry b) { (void)a; (void)b; return -1.0f; }
-static Entry divideDa(Entry a, Entry b)  { (void)a; return 1.0f / b; }
-static Entry divideDb(Entry a, Entry b)  { return -a / (b * b); }
-static Entry maxDa(Entry a, Entry b)     { return a >= b ? 1.0f : 0.0f; }
-static Entry maxDb(Entry a, Entry b)     { return b > a ? 1.0f : 0.0f; }
-static Entry min(Entry a, Entry b)       { return a < b ? a : b; }
-static Entry minDa(Entry a, Entry b)     { return a <= b ? 1.0f : 0.0f; }
-static Entry minDb(Entry a, Entry b)     { return b < a ? 1.0f : 0.0f; }
+#include "Scalar.h"
 
 Unary  RELU     = { (f)relu,     (f)drelu,    (f)reluv,     (f)dreluv     };
 Unary  SIGMOID  = { (f)sigmoid,  (f)dsigmoid, (f)sigmoidv,  (f)dsigmoidv  };
@@ -804,6 +764,18 @@ void ParametersSGD(Parameters p, float lr, float momentum)
         TensorSGD(*(Tensor *)DynamicArrayGet(p->tensors, i), lr, momentum);
 }
 
+// base raised to a non-negative integer exponent
+static float powi(float base, int exp)
+{
+    float result = 1.0f;
+    while (exp > 0) {
+        if (exp & 1) result *= base;
+        base *= base;
+        exp >>= 1;
+    }
+    return result;
+}
+
 void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, float weightDecay)
 {
     int size = TensorSize(A);
@@ -819,8 +791,8 @@ void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, flo
     A.optimizer->t++;
     Entry *m = A.optimizer->m;
     Entry *v = A.optimizer->v;
-    float biasM = 1.0f - fastPow(beta1, A.optimizer->t);
-    float biasV = 1.0f - fastPow(beta2, A.optimizer->t);
+    float biasM = 1.0f - powi(beta1, A.optimizer->t);
+    float biasV = 1.0f - powi(beta2, A.optimizer->t);
     for (int i = 0; i < size; i++) {
         Entry g = A.gradients[i];
         m[i] = beta1 * m[i] + (1.0f - beta1) * g;

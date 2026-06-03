@@ -5,7 +5,8 @@
 
 /*
  * The Vector type and it's dimension is determined at compile time from the
- * available SIMD instruction set. Let 
+ * available SIMD instruction set. VECTOR_DIMS is how many floats fit in a
+ * Vector and VECTOR_CARD is how many vector registers are available.
  */
 #if defined(__AVX512F__)
 typedef __m512 Vector;
@@ -45,23 +46,23 @@ Vector VectorGt0(Vector v);
 float  VectorHsum(Vector v);
 
 // Unary activation functions and their derivatives
-Vector reluv(Vector v);
-Vector dreluv(Vector v);
-Vector identityv(Vector v);
-Vector didentityv(Vector v);
-Vector negatev(Vector v);
-Vector dnegatev(Vector v);
-Vector sigmoidv(Vector v);
-Vector dsigmoidv(Vector v);
-Vector tanhv(Vector v);
-Vector dtanhv(Vector v);
-Vector expv(Vector v);
-Vector logv(Vector v);
-Vector dlogv(Vector v);
-Vector sqrtv(Vector v);
-Vector dsqrtv(Vector v);
-Vector geluv(Vector v);
-Vector dgeluv(Vector v);
+Vector reluv(Vector a);
+Vector dreluv(Vector a);
+Vector identityv(Vector a);
+Vector didentityv(Vector a);
+Vector negatev(Vector a);
+Vector dnegatev(Vector a);
+Vector sigmoidv(Vector a);
+Vector dsigmoidv(Vector a);
+Vector tanhv(Vector a);
+Vector dtanhv(Vector a);
+Vector expv(Vector a);
+Vector logv(Vector a);
+Vector dlogv(Vector a);
+Vector sqrtv(Vector a);
+Vector dsqrtv(Vector a);
+Vector geluv(Vector a);
+Vector dgeluv(Vector a);
 
 // Binary functions and their partial derivatives
 Vector addv(Vector a, Vector b);

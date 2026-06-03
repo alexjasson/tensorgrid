@@ -77,12 +77,12 @@ float  VectorHsum(Vector v)                 { return v; }
 
 #endif
 
-// exp(x) with ~1e-6 relative error
-Vector expv(Vector x)
+// exp(a) with ~1e-6 relative error
+Vector expv(Vector a)
 {
-    x = VectorMin(VectorMax(x, VectorBcast(-87.3f)), VectorBcast(88.7f));
-    Vector n = VectorRound(VectorMul(x, VectorBcast(1.4426950408889634f)));
-    Vector r = VectorFnmadd(n, VectorBcast(0.6931471805599453f), x);
+    a = VectorMin(VectorMax(a, VectorBcast(-87.3f)), VectorBcast(88.7f));
+    Vector n = VectorRound(VectorMul(a, VectorBcast(1.4426950408889634f)));
+    Vector r = VectorFnmadd(n, VectorBcast(0.6931471805599453f), a);
     Vector p = VectorBcast(1.0f / 120.0f);
     p = VectorFma(p, r, VectorBcast(1.0f / 24.0f));
     p = VectorFma(p, r, VectorBcast(1.0f / 6.0f));
@@ -92,11 +92,11 @@ Vector expv(Vector x)
     return VectorMul(p, VectorPow2i(n));
 }
 
-// log(x) with ~1e-5 relative error
-Vector logv(Vector x)
+// log(a) with ~1e-5 relative error
+Vector logv(Vector a)
 {
-    Vector e = VectorLog2i(x);
-    Vector m = VectorMantissa(x);
+    Vector e = VectorLog2i(a);
+    Vector m = VectorMantissa(a);
     Vector t = VectorDiv(VectorSub(m, VectorBcast(1.0f)), VectorAdd(m, VectorBcast(1.0f)));
     Vector t2 = VectorMul(t, t);
     Vector p = VectorBcast(1.0f / 7.0f);
@@ -108,28 +108,28 @@ Vector logv(Vector x)
 }
 
 // Unary functions and derivatives for vectors
-Vector reluv(Vector v)      { return VectorMax(v, VectorZero()); }
-Vector dreluv(Vector v)     { return VectorGt0(v); }
-Vector identityv(Vector v)  { return v; }
-Vector didentityv(Vector v) { (void)v; return VectorBcast(1.0f); }
-Vector negatev(Vector v)    { return VectorSub(VectorZero(), v); }
-Vector dnegatev(Vector v)   { (void)v; return VectorBcast(-1.0f); }
-Vector sigmoidv(Vector v)   { return VectorDiv(VectorBcast(1.0f), VectorAdd(VectorBcast(1.0f), expv(VectorSub(VectorZero(), v)))); }
-Vector dsigmoidv(Vector v)  { Vector s = sigmoidv(v); return VectorMul(s, VectorSub(VectorBcast(1.0f), s)); }
-Vector tanhv(Vector v)      { return VectorSub(VectorDiv(VectorBcast(2.0f), VectorAdd(VectorBcast(1.0f), expv(VectorMul(VectorBcast(-2.0f), v)))), VectorBcast(1.0f)); }
-Vector dtanhv(Vector v)     { Vector t = tanhv(v); return VectorSub(VectorBcast(1.0f), VectorMul(t, t)); }
-Vector dlogv(Vector v)      { return VectorDiv(VectorBcast(1.0f), v); }
-Vector sqrtv(Vector v)      { return VectorSqrt(v); }
-Vector dsqrtv(Vector v)     { return VectorDiv(VectorBcast(0.5f), VectorSqrt(v)); }
-static Vector geluArg(Vector v) { return VectorMul(VectorBcast(__builtin_sqrtf(2.0f / PI)), VectorAdd(v, VectorMul(VectorBcast(0.044715f), VectorMul(v, VectorMul(v, v))))); }
-Vector geluv(Vector v)      { return VectorMul(VectorBcast(0.5f), VectorMul(v, VectorAdd(VectorBcast(1.0f), tanhv(geluArg(v))))); }
-Vector dgeluv(Vector v)
+Vector reluv(Vector a)      { return VectorMax(a, VectorZero()); }
+Vector dreluv(Vector a)     { return VectorGt0(a); }
+Vector identityv(Vector a)  { return a; }
+Vector didentityv(Vector a) { (void)a; return VectorBcast(1.0f); }
+Vector negatev(Vector a)    { return VectorSub(VectorZero(), a); }
+Vector dnegatev(Vector a)   { (void)a; return VectorBcast(-1.0f); }
+Vector sigmoidv(Vector a)   { return VectorDiv(VectorBcast(1.0f), VectorAdd(VectorBcast(1.0f), expv(VectorSub(VectorZero(), a)))); }
+Vector dsigmoidv(Vector a)  { Vector s = sigmoidv(a); return VectorMul(s, VectorSub(VectorBcast(1.0f), s)); }
+Vector tanhv(Vector a)      { return VectorSub(VectorDiv(VectorBcast(2.0f), VectorAdd(VectorBcast(1.0f), expv(VectorMul(VectorBcast(-2.0f), a)))), VectorBcast(1.0f)); }
+Vector dtanhv(Vector a)     { Vector t = tanhv(a); return VectorSub(VectorBcast(1.0f), VectorMul(t, t)); }
+Vector dlogv(Vector a)      { return VectorDiv(VectorBcast(1.0f), a); }
+Vector sqrtv(Vector a)      { return VectorSqrt(a); }
+Vector dsqrtv(Vector a)     { return VectorDiv(VectorBcast(0.5f), VectorSqrt(a)); }
+static Vector geluArg(Vector a) { return VectorMul(VectorBcast(__builtin_sqrtf(2.0f / PI)), VectorAdd(a, VectorMul(VectorBcast(0.044715f), VectorMul(a, VectorMul(a, a))))); }
+Vector geluv(Vector a)      { return VectorMul(VectorBcast(0.5f), VectorMul(a, VectorAdd(VectorBcast(1.0f), tanhv(geluArg(a))))); }
+Vector dgeluv(Vector a)
 {
     Vector c = VectorBcast(__builtin_sqrtf(2.0f / PI));
-    Vector u = tanhv(geluArg(v));
+    Vector u = tanhv(geluArg(a));
     Vector t1 = VectorMul(VectorBcast(0.5f), VectorAdd(VectorBcast(1.0f), u));
-    Vector t2 = VectorMul(VectorMul(VectorMul(VectorBcast(0.5f), v), VectorSub(VectorBcast(1.0f), VectorMul(u, u))),
-                VectorMul(c, VectorAdd(VectorBcast(1.0f), VectorMul(VectorBcast(0.134145f), VectorMul(v, v)))));
+    Vector t2 = VectorMul(VectorMul(VectorMul(VectorBcast(0.5f), a), VectorSub(VectorBcast(1.0f), VectorMul(u, u))),
+                VectorMul(c, VectorAdd(VectorBcast(1.0f), VectorMul(VectorBcast(0.134145f), VectorMul(a, a)))));
     return VectorAdd(t1, t2);
 }
 
