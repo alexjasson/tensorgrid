@@ -6,7 +6,7 @@
 typedef struct memoryPool *MemoryPool;
 
 /*
- * Returns the shared process-wide pool, created on first use and destroyed at exit.
+ * Singleton pattern to initialize a memory pool, created on first use and destroyed at exit.
  */
 MemoryPool MemoryPoolGet(void);
 

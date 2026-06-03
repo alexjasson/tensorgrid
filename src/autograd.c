@@ -78,17 +78,17 @@ void autogradBackward(Tensor loss)
     operationArrayClear(arr);
 }
 
-Tensor autogradMap(Unary f, Tensor A)
+Tensor autogradMap(Unary fn, Tensor A)
 {
     Tensor out = TensorNew(A.dimensions, A.shape, A.gradients != NULL);
 
-    Operation op = { .type=Map, .out=out, .A=A, .u=f };
+    Operation op = { .type=Map, .out=out, .A=A, .u=fn };
     OperationForward(op);
     if (op.out.gradients) operationArrayPush(op);
     return out;
 }
 
-Tensor autogradZip(Binary f, Tensor A, Tensor B)
+Tensor autogradZip(Binary fn, Tensor A, Tensor B)
 {
     Tensor zipA = A;
     Tensor zipB = B;
@@ -141,7 +141,7 @@ Tensor autogradZip(Binary f, Tensor A, Tensor B)
     int autograd = zipA.gradients != NULL || zipB.gradients != NULL;
     Tensor out = TensorNew(outDims, outShape, autograd);
 
-    Operation op = { .type=Zip, .out=out, .A=zipA, .B=zipB, .b=f };
+    Operation op = { .type=Zip, .out=out, .A=zipA, .B=zipB, .b=fn };
     OperationForward(op);
 
     if (op.out.gradients) operationArrayPush(op);
@@ -169,7 +169,7 @@ Tensor autogradMultiply(Tensor A, Tensor B)
     return out;
 }
 
-Tensor autogradLinear(Tensor in, Tensor weight, Tensor bias, Unary f)
+Tensor autogradLinear(Tensor in, Tensor weight, Tensor bias, Unary fn)
 {
     // Output shape matches in @ weight (broadcasting the leading batch dims)
     int dimsA   = in.dimensions;
@@ -186,14 +186,14 @@ Tensor autogradLinear(Tensor in, Tensor weight, Tensor bias, Unary f)
     Tensor out     = TensorNew(dimsOut, outShape, autograd);
 
     Operation op = { .type=Linear, .out=out, .A=in, .B=weight,
-                     .bias=bias, .product=product, .u=f, .inner=1 };
+                     .bias=bias, .product=product, .u=fn, .inner=1 };
     OperationForward(op);
     if (op.out.gradients) operationArrayPush(op);
     TensorFree(product); // tape (when recorded) holds the remaining reference
     return out;
 }
 
-Tensor autogradConvolution(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Unary f)
+Tensor autogradConvolution(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Unary fn)
 {
     int N    = in.shape[0];
     int H    = in.shape[2];
@@ -209,7 +209,7 @@ Tensor autogradConvolution(Tensor in, Tensor filter, Tensor bias, int stride, in
     Tensor out     = TensorNew(4, (int[]){N, Cout, Hout, Wout}, autograd);
 
     Operation op = { .type=Convolution, .out=out, .A=in, .B=filter, .bias=bias,
-                     .product=product, .u=f, .stride=stride, .padding=padding,
+                     .product=product, .u=fn, .stride=stride, .padding=padding,
                      .fH=fH, .fW=fW };
     OperationForward(op);
     if (op.out.gradients) operationArrayPush(op);
@@ -217,7 +217,7 @@ Tensor autogradConvolution(Tensor in, Tensor filter, Tensor bias, int stride, in
     return out;
 }
 
-Tensor autogradPool(Binary f, Entry initial, Tensor in, int size, int stride, int padding)
+Tensor autogradPool(Binary fn, Entry initial, Tensor in, int size, int stride, int padding)
 {
     int N    = in.shape[0];
     int C    = in.shape[1];
@@ -228,12 +228,12 @@ Tensor autogradPool(Binary f, Entry initial, Tensor in, int size, int stride, in
     int autograd = in.gradients != NULL;
     // Pools (max/min) cache the winning index so backward is O(1) per
     // output. Other reductions replay the fold in backward.
-    int cacheArg = autograd && (f.f == MAX.f || f.f == MIN.f);
+    int cacheArg = autograd && (fn.f == MAX.f || fn.f == MIN.f);
 
     Tensor out     = TensorNew(4, (int[]){N, C, Hout, Wout}, autograd);
     Tensor indices = cacheArg ? TensorNew(4, (int[]){N, C, Hout, Wout}, FALSE) : (Tensor){0};
 
-    Operation op = { .type=Pool, .out=out, .A=in, .b=f, .product=indices,
+    Operation op = { .type=Pool, .out=out, .A=in, .b=fn, .product=indices,
                      .fH=size, .fW=size, .stride=stride, .padding=padding,
                      .fill=initial };
     OperationForward(op);
@@ -259,7 +259,7 @@ Tensor autogradGather(Tensor A, Tensor B, int axis)
     return out;
 }
 
-Tensor autogradScatter(Binary f, Tensor A, Tensor B, Entry fill, int axis, int n)
+Tensor autogradScatter(Binary fn, Tensor A, Tensor B, Entry fill, int axis, int n)
 {
     int outDims = A.dimensions - B.dimensions + 1;
     int outShape[MAX_DIMENSIONS];
@@ -270,7 +270,7 @@ Tensor autogradScatter(Binary f, Tensor A, Tensor B, Entry fill, int axis, int n
 
     Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
 
-    Operation op = { .type=Scatter, .out=out, .A=A, .B=B, .axis=axis, .fill=fill, .b=f };
+    Operation op = { .type=Scatter, .out=out, .A=A, .B=B, .axis=axis, .fill=fill, .b=fn };
     OperationForward(op);
     if (op.out.gradients) operationArrayPush(op);
     return out;

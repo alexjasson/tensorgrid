@@ -3,6 +3,10 @@
 
 #include "tensorgrid.h"
 
+// Scalar functions, move to Scalar.h later
+typedef Entry (*ScalarUnary)(Entry);
+typedef Entry (*ScalarBinary)(Entry, Entry);
+
 // Represents a primitive operation on a tensor
 typedef struct {
     Tensor out, A, B;

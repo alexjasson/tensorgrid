@@ -6,12 +6,14 @@
 #include "Operation.h"
 #include "utility.h"
 #include "ThreadPool.h"
-#include "Vec.h"
+#include "Vector.h"
 
-// An MR x NRV block of vector registers, sized to fit the register file
+static int min(int a, int b) { return a < b ? a : b; }
+
+// An MR x NRV block of vector registers, used by microkernel
 #define NRV 2
-#define NR  (NRV * VEC_DIMS)
-#define MR  ((VEC_CARD - NRV - 1) / NRV)
+#define NR  (NRV * VECTOR_DIMS)
+#define MR  ((VECTOR_CARD - NRV - 1) / NRV)
 
 // Cache block sizes for the temporary packed A/B blocks used by GEMM
 #define KC 256
@@ -23,8 +25,6 @@
 
 // Strided matrix view of tensor data
 typedef struct { Entry *data; int sRow, sCol; } Matrix;
-typedef Vec (*UnaryFn)(Vec);
-typedef Vec (*BinaryFn)(Vec, Vec);
 
 // Helper functions
 static void packB(Entry *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock);
@@ -63,29 +63,29 @@ static void mapForward(void *arg, int start, int end)
     Operation *op  = arg;
     Entry     *out = op->out.entries;
     Entry     *A   = op->A.entries;
-    UnaryFn fv = (UnaryFn)op->u.fv;
+    VectorUnary fn = (VectorUnary)op->u.fv;
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
         int i = start;
-        for (; i + VEC_DIMS <= end; i += VEC_DIMS)
-            VecStore(out + i, fv(VecLoad(A + i)));
+        for (; i + VECTOR_DIMS <= end; i += VECTOR_DIMS)
+            VectorStore(out + i, fn(VectorLoad(A + i)));
         if (i < end) {
-            Entry x[VEC_DIMS], y[VEC_DIMS];
+            Entry x[VECTOR_DIMS], y[VECTOR_DIMS];
             int tail = end - i;
-            for (int t = 0; t < VEC_DIMS; t++)
+            for (int t = 0; t < VECTOR_DIMS; t++)
                 x[t] = t < tail ? A[i + t] : 1.0f;
-            VecStore(y, fv(VecLoad(x)));
+            VectorStore(y, fn(VectorLoad(x)));
             for (int t = 0; t < tail; t++)
                 out[i + t] = y[t];
         }
     } else {
-        for (int i = start; i < end; i += VEC_DIMS) {
-            Entry x[VEC_DIMS], y[VEC_DIMS];
-            int tail = end - i < VEC_DIMS ? end - i : VEC_DIMS;
-            for (int t = 0; t < VEC_DIMS; t++) {
+        for (int i = start; i < end; i += VECTOR_DIMS) {
+            Entry x[VECTOR_DIMS], y[VECTOR_DIMS];
+            int tail = end - i < VECTOR_DIMS ? end - i : VECTOR_DIMS;
+            for (int t = 0; t < VECTOR_DIMS; t++) {
                 int j = i + t;
                 x[t] = t < tail ? A[unravel(j, op->A.shape, op->A.strides, op->A.dimensions)] : 1.0f;
             }
-            VecStore(y, fv(VecLoad(x)));
+            VectorStore(y, fn(VectorLoad(x)));
             for (int t = 0; t < tail; t++)
                 out[i + t] = y[t];
         }
@@ -98,35 +98,35 @@ static void zipForward(void *arg, int start, int end)
     Entry     *out = op->out.entries;
     Entry     *A   = op->A.entries;
     Entry     *B   = op->B.entries;
-    BinaryFn fv = (BinaryFn)op->b.fv;
+    VectorBinary fn = (VectorBinary)op->b.fv;
     int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
     int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
     if (aC && bC) {
         int i = start;
-        for (; i + VEC_DIMS <= end; i += VEC_DIMS)
-            VecStore(out + i, fv(VecLoad(A + i), VecLoad(B + i)));
+        for (; i + VECTOR_DIMS <= end; i += VECTOR_DIMS)
+            VectorStore(out + i, fn(VectorLoad(A + i), VectorLoad(B + i)));
         if (i < end) {
-            Entry x[VEC_DIMS], y[VEC_DIMS], z[VEC_DIMS];
+            Entry x[VECTOR_DIMS], y[VECTOR_DIMS], z[VECTOR_DIMS];
             int tail = end - i;
-            for (int t = 0; t < VEC_DIMS; t++) {
+            for (int t = 0; t < VECTOR_DIMS; t++) {
                 x[t] = t < tail ? A[i + t] : 1.0f;
                 y[t] = t < tail ? B[i + t] : 1.0f;
             }
-            VecStore(z, fv(VecLoad(x), VecLoad(y)));
+            VectorStore(z, fn(VectorLoad(x), VectorLoad(y)));
             for (int t = 0; t < tail; t++)
                 out[i + t] = z[t];
         }
         return;
     }
-    for (int i = start; i < end; i += VEC_DIMS) {
-        Entry x[VEC_DIMS], y[VEC_DIMS], z[VEC_DIMS];
-        int tail = end - i < VEC_DIMS ? end - i : VEC_DIMS;
-        for (int t = 0; t < VEC_DIMS; t++) {
+    for (int i = start; i < end; i += VECTOR_DIMS) {
+        Entry x[VECTOR_DIMS], y[VECTOR_DIMS], z[VECTOR_DIMS];
+        int tail = end - i < VECTOR_DIMS ? end - i : VECTOR_DIMS;
+        for (int t = 0; t < VECTOR_DIMS; t++) {
             int j = i + t;
             x[t] = t < tail ? A[aC ? j : unravel(j, op->A.shape, op->A.strides, op->A.dimensions)] : 1.0f;
             y[t] = t < tail ? B[bC ? j : unravel(j, op->B.shape, op->B.strides, op->B.dimensions)] : 1.0f;
         }
-        VecStore(z, fv(VecLoad(x), VecLoad(y)));
+        VectorStore(z, fn(VectorLoad(x), VectorLoad(y)));
         for (int t = 0; t < tail; t++)
             out[i + t] = z[t];
     }
@@ -167,26 +167,26 @@ static void packA(Entry *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock)
 // Compute one packed MR x NR tile and add the valid region back into C
 static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, int nValid)
 {
-    Vec acc[MR][NRV];
+    Vector acc[MR][NRV];
     for (int mr = 0; mr < MR; mr++)
         for (int v = 0; v < NRV; v++)
-            acc[mr][v] = VecZero();
+            acc[mr][v] = VectorZero();
 
     for (int p = 0; p < kBlock; p++) {
-        Vec b[NRV];
+        Vector b[NRV];
         for (int v = 0; v < NRV; v++)
-            b[v] = VecLoad(Bp + p * NR + v * VEC_DIMS);
+            b[v] = VectorLoad(Bp + p * NR + v * VECTOR_DIMS);
         for (int mr = 0; mr < MR; mr++) {
-            Vec a = VecBcast(Ap[p * MR + mr]);
+            Vector a = VectorBcast(Ap[p * MR + mr]);
             for (int v = 0; v < NRV; v++)
-                acc[mr][v] = VecFma(a, b[v], acc[mr][v]);
+                acc[mr][v] = VectorFma(a, b[v], acc[mr][v]);
         }
     }
 
     Entry tile[MR][NR];
     for (int mr = 0; mr < MR; mr++)
         for (int v = 0; v < NRV; v++)
-            VecStore(&tile[mr][v * VEC_DIMS], acc[mr][v]);
+            VectorStore(&tile[mr][v * VECTOR_DIMS], acc[mr][v]);
     for (int mr = 0; mr < mValid; mr++)
         for (int nr = 0; nr < nValid; nr++)
             C.data[mr * C.sRow + nr * C.sCol] += tile[mr][nr];
@@ -258,29 +258,29 @@ static void mapBackward(void *arg, int start, int end)
     Entry       *A  = op->A.entries;
     Entry       *dA = op->A.gradients;
     Entry     *dout = op->out.gradients;
-    UnaryFn dav = (UnaryFn)op->u.dav;
+    VectorUnary dafn = (VectorUnary)op->u.dav;
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
         int j = start;
-        for (; j + VEC_DIMS <= end; j += VEC_DIMS)
-            VecStore(dA + j, VecFma(VecLoad(dout + j), dav(VecLoad(A + j)), VecLoad(dA + j)));
+        for (; j + VECTOR_DIMS <= end; j += VECTOR_DIMS)
+            VectorStore(dA + j, VectorFma(VectorLoad(dout + j), dafn(VectorLoad(A + j)), VectorLoad(dA + j)));
         if (j < end) {
-            Entry x[VEC_DIMS], g[VEC_DIMS], old[VEC_DIMS], y[VEC_DIMS];
+            Entry x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
             int tail = end - j;
-            for (int t = 0; t < VEC_DIMS; t++) {
+            for (int t = 0; t < VECTOR_DIMS; t++) {
                 x[t] = t < tail ? A[j + t] : 1.0f;
                 g[t] = t < tail ? dout[j + t] : 0.0f;
                 old[t] = t < tail ? dA[j + t] : 0.0f;
             }
-            VecStore(y, VecFma(VecLoad(g), dav(VecLoad(x)), VecLoad(old)));
+            VectorStore(y, VectorFma(VectorLoad(g), dafn(VectorLoad(x)), VectorLoad(old)));
             for (int t = 0; t < tail; t++)
                 dA[j + t] = y[t];
         }
     } else {
-        for (int j = start; j < end; j += VEC_DIMS) {
-            Entry x[VEC_DIMS], g[VEC_DIMS], y[VEC_DIMS];
-            int offs[VEC_DIMS];
-            int tail = end - j < VEC_DIMS ? end - j : VEC_DIMS;
-            for (int t = 0; t < VEC_DIMS; t++) {
+        for (int j = start; j < end; j += VECTOR_DIMS) {
+            Entry x[VECTOR_DIMS], g[VECTOR_DIMS], y[VECTOR_DIMS];
+            int offs[VECTOR_DIMS];
+            int tail = end - j < VECTOR_DIMS ? end - j : VECTOR_DIMS;
+            for (int t = 0; t < VECTOR_DIMS; t++) {
                 int i = j + t;
                 offs[t] = 0;
                 x[t] = 1.0f;
@@ -291,7 +291,7 @@ static void mapBackward(void *arg, int start, int end)
                     g[t] = dout[i];
                 }
             }
-            VecStore(y, VecMul(VecLoad(g), dav(VecLoad(x))));
+            VectorStore(y, VectorMul(VectorLoad(g), dafn(VectorLoad(x))));
             for (int t = 0; t < tail; t++)
                 dA[offs[t]] += y[t];
         }
@@ -306,49 +306,49 @@ static void zipBackward(void *arg, int start, int end)
     Entry      *dA = op->A.gradients;
     Entry      *dB = op->B.gradients;
     Entry    *dout = op->out.gradients;
-    BinaryFn dav = (BinaryFn)op->b.dav;
-    BinaryFn dbv = (BinaryFn)op->b.dbv;
+    VectorBinary dafn = (VectorBinary)op->b.dav;
+    VectorBinary dbfn = (VectorBinary)op->b.dbv;
     int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
     int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
     if (aC && bC) {
         int j = start;
-        for (; j + VEC_DIMS <= end; j += VEC_DIMS) {
-            Vec a = VecLoad(A + j);
-            Vec b = VecLoad(B + j);
-            Vec g = VecLoad(dout + j);
-            if (dA) VecStore(dA + j, VecFma(g, dav(a, b), VecLoad(dA + j)));
-            if (dB) VecStore(dB + j, VecFma(g, dbv(a, b), VecLoad(dB + j)));
+        for (; j + VECTOR_DIMS <= end; j += VECTOR_DIMS) {
+            Vector a = VectorLoad(A + j);
+            Vector b = VectorLoad(B + j);
+            Vector g = VectorLoad(dout + j);
+            if (dA) VectorStore(dA + j, VectorFma(g, dafn(a, b), VectorLoad(dA + j)));
+            if (dB) VectorStore(dB + j, VectorFma(g, dbfn(a, b), VectorLoad(dB + j)));
         }
         if (j < end) {
-            Entry x[VEC_DIMS], y[VEC_DIMS], g[VEC_DIMS], r[VEC_DIMS], old[VEC_DIMS];
+            Entry x[VECTOR_DIMS], y[VECTOR_DIMS], g[VECTOR_DIMS], r[VECTOR_DIMS], old[VECTOR_DIMS];
             int tail = end - j;
-            for (int t = 0; t < VEC_DIMS; t++) {
+            for (int t = 0; t < VECTOR_DIMS; t++) {
                 x[t] = t < tail ? A[j + t] : 1.0f;
                 y[t] = t < tail ? B[j + t] : 1.0f;
                 g[t] = t < tail ? dout[j + t] : 0.0f;
             }
             if (dA) {
-                for (int t = 0; t < VEC_DIMS; t++)
+                for (int t = 0; t < VECTOR_DIMS; t++)
                     old[t] = t < tail ? dA[j + t] : 0.0f;
-                VecStore(r, VecFma(VecLoad(g), dav(VecLoad(x), VecLoad(y)), VecLoad(old)));
+                VectorStore(r, VectorFma(VectorLoad(g), dafn(VectorLoad(x), VectorLoad(y)), VectorLoad(old)));
                 for (int t = 0; t < tail; t++)
                     dA[j + t] = r[t];
             }
             if (dB) {
-                for (int t = 0; t < VEC_DIMS; t++)
+                for (int t = 0; t < VECTOR_DIMS; t++)
                     old[t] = t < tail ? dB[j + t] : 0.0f;
-                VecStore(r, VecFma(VecLoad(g), dbv(VecLoad(x), VecLoad(y)), VecLoad(old)));
+                VectorStore(r, VectorFma(VectorLoad(g), dbfn(VectorLoad(x), VectorLoad(y)), VectorLoad(old)));
                 for (int t = 0; t < tail; t++)
                     dB[j + t] = r[t];
             }
         }
         return;
     }
-    for (int j = start; j < end; j += VEC_DIMS) {
-        Entry x[VEC_DIMS], y[VEC_DIMS], g[VEC_DIMS], r[VEC_DIMS];
-        int aOffs[VEC_DIMS], bOffs[VEC_DIMS];
-        int tail = end - j < VEC_DIMS ? end - j : VEC_DIMS;
-        for (int t = 0; t < VEC_DIMS; t++) {
+    for (int j = start; j < end; j += VECTOR_DIMS) {
+        Entry x[VECTOR_DIMS], y[VECTOR_DIMS], g[VECTOR_DIMS], r[VECTOR_DIMS];
+        int aOffs[VECTOR_DIMS], bOffs[VECTOR_DIMS];
+        int tail = end - j < VECTOR_DIMS ? end - j : VECTOR_DIMS;
+        for (int t = 0; t < VECTOR_DIMS; t++) {
             int i = j + t;
             aOffs[t] = 0;
             bOffs[t] = 0;
@@ -364,12 +364,12 @@ static void zipBackward(void *arg, int start, int end)
             }
         }
         if (dA) {
-            VecStore(r, VecMul(VecLoad(g), dav(VecLoad(x), VecLoad(y))));
+            VectorStore(r, VectorMul(VectorLoad(g), dafn(VectorLoad(x), VectorLoad(y))));
             for (int t = 0; t < tail; t++)
                 dA[aOffs[t]] += r[t];
         }
         if (dB) {
-            VecStore(r, VecMul(VecLoad(g), dbv(VecLoad(x), VecLoad(y))));
+            VectorStore(r, VectorMul(VectorLoad(g), dbfn(VectorLoad(x), VectorLoad(y))));
             for (int t = 0; t < tail; t++)
                 dB[bOffs[t]] += r[t];
         }
@@ -382,19 +382,19 @@ static void affineForward(void *arg, int start, int end)
     Operation *op = arg;
     Entry *out = op->out.entries, *A = op->A.entries, *bias = op->B.entries;
     int biasSize = TensorSize(op->B), inner = op->inner;
-    UnaryFn fv = (UnaryFn)op->u.fv;
+    VectorUnary fn = (VectorUnary)op->u.fv;
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
             int c = 0;
-            for (; c + VEC_DIMS <= biasSize; c += VEC_DIMS)
-                VecStore(out + base + c, fv(VecAdd(VecLoad(A + base + c), VecLoad(bias + c))));
+            for (; c + VECTOR_DIMS <= biasSize; c += VECTOR_DIMS)
+                VectorStore(out + base + c, fn(VectorAdd(VectorLoad(A + base + c), VectorLoad(bias + c))));
             if (c < biasSize) {
-                Entry x[VEC_DIMS], y[VEC_DIMS];
+                Entry x[VECTOR_DIMS], y[VECTOR_DIMS];
                 int tail = biasSize - c;
-                for (int t = 0; t < VEC_DIMS; t++)
+                for (int t = 0; t < VECTOR_DIMS; t++)
                     x[t] = t < tail ? A[base + c + t] + bias[c + t] : 0.0f;
-                VecStore(y, fv(VecLoad(x)));
+                VectorStore(y, fn(VectorLoad(x)));
                 for (int t = 0; t < tail; t++)
                     out[base + c + t] = y[t];
             }
@@ -405,15 +405,15 @@ static void affineForward(void *arg, int start, int end)
                 Entry bc = bias[c];
                 size_t base = ((size_t)o * biasSize + c) * inner;
                 int i = 0;
-                Vec bcv = VecBcast(bc);
-                for (; i + VEC_DIMS <= inner; i += VEC_DIMS)
-                    VecStore(out + base + i, fv(VecAdd(VecLoad(A + base + i), bcv)));
+                Vector bcv = VectorBcast(bc);
+                for (; i + VECTOR_DIMS <= inner; i += VECTOR_DIMS)
+                    VectorStore(out + base + i, fn(VectorAdd(VectorLoad(A + base + i), bcv)));
                 if (i < inner) {
-                    Entry x[VEC_DIMS], y[VEC_DIMS];
+                    Entry x[VECTOR_DIMS], y[VECTOR_DIMS];
                     int tail = inner - i;
-                    for (int t = 0; t < VEC_DIMS; t++)
+                    for (int t = 0; t < VECTOR_DIMS; t++)
                         x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
-                    VecStore(y, fv(VecLoad(x)));
+                    VectorStore(y, fn(VectorLoad(x)));
                     for (int t = 0; t < tail; t++)
                         out[base + i + t] = y[t];
                 }
@@ -427,24 +427,24 @@ static void affineBackwardDa(void *arg, int start, int end)
     Operation *op = arg;
     Entry *A = op->A.entries, *bias = op->B.entries, *dA = op->A.gradients, *dout = op->out.gradients;
     int biasSize = TensorSize(op->B), inner = op->inner;
-    UnaryFn dav = (UnaryFn)op->u.dav;
+    VectorUnary dafn = (VectorUnary)op->u.dav;
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
             int c = 0;
-            for (; c + VEC_DIMS <= biasSize; c += VEC_DIMS) {
-                Vec v = VecAdd(VecLoad(A + base + c), VecLoad(bias + c));
-                VecStore(dA + base + c, VecFma(VecLoad(dout + base + c), dav(v), VecLoad(dA + base + c)));
+            for (; c + VECTOR_DIMS <= biasSize; c += VECTOR_DIMS) {
+                Vector v = VectorAdd(VectorLoad(A + base + c), VectorLoad(bias + c));
+                VectorStore(dA + base + c, VectorFma(VectorLoad(dout + base + c), dafn(v), VectorLoad(dA + base + c)));
             }
             if (c < biasSize) {
-                Entry x[VEC_DIMS], g[VEC_DIMS], old[VEC_DIMS], y[VEC_DIMS];
+                Entry x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
                 int tail = biasSize - c;
-                for (int t = 0; t < VEC_DIMS; t++) {
+                for (int t = 0; t < VECTOR_DIMS; t++) {
                     x[t] = t < tail ? A[base + c + t] + bias[c + t] : 0.0f;
                     g[t] = t < tail ? dout[base + c + t] : 0.0f;
                     old[t] = t < tail ? dA[base + c + t] : 0.0f;
                 }
-                VecStore(y, VecFma(VecLoad(g), dav(VecLoad(x)), VecLoad(old)));
+                VectorStore(y, VectorFma(VectorLoad(g), dafn(VectorLoad(x)), VectorLoad(old)));
                 for (int t = 0; t < tail; t++)
                     dA[base + c + t] = y[t];
             }
@@ -455,20 +455,20 @@ static void affineBackwardDa(void *arg, int start, int end)
                 Entry bc = bias[c];
                 size_t base = ((size_t)o * biasSize + c) * inner;
                 int i = 0;
-                Vec bcv = VecBcast(bc);
-                for (; i + VEC_DIMS <= inner; i += VEC_DIMS) {
-                    Vec v = VecAdd(VecLoad(A + base + i), bcv);
-                    VecStore(dA + base + i, VecFma(VecLoad(dout + base + i), dav(v), VecLoad(dA + base + i)));
+                Vector bcv = VectorBcast(bc);
+                for (; i + VECTOR_DIMS <= inner; i += VECTOR_DIMS) {
+                    Vector v = VectorAdd(VectorLoad(A + base + i), bcv);
+                    VectorStore(dA + base + i, VectorFma(VectorLoad(dout + base + i), dafn(v), VectorLoad(dA + base + i)));
                 }
                 if (i < inner) {
-                    Entry x[VEC_DIMS], g[VEC_DIMS], old[VEC_DIMS], y[VEC_DIMS];
+                    Entry x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
                     int tail = inner - i;
-                    for (int t = 0; t < VEC_DIMS; t++) {
+                    for (int t = 0; t < VECTOR_DIMS; t++) {
                         x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
                         g[t] = t < tail ? dout[base + i + t] : 0.0f;
                         old[t] = t < tail ? dA[base + i + t] : 0.0f;
                     }
-                    VecStore(y, VecFma(VecLoad(g), dav(VecLoad(x)), VecLoad(old)));
+                    VectorStore(y, VectorFma(VectorLoad(g), dafn(VectorLoad(x)), VectorLoad(old)));
                     for (int t = 0; t < tail; t++)
                         dA[base + i + t] = y[t];
                 }
@@ -483,31 +483,31 @@ static void affineBackwardDb(void *arg, int start, int end)
     Entry *A = op->A.entries, *bias = op->B.entries, *dB = op->B.gradients, *dout = op->out.gradients;
     int biasSize = TensorSize(op->B), inner = op->inner;
     int outer = TensorSize(op->out) / (biasSize * inner);
-    UnaryFn dav = (UnaryFn)op->u.dav;
+    VectorUnary dafn = (VectorUnary)op->u.dav;
     for (int c = start; c < end; c++) {
         Entry s = 0, bc = bias[c];
-        Vec sv = VecZero();
+        Vector sv = VectorZero();
         for (int o = 0; o < outer; o++) {
             size_t base = ((size_t)o * biasSize + c) * inner;
             int i = 0;
-            Vec bcv = VecBcast(bc);
-            for (; i + VEC_DIMS <= inner; i += VEC_DIMS) {
-                Vec v = VecAdd(VecLoad(A + base + i), bcv);
-                sv = VecFma(VecLoad(dout + base + i), dav(v), sv);
+            Vector bcv = VectorBcast(bc);
+            for (; i + VECTOR_DIMS <= inner; i += VECTOR_DIMS) {
+                Vector v = VectorAdd(VectorLoad(A + base + i), bcv);
+                sv = VectorFma(VectorLoad(dout + base + i), dafn(v), sv);
             }
             if (i < inner) {
-                Entry x[VEC_DIMS], g[VEC_DIMS], y[VEC_DIMS];
+                Entry x[VECTOR_DIMS], g[VECTOR_DIMS], y[VECTOR_DIMS];
                 int tail = inner - i;
-                for (int t = 0; t < VEC_DIMS; t++) {
+                for (int t = 0; t < VECTOR_DIMS; t++) {
                     x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
                     g[t] = t < tail ? dout[base + i + t] : 0.0f;
                 }
-                VecStore(y, VecMul(VecLoad(g), dav(VecLoad(x))));
+                VectorStore(y, VectorMul(VectorLoad(g), dafn(VectorLoad(x))));
                 for (int t = 0; t < tail; t++)
                     s += y[t];
             }
         }
-        s += VecHsum(sv);
+        s += VectorHsum(sv);
         dB[c] += s;
     }
 }
@@ -750,7 +750,7 @@ static void poolForward(void *arg, int start, int end)
     Entry *out    = op->out.entries;
     Entry *argIdx = op->product.entries;
     Entry fill    = op->fill;
-    BinaryScalar f = op->b.f;
+    f reducer = op->b.f;
 
     for (int p = start; p < end; p++) {
         int c = p % C, n = p / C;
@@ -770,14 +770,14 @@ static void poolForward(void *arg, int start, int end)
                         if (iw < 0 || iw >= W) continue;
                         Entry v = r[(size_t)iw * sW];
                         int local = fh * size + fw;
-                        if      (f == MAX.f) { if (v > acc) { acc = v; bl = local; } }
-                        else if (f == MIN.f) { if (v < acc) { acc = v; bl = local; } }
-                        else if (f == ADD.f) { acc += v; }
-                        else                 { acc = f(acc, v); }
+                        if      (reducer == MAX.f) { if (v > acc) { acc = v; bl = local; } }
+                        else if (reducer == MIN.f) { if (v < acc) { acc = v; bl = local; } }
+                        else if (reducer == ADD.f) { acc += v; }
+                        else                       { acc = ((ScalarBinary)reducer)(acc, v); }
                     }
                 }
                 out[outIdx] = acc;
-                if ((f == MAX.f || f == MIN.f) && argIdx)
+                if ((reducer == MAX.f || reducer == MIN.f) && argIdx)
                     argIdx[outIdx] = (Entry)bl;
             }
     }
@@ -800,10 +800,11 @@ static void poolBackward(void *arg, int start, int end)
     Entry *dOut   = op->out.gradients;
     Entry *argIdx = op->product.entries;
     Entry fill    = op->fill;
-    BinaryScalar f = op->b.f, da = op->b.da, db = op->b.db;
+    f reducer = op->b.f;
+    ScalarBinary da = (ScalarBinary)op->b.da, db = (ScalarBinary)op->b.db;
 
     // Fast paths for max, min and sum
-    if (f == MAX.f || f == MIN.f) {
+    if (reducer == MAX.f || reducer == MIN.f) {
         if (stride >= size) {
             for (int p = start; p < end; p++) {
                 int c = p % C, n = p / C;
@@ -849,7 +850,7 @@ static void poolBackward(void *arg, int start, int end)
                     }
             }
         }
-    } else if (f == ADD.f) {
+    } else if (reducer == ADD.f) {
         for (int p = start; p < end; p++) {
             int c = p % C, n = p / C;
             Entry *plane   = dInput + (size_t)n * sN + (size_t)c * sC;
@@ -889,7 +890,7 @@ static void poolBackward(void *arg, int start, int end)
                             if (iw < 0 || iw >= W) continue;
                             size_t off = (size_t)ih * sH + (size_t)iw * sW;
                             Entry v = inPlane[off];
-                            chain[cnt + 1] = f(chain[cnt], v);
+                            chain[cnt + 1] = ((ScalarBinary)reducer)(chain[cnt], v);
                             vals[cnt] = v;
                             offs[cnt] = off;
                             cnt++;
@@ -1108,7 +1109,7 @@ static void scatterForward(void *arg, int start, int end)
             Entry acc = op->fill;
             for (int ix = 0; ix < idxSize; ix++) {
                 if ((int)I.entries[ix] == kTarget)
-                    acc = op->b.f(acc, A.entries[(outer * idxSize + ix) * innerSize + inner]);
+                    acc = ((ScalarBinary)op->b.f)(acc, A.entries[(outer * idxSize + ix) * innerSize + inner]);
             }
             op->out.entries[i] = acc;
         }
@@ -1131,7 +1132,7 @@ static void scatterForward(void *arg, int start, int end)
                 if ((int)I.entries[idxOff] == kTarget) {
                     int aIxOff = aC ? ix * innerSize
                                     : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
-                    acc = op->b.f(acc, A.entries[outerOff + aIxOff + innerOff]);
+                    acc = ((ScalarBinary)op->b.f)(acc, A.entries[outerOff + aIxOff + innerOff]);
                 }
             }
             op->out.entries[i] = acc;
@@ -1178,7 +1179,7 @@ static void scatterBackward(void *arg, int start, int end)
                 int aIxOff = aC ? ix * innerSize
                                 : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
                 Entry Av = A.entries[outerOff + aIxOff + innerOff];
-                chain[count + 1] = op->b.f(chain[count], Av);
+                chain[count + 1] = ((ScalarBinary)op->b.f)(chain[count], Av);
                 count++;
             }
         }
@@ -1192,8 +1193,8 @@ static void scatterBackward(void *arg, int start, int end)
                                  : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
                 int aOffset = outerOff + aIxOff + innerOff;
                 Entry Av    = A.entries[aOffset];
-                A.gradients[aOffset] += dresult * op->b.db(chain[c], Av);
-                dresult *= op->b.da(chain[c], Av);
+                A.gradients[aOffset] += dresult * ((ScalarBinary)op->b.db)(chain[c], Av);
+                dresult *= ((ScalarBinary)op->b.da)(chain[c], Av);
                 c--;
             }
         }
