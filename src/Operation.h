@@ -2,6 +2,7 @@
 #define OPERATION_H
 
 #include "tensorgrid.h"
+#include "Scalar.h"
 
 // Represents a primitive operation on a tensor
 typedef struct {

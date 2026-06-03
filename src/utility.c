@@ -1,12 +1,8 @@
 // https://github.com/alexjasson/tensorgrid
 
 #include <stdint.h>
-#include <float.h>
 #include <time.h>
 #include "utility.h"
-#include "Vec.h"
-
-int min(int a, int b) { return a < b ? a : b; }
 
 float randomFloat(float lower, float upper)
 {
@@ -24,82 +20,6 @@ float randomFloat(float lower, float upper)
 
     float r = (state >> 8) / 16777216.0f;
     return lower + r * (upper - lower);
-}
-
-// exp(x) with ~1e-5 relative error
-float fastExp(float x)
-{
-    if (x >  88.7f) return FLT_MAX;
-    if (x < -87.3f) return 0.0f;
-
-    int   n = (int)(x * 1.4426950408889634f + (x >= 0.0f ? 0.5f : -0.5f));
-    float r = x - (float)n * 0.6931471805599453f;
-
-    // 5th-order Taylor: 1 + r + r^2/2 + r^3/6 + r^4/24 + r^5/120
-    float p = 1.0f + r + r * r * (0.5f + r * ((1.0f/6.0f) + r * ((1.0f/24.0f) + r * (1.0f/120.0f))));
-
-    union { float f; int32_t i; } u;
-    u.i = (127 + n) << 23;
-    return p * u.f;
-}
-
-// As above but for vectors instead of scalars
-Vec VecExp(Vec x)
-{
-    x = VecMin(VecMax(x, VecBcast(-87.3f)), VecBcast(88.7f));
-    Vec n = VecRound(VecMul(x, VecBcast(1.4426950408889634f)));
-    Vec r = VecFnmadd(n, VecBcast(0.6931471805599453f), x);
-    Vec p = VecBcast(1.0f / 120.0f);
-    p = VecFma(p, r, VecBcast(1.0f / 24.0f));
-    p = VecFma(p, r, VecBcast(1.0f / 6.0f));
-    p = VecFma(p, r, VecBcast(0.5f));
-    p = VecFma(p, r, VecBcast(1.0f));
-    p = VecFma(p, r, VecBcast(1.0f));
-    return VecMul(p, VecPow2i(n));
-}
-
-// log(x) with ~1e-5 relative error
-float fastLog(float x)
-{
-    if (x <= 0.0f) return -FLT_MAX;
-
-    union { float f; int32_t i; } u;
-    u.f     = x;
-    int   e = ((u.i >> 23) & 0xFF) - 127;
-    u.i     = (u.i & 0x007FFFFF) | 0x3F800000;
-    float m = u.f;
-
-    float t  = (m - 1.0f) / (m + 1.0f);
-    float t2 = t * t;
-    float l  = 2.0f * t * (1.0f + t2 * ((1.0f/3.0f) + t2 * ((1.0f/5.0f) + t2 * (1.0f/7.0f))));
-
-    return l + (float)e * 0.6931471805599453f;
-}
-
-// As above but for vectors instead of scalars
-Vec VecLog(Vec x)
-{
-    Vec e = VecLog2i(x);
-    Vec m = VecMantissa(x);
-    Vec t = VecDiv(VecSub(m, VecBcast(1.0f)), VecAdd(m, VecBcast(1.0f)));
-    Vec t2 = VecMul(t, t);
-    Vec p = VecBcast(1.0f / 7.0f);
-    p = VecFma(p, t2, VecBcast(1.0f / 5.0f));
-    p = VecFma(p, t2, VecBcast(1.0f / 3.0f));
-    p = VecFma(p, t2, VecBcast(1.0f));
-    Vec l = VecMul(VecMul(VecBcast(2.0f), t), p);
-    return VecFma(e, VecBcast(0.6931471805599453f), l);  // l + e*ln2
-}
-
-float fastPow(float base, int exp)
-{
-    float result = 1.0f;
-    while (exp > 0) {
-        if (exp & 1) result *= base;
-        base *= base;
-        exp >>= 1;
-    }
-    return result;
 }
 
 int unravel(int i, const int *shape, const int *strides, int dims)
