@@ -340,20 +340,6 @@ Tensor TensorGather(Tensor A, Tensor indices, int axis);
  */
 Tensor TensorScatter(Binary fn, Tensor A, Tensor indices, Entry initial, int axis, int n);
 
-/*
- * Moves a fH x fW window across the height and width of each input, and flattens each window
- * into a column of the output. Out-of-bounds positions are filled with `fill`. Input must
- * be 4D.
- *
- * input  = [batch size, input channels, height, width]
- * output = [batch size, input channels * fH * fW, output height * output width]
- *
- * output height = (input height + 2*padding - fH) / stride + 1
- * output width  = (input width  + 2*padding - fW) / stride + 1
- */
-Tensor TensorUnfold(Tensor input, Entry fill, int fH, int fW, int stride, int padding);
-
-
 /*=============================================================================================
  *                                          Utilities
  *=============================================================================================*/

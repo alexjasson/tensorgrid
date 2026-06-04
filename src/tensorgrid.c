@@ -6,7 +6,7 @@
 #include <float.h>
 #include <stdint.h>
 #include "tensorgrid.h"
-#include "autograd.h"
+#include "Operation.h"
 #include "DynamicArray.h"
 #include "utility.h"
 #include "MemoryPool.h"
@@ -102,7 +102,10 @@ Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape)
 void TensorFree(Tensor A)
 {
     if (!A.refcount || --(*A.refcount) > 0) return;
-    size_t bytes = (size_t)TensorSize(A) * sizeof(Entry);
+    size_t footprint = 1;
+    for (int i = 0; i < A.dimensions; i++)
+        if (A.strides[i] > 0) footprint += (size_t)(A.shape[i] - 1) * A.strides[i];
+    size_t bytes = footprint * sizeof(Entry);
     MemoryPool pool = MemoryPoolGet();
     MemoryPoolFree(pool, A.entries, bytes);
     MemoryPoolFree(pool, A.gradients, bytes);
@@ -207,12 +210,14 @@ Tensor TensorReduce(Binary fn, Entry initial, Tensor A, int axis)
     return out;
 }
 
-Tensor TensorMap(Unary fn, Tensor A)                                      { return autogradMap(fn, A);                    }
-Tensor TensorZip(Binary fn, Tensor A, Tensor B)                           { return autogradZip(fn, A, B);                 }
-Tensor TensorMultiply(Tensor A, Tensor B)                                 { return autogradMultiply(A, B);                }
-Tensor TensorGather(Tensor A, Tensor indices, int axis)                   { return autogradGather(A, indices, axis);      }
-Tensor TensorScatter(Binary fn, Tensor A, Tensor i, Entry e, int a, int n){ return autogradScatter(fn, A, i, e, a, n);    }
-Tensor TensorUnfold(Tensor A, Entry fill, int H, int W, int s, int p)     { return autogradUnfold(A, fill, H, W, s, p);   }
+Tensor TensorMap(Unary fn, Tensor A)                                      { return OperationMap(fn, A);                   }
+Tensor TensorZip(Binary fn, Tensor A, Tensor B)                           { return OperationZip(fn, A, B);                }
+Tensor TensorMultiply(Tensor A, Tensor B)                                 { return OperationMultiply(A, B);               }
+Tensor TensorGather(Tensor A, Tensor indices, int axis)                   { return OperationGather(A, indices, axis);     }
+Tensor TensorScatter(Binary fn, Tensor A, Tensor i, Entry e, int a, int n){ return OperationScatter(fn, A, i, e, a, n);   }
+Tensor TensorConvolution(Tensor in, Tensor filter, int s, int p)          { return OperationConvolution(in, filter, s, p);}
+Tensor TensorPool(Binary fn, Entry e, Tensor in, int size, int s, int p)  { return OperationPool(fn, e, in, size, s, p);  }
+void TensorBackward(Tensor loss)                                          { OperationBackward(loss);                      }
 
 Tensor TensorCopy(Tensor A)                                               { return TensorMap(IDENTITY, A);                }
 Tensor TensorAdd(Tensor A, Tensor B)                                      { return TensorZip(ADD, A, B);                  }
@@ -220,38 +225,25 @@ Tensor TensorSubtract(Tensor A, Tensor B)                                 { retu
 Tensor TensorHadamard(Tensor A, Tensor B)                                 { return TensorZip(MULTIPLY, A, B);             }
 Tensor TensorEmbedding(Tensor table, Tensor indices)                      { return TensorGather(table, indices, 0);       }
 Tensor TensorMaxPool(Tensor A, int k, int s, int p)                       { return TensorPool(MAX, -FLT_MAX, A, k, s, p); }
-Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Unary fn) { return autogradLinear(in, weight, bias, fn);  }
 
-Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding)
+Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Unary fn)
 {
-    int N    = input.shape[0];
-    int H    = input.shape[2];
-    int W    = input.shape[3];
-    int Cout = filter.shape[0];
-    int Cin  = filter.shape[1];
-    int fH   = filter.shape[2];
-    int fW   = filter.shape[3];
-    int Hout = (H + 2 * padding - fH) / stride + 1;
-    int Wout = (W + 2 * padding - fW) / stride + 1;
-    int K    = Cin * fH * fW;
-
-    Tensor windows     = TensorUnfold(input, 0.0f, fH, fW, stride, padding);
-    Tensor matrixInput = TensorReshape(filter, 2, (int[]){Cout, K});
-    Tensor output      = TensorMultiply(matrixInput, windows);  // [N, Cout, S]
-    TensorFree(windows);
-
-    return TensorReshape(output, 4, (int[]){N, Cout, Hout, Wout});
+    Tensor product = TensorMultiply(in, weight);
+    Tensor biased  = TensorAdd(product, bias);
+    TensorFree(product);
+    Tensor out = TensorMap(fn, biased);
+    TensorFree(biased);
+    return out;
 }
 
 Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Unary fn)
 {
-    return autogradConvolution(in, filter, bias, stride, padding, fn);
-}
-
-
-Tensor TensorPool(Binary fn, Entry initial, Tensor input, int size, int stride, int padding)
-{
-    return autogradPool(fn, initial, input, size, stride, padding);
+    Tensor conv   = TensorConvolution(in, filter, stride, padding);
+    Tensor biased = TensorAdd(conv, bias);
+    TensorFree(conv);
+    Tensor out = TensorMap(fn, biased);
+    TensorFree(biased);
+    return out;
 }
 
 void TensorScale(Tensor A, float scalar)
@@ -807,9 +799,4 @@ void TensorArrayAdam(TensorArray ta, float lr, float beta1, float beta2, float e
 {
     for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
         TensorAdam(*(Tensor *)DynamicArrayGet(ta->tensors, i), lr, beta1, beta2, epsilon, weightDecay);
-}
-
-void TensorBackward(Tensor loss)
-{
-    autogradBackward(loss);
 }
