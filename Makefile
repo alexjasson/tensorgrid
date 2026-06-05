@@ -34,7 +34,7 @@ SRC = src/tensorgrid.c src/Operation.c \
       src/Operation/Convolution.c \
       src/Operation/Pool.c src/Operation/Gather.c \
       src/Operation/Scatter.c \
-      src/adt/ThreadPool.c src/adt/DynamicArray.c src/utility.c src/adt/MemoryPool.c src/Scalar.c src/Vector.c
+      src/adt/ThreadPool.c src/adt/DynamicArray.c src/utility.c src/adt/MemoryPool.c src/Scalar.c src/Vector.c src/Matrix.c
 OBJ = $(SRC:.c=.o)
 LIB = libtensorgrid.a
 

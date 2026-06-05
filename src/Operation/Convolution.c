@@ -4,8 +4,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "../Operation.h"
-
-typedef struct Matrix { Entry *data; int sRow, sCol; } Matrix;
+#include "../Matrix.h"
 
 typedef struct {
     Tensor scratch;
@@ -19,7 +18,6 @@ static void convolutionBackwardDb(void *arg, int start, int end);
 static void convolutionBackwardDa(void *arg, int start, int end);
 
 static void im2col(Operation *op, Entry *patches, int n);
-void gemm(int N, int K, Matrix A, Matrix B, Matrix C, int r0, int r1);
 
 Tensor OperationConvolution(Tensor in, Tensor filter, int stride, int padding)
 {
@@ -65,12 +63,12 @@ static void OperationConvolutionBackward(Operation *op)
     int K    = op->B.shape[1] * ctx->fH * ctx->fW;
     int S    = op->out.shape[2] * op->out.shape[3];
     int N    = op->out.shape[0];
-    long gemmWork = (long)N * Cout * S * K;
+    long matmulWork = (long)N * Cout * S * K;
 
     if (op->B.gradients) {
         int CK = Cout * K;
         ctx->scratch = TensorNew(2, (int[]){N, CK}, FALSE);
-        OperationDispatch(convolutionBackwardDb, op, N, gemmWork);
+        OperationDispatch(convolutionBackwardDb, op, N, matmulWork);
         for (int n = 0; n < N; n++)
             for (int j = 0; j < CK; j++)
                 op->B.gradients[j] += ctx->scratch.entries[(size_t)n * CK + j];
@@ -78,7 +76,7 @@ static void OperationConvolutionBackward(Operation *op)
         ctx->scratch = (Tensor){0};
     }
     if (op->A.gradients)
-        OperationDispatch(convolutionBackwardDa, op, N, gemmWork);
+        OperationDispatch(convolutionBackwardDa, op, N, matmulWork);
 }
 
 static void im2col(Operation *op, Entry *patches, int n)
@@ -141,8 +139,9 @@ static void convolutionForward(void *arg, int start, int end)
         im2col(op, patches, n);
         Entry *prod = op->out.entries + (size_t)n * Cout * S;
         memset(prod, 0, (size_t)Cout * S * sizeof(Entry));
-        gemm(S, K, (Matrix){filter, K, 1}, (Matrix){patches, S, 1},
-                            (Matrix){prod, S, 1}, 0, Cout);
+        MatrixMultiply((Matrix){filter, Cout, K, K, 1},
+                       (Matrix){patches, K, S, S, 1},
+                       (Matrix){prod, Cout, S, S, 1});
     }
 }
 
@@ -163,8 +162,9 @@ static void convolutionBackwardDb(void *arg, int start, int end)
         Entry *partial = ctx->scratch.entries + (size_t)n * Cout * K;
         Entry *dProd_n = dProd       + (size_t)n * Cout * S;
         memset(partial, 0, (size_t)Cout * K * sizeof(Entry));
-        gemm(K, S, (Matrix){dProd_n, S, 1}, (Matrix){patches, 1, S},
-                            (Matrix){partial, K, 1}, 0, Cout);
+        MatrixMultiply((Matrix){dProd_n, Cout, S, S, 1},
+                       (Matrix){patches, S, K, 1, S},
+                       (Matrix){partial, Cout, K, K, 1});
     }
 }
 
@@ -193,8 +193,9 @@ static void convolutionBackwardDa(void *arg, int start, int end)
     for (int n = start; n < end; n++) {
         Entry *dProd_n = dProd + (size_t)n * Cout * S;
         memset(dWin, 0, (size_t)K * S * sizeof(Entry));
-        gemm(S, Cout, (Matrix){filter, 1, K}, (Matrix){dProd_n, S, 1},
-                               (Matrix){dWin, S, 1}, 0, K);
+        MatrixMultiply((Matrix){filter, K, Cout, 1, K},
+                       (Matrix){dProd_n, Cout, S, S, 1},
+                       (Matrix){dWin, K, S, S, 1});
 
         for (int ci = 0; ci < Cin; ci++) {
             Entry *plane = dInput + (size_t)n * sN + (size_t)ci * sC;
