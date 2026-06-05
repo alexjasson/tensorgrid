@@ -29,7 +29,12 @@ CFLAGS = -Wall -Wextra -Werror -pedantic -Ofast -march=native -flto
 LIBDIR     = /usr/local/lib
 INCLUDEDIR = /usr/local/include
 
-SRC = src/tensorgrid.c src/autograd.c src/Operation.c src/ThreadPool.c src/DynamicArray.c src/utility.c src/MemoryPool.c src/Scalar.c src/Vector.c
+SRC = src/tensorgrid.c src/Operation.c \
+      src/Operation/Map.c src/Operation/Zip.c src/Operation/Multiply.c \
+      src/Operation/Convolution.c \
+      src/Operation/Pool.c src/Operation/Gather.c \
+      src/Operation/Scatter.c \
+      src/adt/ThreadPool.c src/adt/DynamicArray.c src/utility.c src/adt/MemoryPool.c src/Scalar.c src/Vector.c src/Matrix.c
 OBJ = $(SRC:.c=.o)
 LIB = libtensorgrid.a
 
