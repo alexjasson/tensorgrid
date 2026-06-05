@@ -169,7 +169,7 @@ struct threadPool {
     Mutex mutex;
     CondVar mapReady;
     CondVar mapDone;
-    KernelFn f;
+    ThreadPoolFn f;
     void *mapArgs;
     int mapTotal;
     int mapId;
@@ -247,7 +247,7 @@ ThreadPool ThreadPoolGet(void)
     return pool;
 }
 
-void ThreadPoolMap(ThreadPool pool, KernelFn f, void *arg, int total)
+void ThreadPoolMap(ThreadPool pool, ThreadPoolFn f, void *arg, int total)
 {
     mutexLock(&pool->mutex);
     pool->f           = f;
@@ -279,7 +279,7 @@ static void *threadFn(void *arg)
         }
 
         lastMapId = pool->mapId;
-        KernelFn f = pool->f;
+        ThreadPoolFn f = pool->f;
         void *ma   = pool->mapArgs;
         int total  = pool->mapTotal;
         int n      = pool->numThreads;

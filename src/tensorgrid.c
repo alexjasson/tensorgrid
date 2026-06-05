@@ -7,9 +7,9 @@
 #include <stdint.h>
 #include "tensorgrid.h"
 #include "Operation.h"
-#include "DynamicArray.h"
+#include "adt/DynamicArray.h"
 #include "utility.h"
-#include "MemoryPool.h"
+#include "adt/MemoryPool.h"
 #include "Vector.h"
 #include "Scalar.h"
 

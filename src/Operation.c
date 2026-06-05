@@ -3,8 +3,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include "Operation.h"
-#include "ThreadPool.h"
-#include "DynamicArray.h"
+#include "adt/ThreadPool.h"
+#include "adt/DynamicArray.h"
 
 // Parallel threshold
 #define PARALLEL (1 << 18)
@@ -17,7 +17,7 @@ static void operationArrayPush(Operation op);
 // Helper function
 static void zeroGradients(Operation *op);
 
-void OperationDispatch(KernelFn f, Operation *op, int total, long work)
+void OperationDispatch(ThreadPoolFn f, Operation *op, int total, long work)
 {
     if (total <= 0) return;
     if (work < PARALLEL) f(op, 0, total);

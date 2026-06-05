@@ -2,7 +2,7 @@
 #define OPERATION_H
 
 #include "tensorgrid.h"
-#include "ThreadPool.h"
+#include "adt/ThreadPool.h"
 
 // Represents an operation on a tensor, used by the autograd tape
 typedef struct Operation Operation;
@@ -23,7 +23,7 @@ Operation OperationNew(Tensor out, Tensor A, Tensor B, OperationFn forward, Oper
  * Runs f over [0, total). Parallelizes 'work' with thread pool when it is above
  * a fixed threshold.
  */
-void OperationDispatch(KernelFn f, Operation *op, int total, long work);
+void OperationDispatch(ThreadPoolFn f, Operation *op, int total, long work);
 
 /*
  * Runs an operations forward pass and returns the output. If the output tensor
