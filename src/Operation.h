@@ -36,6 +36,7 @@ Tensor OperationExecute(Operation op);
  */
 Tensor OperationMap(Unary fn, Tensor A);
 Tensor OperationZip(Binary fn, Tensor A, Tensor B);
+Tensor OperationAffine(Unary fn, Tensor A, Tensor bias, int inner);
 Tensor OperationMultiply(Tensor A, Tensor B);
 Tensor OperationConvolution(Tensor in, Tensor filter, int stride, int padding);
 Tensor OperationPool(Binary fn, Entry initial, Tensor in, int size, int stride, int padding);

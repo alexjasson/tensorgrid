@@ -213,6 +213,7 @@ Tensor TensorReduce(Binary fn, Entry initial, Tensor A, int axis)
 Tensor TensorMap(Unary fn, Tensor A)                                      { return OperationMap(fn, A);                   }
 Tensor TensorZip(Binary fn, Tensor A, Tensor B)                           { return OperationZip(fn, A, B);                }
 Tensor TensorMultiply(Tensor A, Tensor B)                                 { return OperationMultiply(A, B);               }
+Tensor TensorAffine(Unary fn, Tensor A, Tensor bias, int inner)           { return OperationAffine(fn, A, bias, inner);   }
 Tensor TensorGather(Tensor A, Tensor indices, int axis)                   { return OperationGather(A, indices, axis);     }
 Tensor TensorScatter(Binary fn, Tensor A, Tensor i, Entry e, int a, int n){ return OperationScatter(fn, A, i, e, a, n);   }
 Tensor TensorConvolution(Tensor in, Tensor filter, int s, int p)          { return OperationConvolution(in, filter, s, p);}
@@ -229,20 +230,17 @@ Tensor TensorMaxPool(Tensor A, int k, int s, int p)                       { retu
 Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Unary fn)
 {
     Tensor product = TensorMultiply(in, weight);
-    Tensor biased  = TensorAdd(product, bias);
+    Tensor out     = TensorAffine(fn, product, bias, 1);
     TensorFree(product);
-    Tensor out = TensorMap(fn, biased);
-    TensorFree(biased);
     return out;
 }
 
 Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Unary fn)
 {
-    Tensor conv   = TensorConvolution(in, filter, stride, padding);
-    Tensor biased = TensorAdd(conv, bias);
+    Tensor conv  = TensorConvolution(in, filter, stride, padding);
+    int inner    = conv.shape[2] * conv.shape[3];
+    Tensor out   = TensorAffine(fn, conv, bias, inner);
     TensorFree(conv);
-    Tensor out = TensorMap(fn, biased);
-    TensorFree(biased);
     return out;
 }
 
