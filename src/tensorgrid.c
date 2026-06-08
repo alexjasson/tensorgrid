@@ -288,9 +288,8 @@ Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, float eps)
 
     Tensor sumX     = TensorReduce(ADD, 0.0f, in, axis);
     Tensor mean     = TensorZip(DIVIDE, sumX, dT);
-    Tensor meanB    = TensorBroadcast(mean, axis, D);
-    Tensor centered = TensorSubtract(in, meanB);
-    TensorFree(sumX); TensorFree(mean); TensorFree(meanB);
+    Tensor centered = TensorSubtract(in, mean);
+    TensorFree(sumX); TensorFree(mean);
 
     Tensor sq    = TensorHadamard(centered, centered);
     Tensor sumSq = TensorReduce(ADD, 0.0f, sq, axis);
@@ -299,11 +298,10 @@ Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, float eps)
 
     Tensor varEps = TensorZip(ADD, var, epsT);
     Tensor std    = TensorMap(SQRT, varEps);
-    Tensor stdB   = TensorBroadcast(std, axis, D);
-    TensorFree(var); TensorFree(varEps); TensorFree(std);
+    TensorFree(var); TensorFree(varEps);
 
-    Tensor normalized = TensorZip(DIVIDE, centered, stdB);
-    TensorFree(centered); TensorFree(stdB);
+    Tensor normalized = TensorZip(DIVIDE, centered, std);
+    TensorFree(centered); TensorFree(std);
 
     Tensor scaled = TensorZip(MULTIPLY, normalized, weight);
     Tensor result = TensorZip(ADD, scaled, bias);
@@ -327,9 +325,8 @@ Tensor TensorSoftmax(Tensor in, float temperature)
     // Numerical stability trick
     Tensor inView       = TensorDetach(in);
     Tensor temp1        = TensorReduce(MAX, -FLT_MAX, inView, in.dimensions - 1);
-    Tensor temp2        = TensorBroadcast(temp1, in.dimensions - 1, in.shape[in.dimensions - 1]);
-    Tensor stableLogits = TensorZip(SUBTRACT, in, temp2);
-    TensorFree(temp1); TensorFree(temp2);
+    Tensor stableLogits = TensorZip(SUBTRACT, in, temp1);
+    TensorFree(temp1);
 
     // Temperature scaling
     if (temperature != 1.0f)
@@ -338,11 +335,10 @@ Tensor TensorSoftmax(Tensor in, float temperature)
     // out = exp(stableLogits) ⊘ sum(exp(stableLogits))
     Tensor A = TensorMap(EXP, stableLogits);
     Tensor B = TensorReduce(ADD, 0.0f, A, in.dimensions - 1);
-    Tensor C = TensorBroadcast(B, in.dimensions - 1, in.shape[in.dimensions - 1]);
-    Tensor result = TensorZip(DIVIDE, A, C);
+    Tensor result = TensorZip(DIVIDE, A, B);
 
     TensorFree(stableLogits);
-    TensorFree(A); TensorFree(B); TensorFree(C);
+    TensorFree(A); TensorFree(B);
     return result;
 }
 
@@ -351,9 +347,8 @@ Tensor TensorLogSoftmax(Tensor in, float temperature)
     // Numerical stability trick
     Tensor inView       = TensorDetach(in);
     Tensor temp1        = TensorReduce(MAX, -FLT_MAX, inView, in.dimensions - 1);
-    Tensor temp2        = TensorBroadcast(temp1, in.dimensions - 1, in.shape[in.dimensions - 1]);
-    Tensor stableLogits = TensorZip(SUBTRACT, in, temp2);
-    TensorFree(temp1); TensorFree(temp2);
+    Tensor stableLogits = TensorZip(SUBTRACT, in, temp1);
+    TensorFree(temp1);
 
     // Temperature scaling
     if (temperature != 1.0f)
@@ -363,11 +358,10 @@ Tensor TensorLogSoftmax(Tensor in, float temperature)
     Tensor A = TensorMap(EXP, stableLogits);
     Tensor B = TensorReduce(ADD, 0.0f, A, in.dimensions - 1);
     Tensor C = TensorMap(LOG, B);
-    Tensor D = TensorBroadcast(C, in.dimensions - 1, in.shape[in.dimensions - 1]);
-    Tensor result = TensorZip(SUBTRACT, stableLogits, D);
+    Tensor result = TensorZip(SUBTRACT, stableLogits, C);
 
     TensorFree(stableLogits);
-    TensorFree(A); TensorFree(B); TensorFree(C); TensorFree(D);
+    TensorFree(A); TensorFree(B); TensorFree(C);
     return result;
 }
 
