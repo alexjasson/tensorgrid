@@ -158,6 +158,45 @@ static void affineBackwardDb(void *arg, int start, int end)
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     int outer = TensorSize(op->out) / (biasSize * inner);
     VectorUnary dafn = (VectorUnary)ctx->u.dav;
+
+    // Fast path for linear layer
+    if (inner == 1) {
+        int vEnd = start + ((end - start) / VECTOR_DIMS) * VECTOR_DIMS;
+        for (int cb = start; cb < vEnd; cb += 4 * VECTOR_DIMS) {
+            int ce   = cb + 4 * VECTOR_DIMS < vEnd ? cb + 4 * VECTOR_DIMS : vEnd;
+            int nblk = (ce - cb) / VECTOR_DIMS;
+            Vector acc[4 * VECTOR_DIMS / VECTOR_DIMS];
+            for (int j = 0; j < nblk; j++) acc[j] = VectorZero();
+            for (int o = 0; o < outer; o++) {
+                const Entry *ar = A + (size_t)o * biasSize;
+                const Entry *dr = dout + (size_t)o * biasSize;
+                for (int j = 0; j < nblk; j++) {
+                    int cc   = cb + j * VECTOR_DIMS;
+                    Vector z = VectorAdd(VectorLoad(ar + cc), VectorLoad(bias + cc));
+                    acc[j]   = VectorFma(VectorLoad(dr + cc), dafn(z), acc[j]);
+                }
+            }
+            for (int j = 0; j < nblk; j++) {
+                int cc = cb + j * VECTOR_DIMS;
+                Entry tmp[VECTOR_DIMS];
+                VectorStore(tmp, acc[j]);
+                for (int t = 0; t < VECTOR_DIMS; t++) dB[cc + t] += tmp[t];
+            }
+        }
+        for (int cc = vEnd; cc < end; cc++) {
+            Entry s = 0, bc = bias[cc];
+            for (int o = 0; o < outer; o++) {
+                Entry x[VECTOR_DIMS] = {0}, g[VECTOR_DIMS] = {0}, y[VECTOR_DIMS];
+                x[0] = A[(size_t)o * biasSize + cc] + bc;
+                g[0] = dout[(size_t)o * biasSize + cc];
+                VectorStore(y, VectorMul(VectorLoad(g), dafn(VectorLoad(x))));
+                s += y[0];
+            }
+            dB[cc] += s;
+        }
+        return;
+    }
+
     for (int c = start; c < end; c++) {
         Entry s = 0, bc = bias[c];
         Vector sv = VectorZero();
