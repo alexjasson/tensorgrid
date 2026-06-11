@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include "../Operation.h"
 #include "../utility.h"
+#include "../Vector.h"
 
 typedef struct { int axis; } GatherContext;
 
@@ -39,7 +40,17 @@ static void OperationGatherForward(Operation *op)
 static void OperationGatherBackward(Operation *op)
 {
     if (!op->A.gradients) return;
-    OperationDispatch(gatherBackward, op, TensorSize(op->A), (long)TensorSize(op->A) * TensorSize(op->B));
+    GatherContext *ctx = op->context;
+    Tensor A = op->A, I = op->B;
+    int innerSize = 1;
+    for (int d = ctx->axis + 1; d < A.dimensions; d++) innerSize *= A.shape[d];
+    int aC = isContiguous(A.shape, A.strides, A.dimensions);
+    int iC = isContiguous(I.shape, I.strides, I.dimensions);
+
+    if (aC && iC && innerSize >= VECTOR_DIMS)
+        OperationDispatch(gatherBackward, op, innerSize, TensorSize(op->out));
+    else
+        OperationDispatch(gatherBackward, op, TensorSize(op->A), (long)TensorSize(op->A) * TensorSize(op->B));
 }
 
 
@@ -99,6 +110,27 @@ static void gatherBackward(void *arg, int start, int end)
     for (int d = axis + 1; d < A.dimensions; d++) innerSize *= A.shape[d];
     int aC = isContiguous(A.shape, A.strides, A.dimensions);
     int iC = isContiguous(I.shape, I.strides, I.dimensions);
+
+    // Fast path to parallelize over the inner columns
+    if (aC && iC && innerSize >= VECTOR_DIMS) {
+        int outer = 1;
+        for (int d = 0; d < axis; d++) outer *= A.shape[d];
+        Entry *dA   = A.gradients;
+        Entry *dout = op->out.gradients;
+        for (int o = 0; o < outer; o++) {
+            for (int ix = 0; ix < idxSize; ix++) {
+                int k = (int)I.entries[ix];
+                const Entry *src = dout + ((size_t)o * idxSize  + ix) * innerSize;
+                Entry       *dst = dA   + ((size_t)o * axisSize + k)  * innerSize;
+                int c = start;
+                for (; c + VECTOR_DIMS <= end; c += VECTOR_DIMS)
+                    VectorStore(dst + c, VectorAdd(VectorLoad(dst + c), VectorLoad(src + c)));
+                for (; c < end; c++)
+                    dst[c] += src[c];
+            }
+        }
+        return;
+    }
 
     for (int i = start; i < end; i++) {
         int inner   = i % innerSize;

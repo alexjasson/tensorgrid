@@ -101,6 +101,18 @@ static void affineBackwardDa(void *arg, int start, int end)
     Entry *A = op->A.entries, *bias = op->B.entries, *dA = op->A.gradients, *dout = op->out.gradients;
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     VectorUnary dafn = (VectorUnary)ctx->u.dav;
+    
+    // Identity case since it's derivative is 1 regardless of A
+    if (ctx->u.f == IDENTITY.f) {
+        size_t lo = (size_t)start * biasSize * inner;
+        size_t hi = (size_t)end   * biasSize * inner;
+        size_t i  = lo;
+        for (; i + VECTOR_DIMS <= hi; i += VECTOR_DIMS)
+            VectorStore(dA + i, VectorAdd(VectorLoad(dA + i), VectorLoad(dout + i)));
+        for (; i < hi; i++)
+            dA[i] += dout[i];
+        return;
+    }
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
@@ -158,6 +170,29 @@ static void affineBackwardDb(void *arg, int start, int end)
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     int outer = TensorSize(op->out) / (biasSize * inner);
     VectorUnary dafn = (VectorUnary)ctx->u.dav;
+
+    // Identity case since it's derivative is 1 regardless of A
+    if (ctx->u.f == IDENTITY.f && inner == 1) {
+        for (int c = start; c < end; c += VECTOR_DIMS) {
+            int len = end - c < VECTOR_DIMS ? end - c : VECTOR_DIMS;
+            if (len == VECTOR_DIMS) {
+                Vector acc = VectorZero();
+                for (int o = 0; o < outer; o++)
+                    acc = VectorAdd(acc, VectorLoad(dout + (size_t)o * biasSize + c));
+                Entry tmp[VECTOR_DIMS];
+                VectorStore(tmp, acc);
+                for (int t = 0; t < VECTOR_DIMS; t++) dB[c + t] += tmp[t];
+            } else {
+                for (int t = 0; t < len; t++) {
+                    Entry s = 0;
+                    for (int o = 0; o < outer; o++)
+                        s += dout[(size_t)o * biasSize + c + t];
+                    dB[c + t] += s;
+                }
+            }
+        }
+        return;
+    }
 
     // Fast path for linear layer
     if (inner == 1) {
