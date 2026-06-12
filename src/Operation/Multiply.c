@@ -64,6 +64,15 @@ static void multiplyForward(void *arg, int start, int end)
     int batchStrideA = (op->A.dimensions >= 3) ? op->A.strides[op->A.dimensions - 3] : 0;
     int batchStrideB = (op->B.dimensions >= 3) ? op->B.strides[op->B.dimensions - 3] : 0;
 
+    // If B is shared and A's batches are contiguous, fuse into a single GEMM
+    if (batchStrideB == 0 && batchStrideA == m * strideA_row) {
+        memset(op->out.entries + (size_t)start * n, 0, (size_t)(end - start) * n * sizeof(Entry));
+        MatrixMultiply((Matrix){op->A.entries + (size_t)start * strideA_row, end - start, k, strideA_row, strideA_col},
+                       (Matrix){op->B.entries, k, n, strideB_row, strideB_col},
+                       (Matrix){op->out.entries + (size_t)start * n, end - start, n, n, 1});
+        return;
+    }
+
     int i = start;
     while (i < end) {
         int batch      = i / m;
@@ -99,6 +108,13 @@ static void multiplyBackwardDa(void *arg, int start, int end)
     int bColStride   = op->B.strides[op->B.dimensions - 1];
 
     if (batchStrideA) {
+        // If B is shared and dA's batches are contiguous, fuse into a single GEMM
+        if (batchStrideB == 0 && batchStrideA == m * aRowStride) {
+            MatrixMultiply((Matrix){op->out.gradients + (size_t)start * n, end - start, n, n, 1},
+                           (Matrix){op->B.entries, n, k, bColStride, bRowStride},
+                           (Matrix){op->A.gradients + (size_t)start * aRowStride, end - start, k, aRowStride, aColStride});
+            return;
+        }
         int i = start;
         while (i < end) {
             int batch    = i / m;
@@ -156,6 +172,11 @@ static void multiplyBackwardDb(void *arg, int start, int end)
                            (Matrix){dB + (size_t)r0 * bRowStride, r1 - r0, n, bRowStride, bColStride});
             i = chunkEnd;
         }
+    } else if (batchStrideA == m * aRowStride) {
+        // If A's batches are contiguous, fuse into a single GEMM
+        MatrixMultiply((Matrix){op->A.entries + (size_t)start * aColStride, end - start, batchSize * m, aColStride, aRowStride},
+                       (Matrix){op->out.gradients, batchSize * m, n, n, 1},
+                       (Matrix){op->B.gradients + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride});
     } else {
         for (int batch = 0; batch < batchSize; batch++) {
             Entry *A    = op->A.entries     + (size_t)batch * batchStrideA;
