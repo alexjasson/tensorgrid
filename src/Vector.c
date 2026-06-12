@@ -7,6 +7,7 @@
 
 Vector VectorLoad(const float *p)                 { return _mm512_loadu_ps(p); }
 void   VectorStore(float *p, Vector x)            { _mm512_storeu_ps(p, x); }
+void   VectorFetch(const float *p)             { _mm_prefetch((const char *)p, _MM_HINT_ET0); }
 Vector VectorBcast(float x)                       { return _mm512_set1_ps(x); }
 Vector VectorAdd(Vector a, Vector b)              { return _mm512_add_ps(a, b); }
 Vector VectorSub(Vector a, Vector b)              { return _mm512_sub_ps(a, b); }
@@ -29,6 +30,7 @@ float  VectorHsum(Vector v)     { return _mm512_reduce_add_ps(v); }
 
 Vector VectorLoad(const float *p)                 { return _mm256_loadu_ps(p); }
 void   VectorStore(float *p, Vector x)            { _mm256_storeu_ps(p, x); }
+void   VectorFetch(const float *p)             { _mm_prefetch((const char *)p, _MM_HINT_ET0); }
 Vector VectorBcast(float x)                       { return _mm256_set1_ps(x); }
 Vector VectorAdd(Vector a, Vector b)              { return _mm256_add_ps(a, b); }
 Vector VectorSub(Vector a, Vector b)              { return _mm256_sub_ps(a, b); }
@@ -57,6 +59,7 @@ float  VectorHsum(Vector v)
 
 Vector VectorLoad(const float *p)                 { return *p; }
 void   VectorStore(float *p, Vector x)            { *p = x; }
+void   VectorFetch(const float *p)             { (void)p; }
 Vector VectorBcast(float x)                       { return x; }
 Vector VectorAdd(Vector a, Vector b)              { return a + b; }
 Vector VectorSub(Vector a, Vector b)              { return a - b; }

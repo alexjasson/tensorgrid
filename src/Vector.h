@@ -27,6 +27,7 @@ typedef Vector (*VectorBinary)(Vector, Vector);
 
 Vector VectorLoad(const float *p);
 void   VectorStore(float *p, Vector x);
+void   VectorFetch(const float *p);
 Vector VectorBcast(float x);
 Vector VectorAdd(Vector a, Vector b);
 Vector VectorSub(Vector a, Vector b);
