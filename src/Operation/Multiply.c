@@ -64,9 +64,9 @@ static void multiplyForward(void *arg, int start, int end)
     // If B is shared and A's batches are contiguous, fuse into a single GEMM
     if (batchStrideB == 0 && batchStrideA == m * aRowStride) {
         memset(op->out.entries + (size_t)start * n, 0, (size_t)(end - start) * n * sizeof(Entry));
-        MatrixMultiply((Matrix){op->A.entries + (size_t)start * aRowStride, end - start, k, aRowStride, aColStride},
-                       (Matrix){op->B.entries, k, n, bRowStride, bColStride},
-                       (Matrix){op->out.entries + (size_t)start * n, end - start, n, n, 1});
+        MatrixMultiply(MatrixView(op->A.entries + (size_t)start * aRowStride, end - start, k, aRowStride, aColStride),
+                       MatrixView(op->B.entries, k, n, bRowStride, bColStride),
+                       MatrixView(op->out.entries + (size_t)start * n, end - start, n, n, 1));
         return;
     }
 
@@ -82,9 +82,9 @@ static void multiplyForward(void *arg, int start, int end)
         Entry *C_batch = op->out.entries + (size_t)batch * m * n;
 
         memset(C_batch + (size_t)r0 * n, 0, (size_t)(r1 - r0) * n * sizeof(Entry));
-        MatrixMultiply((Matrix){A_batch + (size_t)r0 * aRowStride, r1 - r0, k, aRowStride, aColStride},
-                       (Matrix){B_batch, k, n, bRowStride, bColStride},
-                       (Matrix){C_batch + (size_t)r0 * n, r1 - r0, n, n, 1});
+        MatrixMultiply(MatrixView(A_batch + (size_t)r0 * aRowStride, r1 - r0, k, aRowStride, aColStride),
+                       MatrixView(B_batch, k, n, bRowStride, bColStride),
+                       MatrixView(C_batch + (size_t)r0 * n, r1 - r0, n, n, 1));
         i = chunkEnd;
     }
 }
@@ -106,18 +106,18 @@ static void multiplyBackwardDa(void *arg, int start, int end)
         for (int batch = 0; batch < batchSize; batch++) {
             Entry *dout = op->out.gradients + (size_t)batch * m * n;
             Entry *B    = op->B.entries     + (size_t)batch * batchStrideB;
-            MatrixMultiply((Matrix){B + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride},
-                           (Matrix){dout, n, m, 1, n},
-                           (Matrix){op->A.gradients + (size_t)start * aColStride, end - start, m, aColStride, aRowStride});
+            MatrixMultiply(MatrixView(B + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride),
+                           MatrixView(dout, n, m, 1, n),
+                           MatrixView(op->A.gradients + (size_t)start * aColStride, end - start, m, aColStride, aRowStride));
         }
         return;
     }
 
     // Row split
     if (batchStrideB == 0 && (op->A.dimensions < 3 || batchStrideA == m * aRowStride)) {
-        MatrixMultiply((Matrix){op->out.gradients + (size_t)start * n, end - start, n, n, 1},
-                       (Matrix){op->B.entries, n, k, bColStride, bRowStride},
-                       (Matrix){op->A.gradients + (size_t)start * aRowStride, end - start, k, aRowStride, aColStride});
+        MatrixMultiply(MatrixView(op->out.gradients + (size_t)start * n, end - start, n, n, 1),
+                       MatrixView(op->B.entries, n, k, bColStride, bRowStride),
+                       MatrixView(op->A.gradients + (size_t)start * aRowStride, end - start, k, aRowStride, aColStride));
         return;
     }
     int i = start;
@@ -130,9 +130,9 @@ static void multiplyBackwardDa(void *arg, int start, int end)
         Entry *dout  = op->out.gradients + (size_t)batch * m * n;
         Entry *B     = op->B.entries     + (size_t)batch * batchStrideB;
         Entry *dA    = op->A.gradients   + (size_t)batch * batchStrideA;
-        MatrixMultiply((Matrix){dout + (size_t)r0 * n, r1 - r0, n, n, 1},
-                       (Matrix){B, n, k, bColStride, bRowStride},
-                       (Matrix){dA + (size_t)r0 * aRowStride, r1 - r0, k, aRowStride, aColStride});
+        MatrixMultiply(MatrixView(dout + (size_t)r0 * n, r1 - r0, n, n, 1),
+                       MatrixView(B, n, k, bColStride, bRowStride),
+                       MatrixView(dA + (size_t)r0 * aRowStride, r1 - r0, k, aRowStride, aColStride));
         i = chunkEnd;
     }
 }
@@ -160,23 +160,23 @@ static void multiplyBackwardDb(void *arg, int start, int end)
             Entry *A     = op->A.entries     + (size_t)batch * batchStrideA;
             Entry *dout  = op->out.gradients + (size_t)batch * m * n;
             Entry *dB    = op->B.gradients   + (size_t)batch * batchStrideB;
-            MatrixMultiply((Matrix){A + (size_t)r0 * aColStride, r1 - r0, m, aColStride, aRowStride},
-                           (Matrix){dout, m, n, n, 1},
-                           (Matrix){dB + (size_t)r0 * bRowStride, r1 - r0, n, bRowStride, bColStride});
+            MatrixMultiply(MatrixView(A + (size_t)r0 * aColStride, r1 - r0, m, aColStride, aRowStride),
+                           MatrixView(dout, m, n, n, 1),
+                           MatrixView(dB + (size_t)r0 * bRowStride, r1 - r0, n, bRowStride, bColStride));
             i = chunkEnd;
         }
     } else if (batchStrideA == m * aRowStride) {
         // If A's batches are contiguous, fuse into a single GEMM
-        MatrixMultiply((Matrix){op->A.entries + (size_t)start * aColStride, end - start, batchSize * m, aColStride, aRowStride},
-                       (Matrix){op->out.gradients, batchSize * m, n, n, 1},
-                       (Matrix){op->B.gradients + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride});
+        MatrixMultiply(MatrixView(op->A.entries + (size_t)start * aColStride, end - start, batchSize * m, aColStride, aRowStride),
+                       MatrixView(op->out.gradients, batchSize * m, n, n, 1),
+                       MatrixView(op->B.gradients + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride));
     } else {
         for (int batch = 0; batch < batchSize; batch++) {
             Entry *A    = op->A.entries     + (size_t)batch * batchStrideA;
             Entry *dout = op->out.gradients + (size_t)batch * m * n;
-            MatrixMultiply((Matrix){A + (size_t)start * aColStride, end - start, m, aColStride, aRowStride},
-                           (Matrix){dout, m, n, n, 1},
-                           (Matrix){op->B.gradients + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride});
+            MatrixMultiply(MatrixView(A + (size_t)start * aColStride, end - start, m, aColStride, aRowStride),
+                           MatrixView(dout, m, n, n, 1),
+                           MatrixView(op->B.gradients + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride));
         }
     }
 }

@@ -127,9 +127,9 @@ static void convolutionForward(void *arg, int start, int end)
         im2col(op, patches, n, 0, K);
         Entry *prod = op->out.entries + (size_t)n * Cout * S;
         memset(prod, 0, (size_t)Cout * S * sizeof(Entry));
-        MatrixMultiply((Matrix){filter, Cout, K, K, 1},
-                       (Matrix){patches, K, S, S, 1},
-                       (Matrix){prod, Cout, S, S, 1});
+        MatrixMultiply(MatrixView(filter, Cout, K, K, 1),
+                       MatrixView(patches, K, S, S, 1),
+                       MatrixView(prod, Cout, S, S, 1));
     }
 }
 
@@ -149,9 +149,9 @@ static void convolutionBackwardDb(void *arg, int start, int end)
     for (int n = 0; n < N; n++) {
         im2col(op, patches, n, start, end);
         Entry *dProd_n = dProd + (size_t)n * Cout * S;
-        MatrixMultiply((Matrix){dProd_n, Cout, S, S, 1},
-                       (Matrix){patches, S, kn, 1, S},
-                       (Matrix){dFilter + start, Cout, kn, K, 1});
+        MatrixMultiply(MatrixView(dProd_n, Cout, S, S, 1),
+                       MatrixView(patches, S, kn, 1, S),
+                       MatrixView(dFilter + start, Cout, kn, K, 1));
     }
 }
 
@@ -180,9 +180,9 @@ static void convolutionBackwardDa(void *arg, int start, int end)
     for (int n = start; n < end; n++) {
         Entry *dProd_n = dProd + (size_t)n * Cout * S;
         memset(dWin, 0, (size_t)K * S * sizeof(Entry));
-        MatrixMultiply((Matrix){filter, K, Cout, 1, K},
-                       (Matrix){dProd_n, Cout, S, S, 1},
-                       (Matrix){dWin, K, S, S, 1});
+        MatrixMultiply(MatrixView(filter, K, Cout, 1, K),
+                       MatrixView(dProd_n, Cout, S, S, 1),
+                       MatrixView(dWin, K, S, S, 1));
 
         for (int ci = 0; ci < Cin; ci++) {
             Entry *plane = dInput + (size_t)n * sN + (size_t)ci * sC;

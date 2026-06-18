@@ -5,6 +5,11 @@
 
 static int imin(int a, int b) { return a < b ? a : b; }
 
+Matrix MatrixView(Entry *data, int rows, int cols, int sRow, int sCol)
+{
+    return (Matrix){data, rows, cols, sRow, sCol};
+}
+
 // An MR x NRV block of vector registers, used by microKernel
 #define NRV 2
 #define NR  (NRV * VECTOR_DIMS)
