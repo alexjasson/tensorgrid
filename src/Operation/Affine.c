@@ -166,68 +166,62 @@ static void affineBackwardDb(void *arg, int start, int end)
 {
     Operation *op = arg;
     AffineContext *ctx = op->context;
-    Entry *A = op->A.entries, *bias = op->B.entries, *dB = op->B.gradients, *dout = op->out.gradients;
+    Entry *A = op->A.entries, *bias = op->B.entries, *dout = op->out.gradients, *dB = op->B.gradients;
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     int outer = TensorSize(op->out) / (biasSize * inner);
     VectorUnary dafn = (VectorUnary)ctx->u.dav;
 
     // Identity case since it's derivative is 1 regardless of A
     if (ctx->u.f == IDENTITY.f && inner == 1) {
-        for (int c = start; c < end; c += VECTOR_DIMS) {
-            int len = end - c < VECTOR_DIMS ? end - c : VECTOR_DIMS;
-            if (len == VECTOR_DIMS) {
-                Vector acc = VectorZero();
-                for (int o = 0; o < outer; o++)
-                    acc = VectorAdd(acc, VectorLoad(dout + (size_t)o * biasSize + c));
-                Entry tmp[VECTOR_DIMS];
-                VectorStore(tmp, acc);
-                for (int t = 0; t < VECTOR_DIMS; t++) dB[c + t] += tmp[t];
-            } else {
-                for (int t = 0; t < len; t++) {
-                    Entry s = 0;
-                    for (int o = 0; o < outer; o++)
-                        s += dout[(size_t)o * biasSize + c + t];
-                    dB[c + t] += s;
-                }
-            }
+        int c = start;
+        for (; c + VECTOR_DIMS <= end; c += VECTOR_DIMS) {
+            Vector acc = VectorZero();
+            for (int o = 0; o < outer; o++)
+                acc = VectorAdd(acc, VectorLoad(dout + (size_t)o * biasSize + c));
+            VectorStore(dB + c, VectorAdd(VectorLoad(dB + c), acc));
+        }
+        for (; c < end; c++) {
+            Entry s = 0;
+            for (int o = 0; o < outer; o++)
+                s += dout[(size_t)o * biasSize + c];
+            dB[c] += s;
         }
         return;
     }
 
     // Fast path for linear layer
     if (inner == 1) {
-        int vEnd = start + ((end - start) / VECTOR_DIMS) * VECTOR_DIMS;
-        for (int cb = start; cb < vEnd; cb += 4 * VECTOR_DIMS) {
-            int ce   = cb + 4 * VECTOR_DIMS < vEnd ? cb + 4 * VECTOR_DIMS : vEnd;
-            int nblk = (ce - cb) / VECTOR_DIMS;
+        int c = start;
+        while (c + VECTOR_DIMS <= end) {
+            int nblk = 0, cc = c;
+            while (nblk < 4 && cc + VECTOR_DIMS <= end) { nblk++; cc += VECTOR_DIMS; }
             Vector acc[4 * VECTOR_DIMS / VECTOR_DIMS];
             for (int j = 0; j < nblk; j++) acc[j] = VectorZero();
             for (int o = 0; o < outer; o++) {
                 const Entry *ar = A + (size_t)o * biasSize;
                 const Entry *dr = dout + (size_t)o * biasSize;
                 for (int j = 0; j < nblk; j++) {
-                    int cc   = cb + j * VECTOR_DIMS;
-                    Vector z = VectorAdd(VectorLoad(ar + cc), VectorLoad(bias + cc));
-                    acc[j]   = VectorFma(VectorLoad(dr + cc), dafn(z), acc[j]);
+                    int cj   = c + j * VECTOR_DIMS;
+                    Vector z = VectorAdd(VectorLoad(ar + cj), VectorLoad(bias + cj));
+                    acc[j]   = VectorFma(VectorLoad(dr + cj), dafn(z), acc[j]);
                 }
             }
             for (int j = 0; j < nblk; j++) {
-                int cc = cb + j * VECTOR_DIMS;
-                Entry tmp[VECTOR_DIMS];
-                VectorStore(tmp, acc[j]);
-                for (int t = 0; t < VECTOR_DIMS; t++) dB[cc + t] += tmp[t];
+                int cj = c + j * VECTOR_DIMS;
+                VectorStore(dB + cj, VectorAdd(VectorLoad(dB + cj), acc[j]));
             }
+            c = cc;
         }
-        for (int cc = vEnd; cc < end; cc++) {
-            Entry s = 0, bc = bias[cc];
+        for (; c < end; c++) {
+            Entry s = 0, bc = bias[c];
             for (int o = 0; o < outer; o++) {
                 Entry x[VECTOR_DIMS] = {0}, g[VECTOR_DIMS] = {0}, y[VECTOR_DIMS];
-                x[0] = A[(size_t)o * biasSize + cc] + bc;
-                g[0] = dout[(size_t)o * biasSize + cc];
+                x[0] = A[(size_t)o * biasSize + c] + bc;
+                g[0] = dout[(size_t)o * biasSize + c];
                 VectorStore(y, VectorMul(VectorLoad(g), dafn(VectorLoad(x))));
                 s += y[0];
             }
-            dB[cc] += s;
+            dB[c] += s;
         }
         return;
     }

@@ -74,6 +74,7 @@ Tensor TensorNew(int dimensions, int *shape, int autograd)
     size_t bytes = (size_t)size * sizeof(Entry);
     MemoryPool pool = MemoryPoolGet();
     t.entries   = MemoryPoolAlloc(pool, bytes);
+    memset(t.entries, 0, bytes);
     t.gradients = autograd ? MemoryPoolAlloc(pool, bytes) : NULL;
     t.optimizer = autograd ? calloc(1, sizeof(optimizer)) : NULL;
     t.refcount  = malloc(sizeof(int));
@@ -95,6 +96,7 @@ TensorArray TensorArrayNew(void)
 Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape)
 {
     Tensor t = TensorNew(dimensions, shape, TRUE);
+    memset(t.gradients, 0, (size_t)TensorSize(t) * sizeof(Entry));
     DynamicArrayPush(ta->tensors, &t);
     return t;
 }

@@ -7,7 +7,6 @@
 #include "../Matrix.h"
 
 typedef struct {
-    Tensor scratch;
     int fH, fW, stride, padding;
 } ConvolutionContext;
 
@@ -17,7 +16,7 @@ static void convolutionForward(void *arg, int start, int end);
 static void convolutionBackwardDb(void *arg, int start, int end);
 static void convolutionBackwardDa(void *arg, int start, int end);
 
-static void im2col(Operation *op, Entry *patches, int n);
+static void im2col(Operation *op, Entry *patches, int n, int kStart, int kEnd);
 
 Tensor OperationConvolution(Tensor in, Tensor filter, int stride, int padding)
 {
@@ -36,7 +35,6 @@ Tensor OperationConvolution(Tensor in, Tensor filter, int stride, int padding)
         fprintf(stderr, "Insufficient memory!\n");
         exit(EXIT_FAILURE);
     }
-    ctx->scratch = (Tensor){0};
     ctx->stride = stride;
     ctx->padding = padding;
     ctx->fH = fH;
@@ -65,25 +63,16 @@ static void OperationConvolutionBackward(Operation *op)
     int N    = op->out.shape[0];
     long matmulWork = (long)N * Cout * S * K;
 
-    if (op->B.gradients) {
-        int CK = Cout * K;
-        ctx->scratch = TensorNew(2, (int[]){N, CK}, FALSE);
-        OperationDispatch(convolutionBackwardDb, op, N, matmulWork);
-        for (int n = 0; n < N; n++)
-            for (int j = 0; j < CK; j++)
-                op->B.gradients[j] += ctx->scratch.entries[(size_t)n * CK + j];
-        TensorFree(ctx->scratch);
-        ctx->scratch = (Tensor){0};
-    }
+    if (op->B.gradients)
+        OperationDispatch(convolutionBackwardDb, op, K, matmulWork);
     if (op->A.gradients)
         OperationDispatch(convolutionBackwardDa, op, N, matmulWork);
 }
 
-static void im2col(Operation *op, Entry *patches, int n)
+static void im2col(Operation *op, Entry *patches, int n, int kStart, int kEnd)
 {
     ConvolutionContext *ctx = op->context;
     Tensor A   = op->A;
-    int Cin    = op->B.shape[1];
     int fH     = ctx->fH,     fW      = ctx->fW;
     int H      = A.shape[2], W       = A.shape[3];
     int Hout   = op->out.shape[2], Wout = op->out.shape[3];
@@ -91,12 +80,11 @@ static void im2col(Operation *op, Entry *patches, int n)
     int sN = A.strides[0], sC = A.strides[1], sH = A.strides[2], sW = A.strides[3];
     Entry *input = A.entries;
     int S = Hout * Wout;
-    int K = Cin * fH * fW;
-    for (int k = 0; k < K; k++) {
+    for (int k = kStart; k < kEnd; k++) {
         int ci = k / (fH * fW);
         int fh = (k / fW) % fH;
         int fw = k % fW;
-        Entry *row     = patches + (size_t)k * S;
+        Entry *row     = patches + (size_t)(k - kStart) * S;
         Entry *inPlane = input + (size_t)n * sN + (size_t)ci * sC;
         for (int oh = 0; oh < Hout; oh++) {
             Entry *outRow = row + (size_t)oh * Wout;
@@ -136,7 +124,7 @@ static void convolutionForward(void *arg, int start, int end)
     Entry patches[(size_t)K * S];
 
     for (int n = start; n < end; n++) {
-        im2col(op, patches, n);
+        im2col(op, patches, n, 0, K);
         Entry *prod = op->out.entries + (size_t)n * Cout * S;
         memset(prod, 0, (size_t)Cout * S * sizeof(Entry));
         MatrixMultiply((Matrix){filter, Cout, K, K, 1},
@@ -149,22 +137,21 @@ static void convolutionBackwardDb(void *arg, int start, int end)
 {
     Operation *op = arg;
     ConvolutionContext *ctx = op->context;
-    int Cin    = op->B.shape[1];
     int Cout   = op->B.shape[0];
-    int fH     = ctx->fH, fW = ctx->fW;
     int S      = op->out.shape[2] * op->out.shape[3];
-    int K      = Cin * fH * fW;
-    Entry *dProd = op->out.gradients;
-    Entry patches[(size_t)K * S];
+    int K      = op->B.shape[1] * ctx->fH * ctx->fW;
+    int N      = op->out.shape[0];
+    int kn     = end - start;
+    Entry *dProd   = op->out.gradients;
+    Entry *dFilter = op->B.gradients;
+    Entry patches[(size_t)kn * S];
 
-    for (int n = start; n < end; n++) {
-        im2col(op, patches, n);
-        Entry *partial = ctx->scratch.entries + (size_t)n * Cout * K;
-        Entry *dProd_n = dProd       + (size_t)n * Cout * S;
-        memset(partial, 0, (size_t)Cout * K * sizeof(Entry));
+    for (int n = 0; n < N; n++) {
+        im2col(op, patches, n, start, end);
+        Entry *dProd_n = dProd + (size_t)n * Cout * S;
         MatrixMultiply((Matrix){dProd_n, Cout, S, S, 1},
-                       (Matrix){patches, S, K, 1, S},
-                       (Matrix){partial, Cout, K, K, 1});
+                       (Matrix){patches, S, kn, 1, S},
+                       (Matrix){dFilter + start, Cout, kn, K, 1});
     }
 }
 

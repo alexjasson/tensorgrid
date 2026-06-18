@@ -11,8 +11,8 @@ typedef struct memoryPool *MemoryPool;
 MemoryPool MemoryPoolGet(void);
 
 /*
- * Returns a pointer to a zeroed block of memory of size bytes. Reuses memory from
- * pool when possible. Returns NULL if allocation fails.
+ * Returns a pointer to a block of memory of size bytes. Reuses memory from the pool
+ * when possible. Returns NULL if allocation fails.
  */
 void *MemoryPoolAlloc(MemoryPool pool, size_t bytes);
 

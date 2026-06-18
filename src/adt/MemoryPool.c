@@ -1,7 +1,6 @@
 // https://github.com/alexjasson/tensorgrid
 
 #include <stdlib.h>
-#include <string.h>
 #include "MemoryPool.h"
 
 #define POOL_SIZE 256
@@ -31,10 +30,9 @@ void *MemoryPoolAlloc(MemoryPool pool, size_t bytes)
         if (pool->slots[i].bytes == bytes) {
             void *ptr = pool->slots[i].ptr;
             pool->slots[i] = pool->slots[--pool->count];
-            memset(ptr, 0, bytes);
             return ptr;
         }
-    return calloc(1, bytes);
+    return malloc(bytes);
 }
 
 void MemoryPoolFree(MemoryPool pool, void *ptr, size_t bytes)
