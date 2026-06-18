@@ -12,7 +12,7 @@ static int imin(int a, int b) { return a < b ? a : b; }
 
 // Cache block sizes for the temporary packed A/B blocks
 #define KC 256
-#define NC (NR * 16)
+#define NC (NR * 32)
 #define MC (MR * 16)
 
 static void packB(Entry *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock);
@@ -23,7 +23,18 @@ static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, 
 static void packB(Entry *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock)
 {
     int panels = (nBlock + NR - 1) / NR;
-    for (int jp = 0; jp < panels; jp++) {
+    int fullPanels = (B.sCol == 1) ? nBlock / NR : 0;
+
+    // Vectorize contiguous rows
+    for (int jp = 0; jp < fullPanels; jp++) {
+        Entry *dst = Bp + (size_t)jp * kBlock * NR;
+        Entry *src = B.data + (size_t)p0 * B.sRow + j0 + (size_t)jp * NR;
+        for (int p = 0; p < kBlock; p++)
+            for (int v = 0; v < NR; v += VECTOR_DIMS)
+                VectorStore(dst + p * NR + v, VectorLoad(src + (size_t)p * B.sRow + v));
+    }
+
+    for (int jp = fullPanels; jp < panels; jp++) {
         Entry *dst = Bp + (size_t)jp * kBlock * NR;
         for (int p = 0; p < kBlock; p++) {
             Entry *brow = B.data + (size_t)(p0 + p) * B.sRow;
@@ -57,6 +68,12 @@ static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, 
     for (int mr = 0; mr < MR; mr++)
         for (int v = 0; v < NRV; v++)
             acc[mr][v] = VectorZero();
+
+    // Prefetch the C tile
+    for (int mr = 0; mr < mValid; mr++) {
+        VectorFetch(C.data + (size_t)mr * C.sRow);
+        VectorFetch(C.data + (size_t)mr * C.sRow + NR - 1);
+    }
 
     for (int p = 0; p < kBlock; p++) {
         Vector b[NRV];

@@ -13,15 +13,6 @@ static void OperationZipBackward(Operation *op);
 static void zipForward(void *arg, int start, int end);
 static void zipBackward(void *arg, int start, int end);
 
-static int isBroadcast(Tensor t);
-
-static int isBroadcast(Tensor t)
-{
-    for (int i = 0; i < t.dimensions; i++)
-        if (t.strides[i] == 0 && t.shape[i] > 1) return TRUE;
-    return FALSE;
-}
-
 Tensor OperationZip(Binary fn, Tensor A, Tensor B)
 {
     Tensor zipA = A;
@@ -80,11 +71,7 @@ static void OperationZipForward(Operation *op)
 static void OperationZipBackward(Operation *op)
 {
     if (!op->A.gradients && !op->B.gradients) return;
-    int total = TensorSize(op->out);
-    int reduces = (op->A.gradients && isBroadcast(op->A)) ||
-                  (op->B.gradients && isBroadcast(op->B));
-    if (reduces) zipBackward(op, 0, total);
-    else         OperationDispatch(zipBackward, op, total, total);
+    OperationDispatch(zipBackward, op, TensorSize(op->out), TensorSize(op->out));
 }
 
 
@@ -217,6 +204,31 @@ static void zipForward(void *arg, int start, int end)
 static void zipBackward(void *arg, int start, int end)
 {
     Operation  *op = arg;
+
+    // Finds the optimal start/end values so each thread gets a multiple of G work
+    // and the last thread doesn't do extra work
+    int total = TensorSize(op->out);
+    if (start != 0 || end != total) {
+        int G = 1;
+        Tensor *in[2] = { &op->A, &op->B };
+        for (int n = 0; n < 2; n++) {
+            if (!in[n]->gradients) continue;
+            for (int ax = 0; ax < op->out.dimensions; ax++)
+                if (in[n]->strides[ax] == 0 && in[n]->shape[ax] > 1) {
+                    int g = 1;
+                    for (int d = ax; d < op->out.dimensions; d++)
+                        g *= op->out.shape[d];
+                    if (g > G) G = g;
+                    break;
+                }
+        }
+        if (G > 1) {
+            start = (start + G - 1) / G * G;
+            end   = end == total ? total : (end + G - 1) / G * G;
+            if (start >= end) return;
+        }
+    }
+
     ZipContext *ctx = op->context;
     Entry       *A = op->A.entries;
     Entry       *B = op->B.entries;

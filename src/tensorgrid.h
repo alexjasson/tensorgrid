@@ -322,6 +322,14 @@ Tensor TensorZip(Binary fn, Tensor A, Tensor B);
 Tensor TensorMultiply(Tensor A, Tensor B);
 
 /*
+ * out = f(A + bias). Each bias entry is broadcast over the outer and inner axes.
+ * A:    [outer, biasSize, inner]
+ * bias: [biasSize]
+ * out:  [outer, biasSize, inner]
+ */
+Tensor TensorAffine(Unary fn, Tensor A, Tensor bias, int inner);
+
+/*
 * Read from A at positions given by indices.
 *
 * A:       [..., s_0, ..., s_m, ...]   (indices shape lives at axis)

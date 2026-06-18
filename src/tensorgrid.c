@@ -74,6 +74,7 @@ Tensor TensorNew(int dimensions, int *shape, int autograd)
     size_t bytes = (size_t)size * sizeof(Entry);
     MemoryPool pool = MemoryPoolGet();
     t.entries   = MemoryPoolAlloc(pool, bytes);
+    memset(t.entries, 0, bytes);
     t.gradients = autograd ? MemoryPoolAlloc(pool, bytes) : NULL;
     t.optimizer = autograd ? calloc(1, sizeof(optimizer)) : NULL;
     t.refcount  = malloc(sizeof(int));
@@ -95,6 +96,7 @@ TensorArray TensorArrayNew(void)
 Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape)
 {
     Tensor t = TensorNew(dimensions, shape, TRUE);
+    memset(t.gradients, 0, (size_t)TensorSize(t) * sizeof(Entry));
     DynamicArrayPush(ta->tensors, &t);
     return t;
 }
@@ -213,6 +215,7 @@ Tensor TensorReduce(Binary fn, Entry initial, Tensor A, int axis)
 Tensor TensorMap(Unary fn, Tensor A)                                      { return OperationMap(fn, A);                   }
 Tensor TensorZip(Binary fn, Tensor A, Tensor B)                           { return OperationZip(fn, A, B);                }
 Tensor TensorMultiply(Tensor A, Tensor B)                                 { return OperationMultiply(A, B);               }
+Tensor TensorAffine(Unary fn, Tensor A, Tensor bias, int inner)           { return OperationAffine(fn, A, bias, inner);   }
 Tensor TensorGather(Tensor A, Tensor indices, int axis)                   { return OperationGather(A, indices, axis);     }
 Tensor TensorScatter(Binary fn, Tensor A, Tensor i, Entry e, int a, int n){ return OperationScatter(fn, A, i, e, a, n);   }
 Tensor TensorConvolution(Tensor in, Tensor filter, int s, int p)          { return OperationConvolution(in, filter, s, p);}
@@ -229,20 +232,17 @@ Tensor TensorMaxPool(Tensor A, int k, int s, int p)                       { retu
 Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Unary fn)
 {
     Tensor product = TensorMultiply(in, weight);
-    Tensor biased  = TensorAdd(product, bias);
+    Tensor out     = TensorAffine(fn, product, bias, 1);
     TensorFree(product);
-    Tensor out = TensorMap(fn, biased);
-    TensorFree(biased);
     return out;
 }
 
 Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Unary fn)
 {
-    Tensor conv   = TensorConvolution(in, filter, stride, padding);
-    Tensor biased = TensorAdd(conv, bias);
+    Tensor conv  = TensorConvolution(in, filter, stride, padding);
+    int inner    = conv.shape[2] * conv.shape[3];
+    Tensor out   = TensorAffine(fn, conv, bias, inner);
     TensorFree(conv);
-    Tensor out = TensorMap(fn, biased);
-    TensorFree(biased);
     return out;
 }
 
@@ -290,9 +290,8 @@ Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, float eps)
 
     Tensor sumX     = TensorReduce(ADD, 0.0f, in, axis);
     Tensor mean     = TensorZip(DIVIDE, sumX, dT);
-    Tensor meanB    = TensorBroadcast(mean, axis, D);
-    Tensor centered = TensorSubtract(in, meanB);
-    TensorFree(sumX); TensorFree(mean); TensorFree(meanB);
+    Tensor centered = TensorSubtract(in, mean);
+    TensorFree(sumX); TensorFree(mean);
 
     Tensor sq    = TensorHadamard(centered, centered);
     Tensor sumSq = TensorReduce(ADD, 0.0f, sq, axis);
@@ -301,11 +300,10 @@ Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, float eps)
 
     Tensor varEps = TensorZip(ADD, var, epsT);
     Tensor std    = TensorMap(SQRT, varEps);
-    Tensor stdB   = TensorBroadcast(std, axis, D);
-    TensorFree(var); TensorFree(varEps); TensorFree(std);
+    TensorFree(var); TensorFree(varEps);
 
-    Tensor normalized = TensorZip(DIVIDE, centered, stdB);
-    TensorFree(centered); TensorFree(stdB);
+    Tensor normalized = TensorZip(DIVIDE, centered, std);
+    TensorFree(centered); TensorFree(std);
 
     Tensor scaled = TensorZip(MULTIPLY, normalized, weight);
     Tensor result = TensorZip(ADD, scaled, bias);
@@ -329,9 +327,8 @@ Tensor TensorSoftmax(Tensor in, float temperature)
     // Numerical stability trick
     Tensor inView       = TensorDetach(in);
     Tensor temp1        = TensorReduce(MAX, -FLT_MAX, inView, in.dimensions - 1);
-    Tensor temp2        = TensorBroadcast(temp1, in.dimensions - 1, in.shape[in.dimensions - 1]);
-    Tensor stableLogits = TensorZip(SUBTRACT, in, temp2);
-    TensorFree(temp1); TensorFree(temp2);
+    Tensor stableLogits = TensorZip(SUBTRACT, in, temp1);
+    TensorFree(temp1);
 
     // Temperature scaling
     if (temperature != 1.0f)
@@ -340,11 +337,10 @@ Tensor TensorSoftmax(Tensor in, float temperature)
     // out = exp(stableLogits) ⊘ sum(exp(stableLogits))
     Tensor A = TensorMap(EXP, stableLogits);
     Tensor B = TensorReduce(ADD, 0.0f, A, in.dimensions - 1);
-    Tensor C = TensorBroadcast(B, in.dimensions - 1, in.shape[in.dimensions - 1]);
-    Tensor result = TensorZip(DIVIDE, A, C);
+    Tensor result = TensorZip(DIVIDE, A, B);
 
     TensorFree(stableLogits);
-    TensorFree(A); TensorFree(B); TensorFree(C);
+    TensorFree(A); TensorFree(B);
     return result;
 }
 
@@ -353,9 +349,8 @@ Tensor TensorLogSoftmax(Tensor in, float temperature)
     // Numerical stability trick
     Tensor inView       = TensorDetach(in);
     Tensor temp1        = TensorReduce(MAX, -FLT_MAX, inView, in.dimensions - 1);
-    Tensor temp2        = TensorBroadcast(temp1, in.dimensions - 1, in.shape[in.dimensions - 1]);
-    Tensor stableLogits = TensorZip(SUBTRACT, in, temp2);
-    TensorFree(temp1); TensorFree(temp2);
+    Tensor stableLogits = TensorZip(SUBTRACT, in, temp1);
+    TensorFree(temp1);
 
     // Temperature scaling
     if (temperature != 1.0f)
@@ -365,11 +360,10 @@ Tensor TensorLogSoftmax(Tensor in, float temperature)
     Tensor A = TensorMap(EXP, stableLogits);
     Tensor B = TensorReduce(ADD, 0.0f, A, in.dimensions - 1);
     Tensor C = TensorMap(LOG, B);
-    Tensor D = TensorBroadcast(C, in.dimensions - 1, in.shape[in.dimensions - 1]);
-    Tensor result = TensorZip(SUBTRACT, stableLogits, D);
+    Tensor result = TensorZip(SUBTRACT, stableLogits, C);
 
     TensorFree(stableLogits);
-    TensorFree(A); TensorFree(B); TensorFree(C); TensorFree(D);
+    TensorFree(A); TensorFree(B); TensorFree(C);
     return result;
 }
 
