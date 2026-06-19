@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include "../Operation.h"
 #include "../Matrix.h"
 
@@ -64,7 +65,7 @@ static void OperationConvolutionBackward(Operation *op)
     long matmulWork = (long)N * Cout * S * K;
 
     if (op->B.gradients)
-        OperationDispatch(convolutionBackwardDb, op, K, matmulWork);
+        OperationDispatch(convolutionBackwardDb, op, N, matmulWork);
     if (op->A.gradients)
         OperationDispatch(convolutionBackwardDa, op, N, matmulWork);
 }
@@ -140,19 +141,25 @@ static void convolutionBackwardDb(void *arg, int start, int end)
     int Cout   = op->B.shape[0];
     int S      = op->out.shape[2] * op->out.shape[3];
     int K      = op->B.shape[1] * ctx->fH * ctx->fW;
-    int N      = op->out.shape[0];
-    int kn     = end - start;
     Entry *dProd   = op->out.gradients;
     Entry *dFilter = op->B.gradients;
-    Entry patches[(size_t)kn * S];
+    Entry patches[(size_t)K * S];
+    Entry local[(size_t)Cout * K];
+    memset(local, 0, (size_t)Cout * K * sizeof(Entry));
 
-    for (int n = 0; n < N; n++) {
-        im2col(op, patches, n, start, end);
+    for (int n = start; n < end; n++) {
+        im2col(op, patches, n, 0, K);
         Entry *dProd_n = dProd + (size_t)n * Cout * S;
         MatrixMultiply(MatrixView(dProd_n, Cout, S, S, 1),
-                       MatrixView(patches, S, kn, 1, S),
-                       MatrixView(dFilter + start, Cout, kn, K, 1));
+                       MatrixView(patches, S, K, 1, S),
+                       MatrixView(local, Cout, K, K, 1));
     }
+
+    ThreadPool pool = ThreadPoolGet();
+    ThreadPoolLock(pool);
+    for (size_t i = 0; i < (size_t)Cout * K; i++)
+        dFilter[i] += local[i];
+    ThreadPoolUnlock(pool);
 }
 
 static void convolutionBackwardDa(void *arg, int start, int end)
