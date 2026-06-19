@@ -83,7 +83,7 @@ float  VectorHsum(Vector v)                 { return v; }
 // exp(a) with ~1e-6 relative error
 Vector expv(Vector a)
 {
-    a = VectorMin(VectorMax(a, VectorBcast(-87.3f)), VectorBcast(88.7f));
+    a = VectorMin(VectorMax(a, VectorBcast(-87.3f)), VectorBcast(88.0f));
     Vector n = VectorRound(VectorMul(a, VectorBcast(1.4426950408889634f)));
     Vector r = VectorFnmadd(n, VectorBcast(0.6931471805599453f), a);
     Vector p = VectorBcast(1.0f / 120.0f);

@@ -5,7 +5,7 @@
 // exp(a) with ~1e-5 relative error
 Scalar expe(Scalar a)
 {
-    if (a >  88.7f) return FLT_MAX;
+    if (a >  88.0f) return FLT_MAX;
     if (a < -87.3f) return 0.0f;
 
     int   n = (int)(a * 1.4426950408889634f + (a >= 0.0f ? 0.5f : -0.5f));
