@@ -14,4 +14,11 @@ ThreadPool ThreadPoolGet(void);
  */
 void ThreadPoolMap(ThreadPool pool, ThreadPoolFn f, void *arg, int total);
 
+/*
+ * Acquire/release the pool's lock for short critical sections. Used when threads need to
+ * synchronize on shared data. 
+ */
+void ThreadPoolLock(ThreadPool pool);
+void ThreadPoolUnlock(ThreadPool pool);
+
 #endif

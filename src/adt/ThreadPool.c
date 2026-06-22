@@ -167,6 +167,7 @@ struct threadPool {
     struct thread **threads;
     int numThreads;
     Mutex mutex;
+    Mutex critical;
     CondVar mapReady;
     CondVar mapDone;
     ThreadPoolFn f;
@@ -191,10 +192,12 @@ static ThreadPool newThreadPool(int n)
 
 #if defined(__linux__)
     pool->mutex    = (Mutex){0};
+    pool->critical = (Mutex){0};
     pool->mapReady = (CondVar){0};
     pool->mapDone  = (CondVar){0};
 #elif defined(__APPLE__)
     pthread_mutex_init(&pool->mutex.m, NULL);
+    pthread_mutex_init(&pool->critical.m, NULL);
     pthread_cond_init(&pool->mapReady.c, NULL);
     pthread_cond_init(&pool->mapDone.c, NULL);
 #endif
@@ -222,6 +225,7 @@ static void freeThreadPool(void)
 
 #if defined(__APPLE__)
     pthread_mutex_destroy(&pool->mutex.m);
+    pthread_mutex_destroy(&pool->critical.m);
     pthread_cond_destroy(&pool->mapReady.c);
     pthread_cond_destroy(&pool->mapDone.c);
 #endif
@@ -261,6 +265,9 @@ void ThreadPoolMap(ThreadPool pool, ThreadPoolFn f, void *arg, int total)
         condVarWait(&pool->mapDone, &pool->mutex);
     mutexUnlock(&pool->mutex);
 }
+
+void ThreadPoolLock(ThreadPool pool)   { mutexLock(&pool->critical);   }
+void ThreadPoolUnlock(ThreadPool pool) { mutexUnlock(&pool->critical); }
 
 static void *threadFn(void *arg)
 {

@@ -46,8 +46,11 @@ static void OperationMultiplyBackward(Operation *op)
         int colSplit = batchStrideA == 0 && (batchSize > 1 || m < k);
         OperationDispatch(multiplyBackwardDa, op, colSplit ? k : batchSize * m, work);
     }
-    if (op->B.gradients)
-        OperationDispatch(multiplyBackwardDb, op, batchStrideB ? batchSize * k : k, work);
+    if (op->B.gradients) {
+        int aRowStride = op->A.strides[dimsA - 2];
+        int reduce = batchStrideB == 0 && batchStrideA == m * aRowStride && batchSize > 1;
+        OperationDispatch(multiplyBackwardDb, op, reduce ? batchSize * m : (batchStrideB ? batchSize * k : k), work);
+    }
 }
 
 // out = A @ B
@@ -148,6 +151,21 @@ static void multiplyBackwardDb(void *arg, int start, int end)
     int aRowStride = op->A.strides[dimsA - 2], aColStride = op->A.strides[dimsA - 1];
     int bRowStride = op->B.strides[dimsB - 2], bColStride = op->B.strides[dimsB - 1];
     int batchSize = TensorSize(op->out) / (m * n);
+
+    if (batchStrideB == 0 && batchStrideA == m * aRowStride && batchSize > 1) {
+        Entry local[(size_t)k * n];
+        memset(local, 0, (size_t)k * n * sizeof(Entry));
+        MatrixMultiply(MatrixView(op->A.entries + (size_t)start * aRowStride, k, end - start, aColStride, aRowStride),
+                       MatrixView(op->out.gradients + (size_t)start * n, end - start, n, n, 1),
+                       MatrixView(local, k, n, n, 1));
+        ThreadPool pool = ThreadPoolGet();
+        ThreadPoolLock(pool);
+        for (int i = 0; i < k; i++)
+            for (int j = 0; j < n; j++)
+                op->B.gradients[(size_t)i * bRowStride + (size_t)j * bColStride] += local[(size_t)i * n + j];
+        ThreadPoolUnlock(pool);
+        return;
+    }
 
     if (batchStrideB) {
         int i = start;
