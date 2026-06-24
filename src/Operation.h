@@ -45,6 +45,7 @@ Tensor OperationScatter(Binary fn, Tensor A, Tensor B, Entry fill, int axis, int
 Tensor OperationNormalize(Tensor in, float eps);
 Tensor OperationSoftmax(Tensor logits, float temperature);
 Tensor OperationCrossEntropy(Tensor labels, Tensor logits, float temperature);
+Tensor OperationMSE(Tensor y, Tensor y_hat);
 
 /*
  * Run the recorded autograd tape backwards from the loss tensor

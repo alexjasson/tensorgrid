@@ -222,6 +222,7 @@ Tensor TensorConvolution(Tensor in, Tensor filter, int s, int p)          { retu
 Tensor TensorPool(Binary fn, Entry e, Tensor in, int size, int s, int p)  { return OperationPool(fn, e, in, size, s, p);  }
 Tensor TensorSoftmax(Tensor in, float temperature)                        { return OperationSoftmax(in, temperature);     }
 Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, float temp)        { return OperationCrossEntropy(y, logits, temp);}
+Tensor TensorMSE(Tensor y, Tensor y_hat)                                  { return OperationMSE(y, y_hat);                }
 void TensorBackward(Tensor loss)                                          { OperationBackward(loss);                      }
 
 Tensor TensorCopy(Tensor A)                                               { return TensorMap(IDENTITY, A);                }
@@ -341,30 +342,6 @@ Tensor TensorNLL(Tensor y, Tensor logP)
     Tensor result = TensorZip(DIVIDE, sum, n);
 
     TensorFree(A); TensorFree(B); TensorFree(sum); TensorFree(n);
-    return result;
-}
-
-Tensor TensorMSE(Tensor y, Tensor y_hat)
-{
-    int total = TensorSize(y);
-
-    Tensor A   = TensorZip(SUBTRACT, y, y_hat);
-    Tensor sum = TensorZip(MULTIPLY, A, A);
-
-    while (TensorSize(sum) > 1) {
-        int axis = 0;
-        while (sum.shape[axis] == 1) axis++;
-        Tensor next = TensorReduce(ADD, 0.0f, sum, axis);
-        TensorFree(sum);
-        sum = next;
-    }
-    sum = TensorReshape(sum, 0, NULL);
-
-    Tensor n = TensorNew(0, NULL, FALSE);
-    TensorFill(n, (Entry)total);
-    Tensor result = TensorZip(DIVIDE, sum, n);
-
-    TensorFree(A); TensorFree(sum); TensorFree(n);
     return result;
 }
 
