@@ -98,17 +98,12 @@ static Tensor forwardBlock(Tensor H, Block *b)
     Tensor scores = TensorMultiply(Q, K_T);                                // [N, T, T]
     TensorFree(Q); TensorFree(K); TensorFree(K_T);
 
-    Tensor scale = TensorNew(scores.dimensions, scores.shape, FALSE);
-    TensorFill(scale, 1.0f / sqrtf((float)EMBED_SIZE));
-    Tensor scaled = TensorHadamard(scores, scale);                         // [N, T, T]
-    TensorFree(scores); TensorFree(scale);
-
-    Tensor S       = TensorAdd(scaled, causalMask);                        // S_l, broadcasts [1, T, T]
-    Tensor attn    = TensorSoftmax(S, 1.0f);                               // softmax(S_l)
+    Tensor S       = TensorAdd(scores, causalMask);                        // S_l, broadcasts [1, T, T]
+    Tensor attn    = TensorSoftmax(S, sqrtf((float)EMBED_SIZE));
     Tensor attnOut = TensorMultiply(attn, V);                              // softmax(S_l) @ V_l
     Tensor A       = TensorLinearLayer(attnOut, b->W_o, b->b_o, IDENTITY); // A_l = ... @ W_o + b_o
     TensorFree(causalMask);
-    TensorFree(scaled); TensorFree(S); TensorFree(attn); TensorFree(V); TensorFree(attnOut);
+    TensorFree(scores); TensorFree(S); TensorFree(attn); TensorFree(V); TensorFree(attnOut);
 
     Tensor U = TensorAdd(H, A);                                            // U_l = H_{l-1} + A_l
     TensorFree(A);
@@ -183,7 +178,7 @@ int main(void)
             int N = remaining > BATCH_SIZE ? BATCH_SIZE : remaining;
 
             Tensor X    = TensorSlice(xShuffled, batch * BATCH_SIZE, N);
-            Tensor Y    = TensorOneHot(TensorSlice(yShuffled, batch * BATCH_SIZE, N), NUM_CLASSES);
+            Tensor Y    = TensorSlice(yShuffled, batch * BATCH_SIZE, N);
             Tensor Z    = forward(X, &m);                     // [N, SEQ_LENGTH, NUM_CLASSES]
             Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f); // [] (Scalar)
 
@@ -195,7 +190,7 @@ int main(void)
                 TensorPrint(loss);
             }
 
-            TensorFree(Y); TensorFree(Z); TensorFree(loss);
+            TensorFree(Z); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
 

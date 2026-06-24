@@ -207,8 +207,8 @@ Tensor TensorLogSoftmax(Tensor in, float temperature);
 /*
  * Cross-entropy loss over the last dimension.
  * out = NLL(y, LogSoftmax(logits))
- *
- * y:      Target probability distribution [..., numClasses]
+ * 
+ * y:      Target probability distribution [..., numClasses] or integer class labels [..., 1]
  * logits: Predicted logits                [..., numClasses]
  * out:    Mean cross-entropy loss         [] (Scalar)
  */
