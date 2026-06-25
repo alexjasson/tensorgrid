@@ -220,6 +220,9 @@ Tensor TensorGather(Tensor A, Tensor indices, int axis)                   { retu
 Tensor TensorScatter(Binary fn, Tensor A, Tensor i, Entry e, int a, int n){ return OperationScatter(fn, A, i, e, a, n);   }
 Tensor TensorConvolution(Tensor in, Tensor filter, int s, int p)          { return OperationConvolution(in, filter, s, p);}
 Tensor TensorPool(Binary fn, Entry e, Tensor in, int size, int s, int p)  { return OperationPool(fn, e, in, size, s, p);  }
+Tensor TensorSoftmax(Tensor in, float temperature)                        { return OperationSoftmax(in, temperature);     }
+Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, float temp)        { return OperationCrossEntropy(y, logits, temp);}
+Tensor TensorMSE(Tensor y, Tensor y_hat)                                  { return OperationMSE(y, y_hat);                }
 void TensorBackward(Tensor loss)                                          { OperationBackward(loss);                      }
 
 Tensor TensorCopy(Tensor A)                                               { return TensorMap(IDENTITY, A);                }
@@ -278,38 +281,10 @@ Tensor TensorBroadcast(Tensor A, int axis, int n)
 
 Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, float eps)
 {
-    int axis = in.dimensions - 1;
-    int D    = in.shape[axis];
-
-    int constShape[MAX_DIMENSIONS];
-    for (int i = 0; i < in.dimensions; i++) constShape[i] = 1;
-    Tensor dT   = TensorNew(in.dimensions, constShape, FALSE);
-    Tensor epsT = TensorNew(in.dimensions, constShape, FALSE);
-    TensorFill(dT,   (Entry)D);
-    TensorFill(epsT, eps);
-
-    Tensor sumX     = TensorReduce(ADD, 0.0f, in, axis);
-    Tensor mean     = TensorZip(DIVIDE, sumX, dT);
-    Tensor centered = TensorSubtract(in, mean);
-    TensorFree(sumX); TensorFree(mean);
-
-    Tensor sq    = TensorHadamard(centered, centered);
-    Tensor sumSq = TensorReduce(ADD, 0.0f, sq, axis);
-    Tensor var   = TensorZip(DIVIDE, sumSq, dT);
-    TensorFree(sq); TensorFree(sumSq);
-
-    Tensor varEps = TensorZip(ADD, var, epsT);
-    Tensor std    = TensorMap(SQRT, varEps);
-    TensorFree(var); TensorFree(varEps);
-
-    Tensor normalized = TensorZip(DIVIDE, centered, std);
-    TensorFree(centered); TensorFree(std);
-
-    Tensor scaled = TensorZip(MULTIPLY, normalized, weight);
-    Tensor result = TensorZip(ADD, scaled, bias);
+    Tensor normalized = OperationNormalize(in, eps);
+    Tensor scaled     = TensorZip(MULTIPLY, normalized, weight);
+    Tensor result     = TensorZip(ADD, scaled, bias);
     TensorFree(normalized); TensorFree(scaled);
-
-    TensorFree(dT); TensorFree(epsT);
     return result;
 }
 
@@ -320,28 +295,6 @@ Tensor TensorCausalMask(int n)
         for (int j = 0; j < n; j++)
             mask.entries[i * n + j] = (j <= i) ? 0.0f : -INFINITE;
     return mask;
-}
-
-Tensor TensorSoftmax(Tensor in, float temperature)
-{
-    // Numerical stability trick
-    Tensor inView       = TensorDetach(in);
-    Tensor temp1        = TensorReduce(MAX, -FLT_MAX, inView, in.dimensions - 1);
-    Tensor stableLogits = TensorZip(SUBTRACT, in, temp1);
-    TensorFree(temp1);
-
-    // Temperature scaling
-    if (temperature != 1.0f)
-        TensorScale(stableLogits, 1.0f / temperature);
-
-    // out = exp(stableLogits) ⊘ sum(exp(stableLogits))
-    Tensor A = TensorMap(EXP, stableLogits);
-    Tensor B = TensorReduce(ADD, 0.0f, A, in.dimensions - 1);
-    Tensor result = TensorZip(DIVIDE, A, B);
-
-    TensorFree(stableLogits);
-    TensorFree(A); TensorFree(B);
-    return result;
 }
 
 Tensor TensorLogSoftmax(Tensor in, float temperature)
@@ -367,14 +320,6 @@ Tensor TensorLogSoftmax(Tensor in, float temperature)
     return result;
 }
 
-Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, float temperature)
-{
-    Tensor logP = TensorLogSoftmax(logits, temperature);
-    Tensor loss = TensorNLL(y, logP);
-    TensorFree(logP);
-    return loss;
-}
-
 Tensor TensorNLL(Tensor y, Tensor logP)
 {
     int N = TensorSize(y) / y.shape[y.dimensions - 1];
@@ -397,30 +342,6 @@ Tensor TensorNLL(Tensor y, Tensor logP)
     Tensor result = TensorZip(DIVIDE, sum, n);
 
     TensorFree(A); TensorFree(B); TensorFree(sum); TensorFree(n);
-    return result;
-}
-
-Tensor TensorMSE(Tensor y, Tensor y_hat)
-{
-    int total = TensorSize(y);
-
-    Tensor A   = TensorZip(SUBTRACT, y, y_hat);
-    Tensor sum = TensorZip(MULTIPLY, A, A);
-
-    while (TensorSize(sum) > 1) {
-        int axis = 0;
-        while (sum.shape[axis] == 1) axis++;
-        Tensor next = TensorReduce(ADD, 0.0f, sum, axis);
-        TensorFree(sum);
-        sum = next;
-    }
-    sum = TensorReshape(sum, 0, NULL);
-
-    Tensor n = TensorNew(0, NULL, FALSE);
-    TensorFill(n, (Entry)total);
-    Tensor result = TensorZip(DIVIDE, sum, n);
-
-    TensorFree(A); TensorFree(sum); TensorFree(n);
     return result;
 }
 

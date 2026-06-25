@@ -122,7 +122,7 @@ int main(void)
             int N = remaining > BATCH_SIZE ? BATCH_SIZE : remaining;
 
             Tensor X    = TensorSlice(xShuffled, batch * BATCH_SIZE, N); // [N, SEQ_LENGTH]
-            Tensor Y    = TensorOneHot(TensorSlice(yShuffled, batch * BATCH_SIZE, N), NUM_CLASSES);
+            Tensor Y    = TensorSlice(yShuffled, batch * BATCH_SIZE, N); // [N]
             Tensor Z    = forward(X, &m);                                // [N, NUM_CLASSES]
             Tensor loss = TensorCrossEntropyLoss(Y, Z, 1.0f);            // [] (Scalar)
 
@@ -134,7 +134,7 @@ int main(void)
                 TensorPrint(loss);
             }
 
-            TensorFree(Y); TensorFree(Z); TensorFree(loss);
+            TensorFree(Z); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
 

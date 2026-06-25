@@ -32,7 +32,7 @@ void OperationDispatch(ThreadPoolFn f, Operation *op, int total, long work);
 Tensor OperationExecute(Operation op);
 
 /*
- * The primitive operations every higher level tensor function is built from.
+ * Primitive tensor operations that are recorded on autograd tape.
  */
 Tensor OperationMap(Unary fn, Tensor A);
 Tensor OperationZip(Binary fn, Tensor A, Tensor B);
@@ -42,6 +42,10 @@ Tensor OperationConvolution(Tensor in, Tensor filter, int stride, int padding);
 Tensor OperationPool(Binary fn, Entry initial, Tensor in, int size, int stride, int padding);
 Tensor OperationGather(Tensor A, Tensor B, int axis);
 Tensor OperationScatter(Binary fn, Tensor A, Tensor B, Entry fill, int axis, int n);
+Tensor OperationNormalize(Tensor in, float eps);
+Tensor OperationSoftmax(Tensor logits, float temperature);
+Tensor OperationCrossEntropy(Tensor labels, Tensor logits, float temperature);
+Tensor OperationMSE(Tensor y, Tensor y_hat);
 
 /*
  * Run the recorded autograd tape backwards from the loss tensor
