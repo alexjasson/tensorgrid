@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="888" height="990" viewBox="0 0 888 990"
+     role="img" aria-labelledby="title desc">
+  <title id="title">TensorGrid cube lattice logo</title>
+  <desc id="desc">A blue-to-violet wireframe cube lattice with seven circular nodes on a transparent background, with equal padding on all sides.</desc>
+
+  <defs>
+    <linearGradient id="cubeGradient" x1="0" y1="60" x2="0" y2="930" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#58B7F8"/>
+      <stop offset="45%" stop-color="#2F8FF7"/>
+      <stop offset="72%" stop-color="#3567F7"/>
+      <stop offset="100%" stop-color="#4724F4"/>
+    </linearGradient>
+
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g transform="translate(-67 6)">
+    <!-- subtle glow -->
+    <g stroke="url(#cubeGradient)" stroke-width="25" stroke-linecap="round"
+       stroke-linejoin="round" fill="none" opacity="0.16" filter="url(#softGlow)">
+      <path d="M512 88 L161 289 L512 488 L861 289 L512 88"/>
+      <path d="M161 289 L161 689 L512 488 L861 689 L861 289"/>
+      <path d="M161 689 L512 890 L861 689"/>
+      <path d="M512 88 L512 890"/>
+    </g>
+
+    <!-- cube edges -->
+    <g stroke="url(#cubeGradient)" stroke-width="19" stroke-linecap="round"
+       stroke-linejoin="round" fill="none">
+      <path d="M512 88 L161 289 L512 488 L861 289 L512 88"/>
+      <path d="M161 289 L161 689 L512 488 L861 689 L861 289"/>
+      <path d="M161 689 L512 890 L861 689"/>
+      <path d="M512 88 L512 890"/>
+    </g>
+
+    <!-- nodes -->
+    <g fill="url(#cubeGradient)">
+      <circle cx="512" cy="88" r="34"/>
+      <circle cx="161" cy="289" r="34"/>
+      <circle cx="861" cy="289" r="34"/>
+      <circle cx="512" cy="488" r="36"/>
+      <circle cx="161" cy="689" r="34"/>
+      <circle cx="861" cy="689" r="34"/>
+      <circle cx="512" cy="890" r="34"/>
+    </g>
+  </g>
+</svg>
