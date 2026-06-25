@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg"
-     width="888" height="990" viewBox="0 0 888 990"
+     width="828" height="930" viewBox="30 30 828 930"
      role="img" aria-labelledby="title desc">
   <title id="title">TensorGrid cube lattice logo</title>
-  <desc id="desc">A blue-to-violet wireframe cube lattice with seven circular nodes on a transparent background, with equal padding on all sides.</desc>
+  <desc id="desc">A blue-to-violet wireframe cube lattice with seven circular nodes on a transparent background.</desc>
 
   <defs>
     <linearGradient id="cubeGradient" x1="0" y1="60" x2="0" y2="930" gradientUnits="userSpaceOnUse">

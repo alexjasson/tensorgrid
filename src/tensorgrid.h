@@ -143,7 +143,7 @@ void TensorSet(Tensor A, int *indices, Entry value);
 
 
 /*=============================================================================================
- *                                   Composite Operations
+ *                                     Tensor operations
  *=============================================================================================*/
 
 /*
@@ -297,11 +297,6 @@ Tensor TensorHadamard(Tensor A, Tensor B);
  */
 Tensor TensorCopy(Tensor A);
 
-
-/*=============================================================================================
- *                                   Primitive Operations
- *=============================================================================================*/
-
 /*
  * out = f(A).
  */
@@ -347,6 +342,7 @@ Tensor TensorGather(Tensor A, Tensor indices, int axis);
  * out:     [..., s_0, ..., s_m, ...]
  */
 Tensor TensorScatter(Binary fn, Tensor A, Tensor indices, Entry initial, int axis, int n);
+
 
 /*=============================================================================================
  *                                          Utilities

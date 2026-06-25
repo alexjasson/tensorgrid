@@ -4,6 +4,17 @@
 #include <time.h>
 #include "utility.h"
 
+float powi(float base, int exp)
+{
+    float result = 1.0f;
+    while (exp > 0) {
+        if (exp & 1) result *= base;
+        base *= base;
+        exp >>= 1;
+    }
+    return result;
+}
+
 float randomFloat(float lower, float upper)
 {
     static uint32_t state = 0;

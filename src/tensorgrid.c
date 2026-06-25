@@ -671,18 +671,6 @@ void TensorArraySGD(TensorArray ta, float lr, float momentum)
         TensorSGD(*(Tensor *)DynamicArrayGet(ta->tensors, i), lr, momentum);
 }
 
-// base raised to a non-negative integer exponent
-static float powi(float base, int exp)
-{
-    float result = 1.0f;
-    while (exp > 0) {
-        if (exp & 1) result *= base;
-        base *= base;
-        exp >>= 1;
-    }
-    return result;
-}
-
 void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, float weightDecay)
 {
     int size = TensorSize(A);
