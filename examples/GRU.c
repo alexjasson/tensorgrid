@@ -80,8 +80,8 @@ static Tensor forward(Tensor X, Model *m)
 int main(void)
 {
     // Read data into Tensors from .npy files
-    Tensor train = TensorRead("data/tinyShakespeare/train.npy"); // [1003854]
-    Tensor test  = TensorRead("data/tinyShakespeare/test.npy");  // [111540]
+    Tensor train = TensorRead("examples/data/tinyShakespeare/train.npy"); // [1003854]
+    Tensor test  = TensorRead("examples/data/tinyShakespeare/test.npy");  // [111540]
 
     // Compute number of training/test samples and number of batches
     int trainSamples = TensorShape(train, 0) - SEQ_LENGTH;

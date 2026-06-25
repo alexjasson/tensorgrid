@@ -34,10 +34,10 @@ static Tensor forward(Tensor X, Model *m)
 int main(void)
 {
     // Read data into Tensors from .npy files
-    Tensor xTrain = TensorRead("data/mnist/xTrain.npy"); // [60000, 28, 28]
-    Tensor yTrain = TensorRead("data/mnist/yTrain.npy"); // [60000]
-    Tensor xTest  = TensorRead("data/mnist/xTest.npy");  // [10000, 28, 28]
-    Tensor yTest  = TensorRead("data/mnist/yTest.npy");  // [10000]
+    Tensor xTrain = TensorRead("examples/data/mnist/xTrain.npy"); // [60000, 28, 28]
+    Tensor yTrain = TensorRead("examples/data/mnist/yTrain.npy"); // [60000]
+    Tensor xTest  = TensorRead("examples/data/mnist/xTest.npy");  // [10000, 28, 28]
+    Tensor yTest  = TensorRead("examples/data/mnist/yTest.npy");  // [10000]
 
     // Compute number of training/test samples and number of batches
     int trainSamples = TensorShape(xTrain, 0);
