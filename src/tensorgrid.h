@@ -77,6 +77,17 @@ Tensor TensorRead(char *path);
  */
 void TensorWrite(Tensor A, char *path);
 
+/*
+ * Saves a tensor array to 'path', as a directory of .npy files.
+ */
+void TensorArrayWrite(TensorArray ta, char *path);
+
+/*
+ * Given an already initalized tensor array, loads each tensor in the
+ * given directory of .npy files. Returns 1 if successful and 0 otherwise.
+ */
+int TensorArrayRead(TensorArray ta, char *path);
+
 
 /*=============================================================================================
  *                                  Shape, views and access

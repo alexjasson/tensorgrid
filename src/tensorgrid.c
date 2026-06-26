@@ -5,6 +5,8 @@
 #include <string.h>
 #include <float.h>
 #include <stdint.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include "tensorgrid.h"
 #include "Operation.h"
 #include "adt/DynamicArray.h"
@@ -623,6 +625,62 @@ void TensorWrite(Tensor A, char *path)
     int size = TensorSize(A);
     fwrite(A.entries, sizeof(Entry), size, f);
     fclose(f);
+}
+
+void TensorArrayWrite(TensorArray ta, char *path)
+{
+    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+        fprintf(stderr, "Cannot create directory: %s\n", path);
+        exit(EXIT_FAILURE);
+    }
+
+    int n = DynamicArraySize(ta->tensors);
+    for (int i = 0; i < n; i++) {
+        Tensor *t = DynamicArrayGet(ta->tensors, i);
+        char file[1024];
+        snprintf(file, sizeof(file), "%s/%d.npy", path, i);
+        TensorWrite(*t, file);
+    }
+}
+
+int TensorArrayRead(TensorArray ta, char *path)
+{
+    int n = DynamicArraySize(ta->tensors);
+
+    for (int i = 0; i < n; i++) {
+        char file[1024];
+        snprintf(file, sizeof(file), "%s/%d.npy", path, i);
+        FILE *f = fopen(file, "rb");
+        if (!f) return FALSE;
+        fclose(f);
+    }
+
+    Tensor *loaded = malloc((size_t)n * sizeof(Tensor));
+    if (n > 0 && !loaded) {
+        fprintf(stderr, "Insufficient memory!\n");
+        exit(EXIT_FAILURE);
+    }
+
+    int ok = TRUE;
+    for (int i = 0; i < n; i++) {
+        char file[1024];
+        snprintf(file, sizeof(file), "%s/%d.npy", path, i);
+        loaded[i] = TensorRead(file);
+        Tensor *t = DynamicArrayGet(ta->tensors, i);
+        if (loaded[i].dimensions != t->dimensions) ok = FALSE;
+        for (int d = 0; ok && d < t->dimensions; d++)
+            if (loaded[i].shape[d] != t->shape[d]) ok = FALSE;
+    }
+
+    if (ok)
+        for (int i = 0; i < n; i++) {
+            Tensor *t = DynamicArrayGet(ta->tensors, i);
+            memcpy(t->entries, loaded[i].entries, (size_t)TensorSize(*t) * sizeof(Entry));
+        }
+
+    for (int i = 0; i < n; i++) TensorFree(loaded[i]);
+    free(loaded);
+    return ok;
 }
 
 Entry TensorGet(Tensor A, int *indices)
