@@ -5,8 +5,6 @@
 #include <string.h>
 #include <float.h>
 #include <stdint.h>
-#include <errno.h>
-#include <sys/stat.h>
 #include "tensorgrid.h"
 #include "Operation.h"
 #include "adt/DynamicArray.h"
@@ -503,158 +501,169 @@ void TensorPrint(Tensor A)
 
 Tensor TensorRead(char *path)
 {
+    TensorArray ta = TensorArrayRead(path);
+    if (DynamicArraySize(ta->tensors) != 1) {
+        fprintf(stderr, "The .tgd file does not contain a single Tensor: %s\n", path);
+        TensorArrayFree(ta);
+        exit(EXIT_FAILURE);
+    }
+
+    Tensor t = *(Tensor *)DynamicArrayGet(ta->tensors, 0);
+    DynamicArrayFree(ta->tensors);
+    free(ta);
+    return t;
+}
+
+Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataType d)
+{
     FILE *f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "Cannot open file: %s\n", path); exit(EXIT_FAILURE); }
-
-    // Open file and validate
-    char magic[6];
-    fread(magic, 1, 6, f);
-    if (memcmp(magic, "\x93NUMPY", 6) != 0) {
-        fprintf(stderr, "Not a .npy file: %s\n", path);
+    if (offset < 0 || fseek(f, offset, SEEK_SET) != 0) {
+        fprintf(stderr, "Cannot read file: %s\n", path);
+        fclose(f);
         exit(EXIT_FAILURE);
     }
-
-    // Read version number
-    uint8_t major, minor;
-    fread(&major, 1, 1, f);
-    fread(&minor, 1, 1, f);
-    (void)minor;
-
-    // Read header
-    uint32_t headerLength;
-    if (major == 1) {
-        uint16_t length;
-        fread(&length, 2, 1, f);
-        headerLength = length;
-    } else {
-        fread(&headerLength, 4, 1, f);
-    }
-    char *header = malloc(headerLength + 1);
-    fread(header, 1, headerLength, f);
-    header[headerLength] = '\0';
-
-    if (strstr(header, "'fortran_order': True")) {
-        fprintf(stderr, "Fortran-order arrays not supported\n");
-        exit(EXIT_FAILURE);
-    }
-
-    // Parse data type
-    char *start = strstr(header, "'descr'");
-    start = strchr(start, ':') + 1;
-    while (*start == ' ') start++;
-    start++;
-    char *end = strchr(start, '\'');
-    char type[8] = {0};
-    strncpy(type, start, end - start < 7 ? end - start : 7);
-    char   dataType = type[1];
-    size_t entrySize = (size_t)atoi(&type[2]);
-
-    // Parse shape
-    int shape[MAX_DIMENSIONS];
-    int dimensions = 0;
-    start = strchr(strstr(header, "'shape'"), '(') + 1;
-    end   = strchr(start, ')');
-    char *curr  = start;
-    while (curr < end) {
-        while (curr < end && (*curr == ' ' || *curr == ',')) curr++;
-        if (curr >= end) break;
-        int n;
-        if (sscanf(curr, "%d", &n) != 1) break;
-        shape[dimensions++] = n;
-        while (*curr >= '0' && *curr <= '9') curr++;
-    }
-
-    free(header);
-
-    int size = 1;
-    for (int i = 0; i < dimensions; i++) size *= shape[i];
-
-    void *data = malloc(size * entrySize);
-    fread(data, entrySize, size, f);
-    fclose(f);
 
     Tensor t = TensorNew(dimensions, shape, FALSE);
-    if (dataType == 'f' && entrySize == 4) {
-        memcpy(t.entries, data, size * sizeof(float));
-    } else if (dataType == 'f' && entrySize == 8) {
-        double *src = data;
-        for (int i = 0; i < size; i++) t.entries[i] = (float)src[i];
-    } else if (dataType == 'i' && entrySize == 4) {
-        int32_t *src = data;
-        for (int i = 0; i < size; i++) t.entries[i] = (float)src[i];
-    } else if (dataType == 'i' && entrySize == 8) {
-        int64_t *src = data;
-        for (int i = 0; i < size; i++) t.entries[i] = (float)src[i];
-    } else {
-        uint8_t *src = data;
-        for (int i = 0; i < size; i++) t.entries[i] = (float)src[i];
+    int size = TensorSize(t);
+    for (int i = 0; i < size; i++) {
+        switch (d) {
+            case DataUint8: {
+                uint8_t x;
+                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
+                t.entries[i] = (Entry)x;
+                break;
+            }
+            case DataInt8: {
+                int8_t x;
+                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
+                t.entries[i] = (Entry)x;
+                break;
+            }
+            case DataInt16: {
+                int16_t x;
+                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
+                t.entries[i] = (Entry)x;
+                break;
+            }
+            case DataInt32: {
+                int32_t x;
+                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
+                t.entries[i] = (Entry)x;
+                break;
+            }
+            case DataFloat32: {
+                float x;
+                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
+                t.entries[i] = (Entry)x;
+                break;
+            }
+            case DataFloat64: {
+                double x;
+                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
+                t.entries[i] = (Entry)x;
+                break;
+            }
+        }
     }
 
-    free(data);
+    fclose(f);
     return t;
+
+error:
+    fprintf(stderr, "Cannot read file: %s\n", path);
+    TensorFree(t);
+    fclose(f);
+    exit(EXIT_FAILURE);
 }
 
 void TensorWrite(Tensor A, char *path)
 {
-    // Build shape string
-    char shape[256] = "(";
-    for (int i = 0; i < A.dimensions; i++) {
-        char dim[32];
-        snprintf(dim, sizeof(dim), "%d, ", A.shape[i]);
-        strcat(shape, dim);
-    }
-    strcat(shape, ")");
-
-    // Build header string
-    char header[512];
-    int unpaddedLength      = snprintf(header, sizeof(header),
-        "{'descr': '<f4', 'fortran_order': False, 'shape': %s, }", shape);
-    int headerLength = ((unpaddedLength + 1 + 10 + 63) / 64) * 64 - 10;
-    for (int i = unpaddedLength; i < headerLength - 1; i++) header[i] = ' ';
-    header[headerLength - 1] = '\n';
-
-    FILE *f = fopen(path, "wb");
-    if (!f) { fprintf(stderr, "Cannot open file: %s\n", path); exit(EXIT_FAILURE); }
-
-    uint16_t length = (uint16_t)headerLength;
-    fwrite("\x93NUMPY", 1, 6, f);
-    fwrite("\x01\x00",  1, 2, f);
-    fwrite(&length,     2, 1, f);
-    fwrite(header,      1, headerLength, f);
-
-    int size = TensorSize(A);
-    fwrite(A.entries, sizeof(Entry), size, f);
-    fclose(f);
+    TensorArray ta = TensorArrayNew();
+    DynamicArrayPush(ta->tensors, &A);
+    TensorArrayWrite(ta, path);
+    DynamicArrayFree(ta->tensors);
+    free(ta);
 }
 
 void TensorArrayWrite(TensorArray ta, char *path)
 {
-    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
-        fprintf(stderr, "Cannot create directory: %s\n", path);
+    // Open file
+    FILE *f = fopen(path, "wb");
+    if (!f) { fprintf(stderr, "Cannot open file: %s\n", path); exit(EXIT_FAILURE); }
+
+    // Write header
+    int n = DynamicArraySize(ta->tensors);
+    uint32_t entrySize = sizeof(Entry), tensors = (uint32_t)n;
+
+    if (fwrite("TGD", 1, 3, f) != 3 ||
+        fwrite(&entrySize, sizeof(entrySize), 1, f) != 1 ||
+        fwrite(&tensors, sizeof(tensors), 1, f) != 1) {
+        fprintf(stderr, "Cannot write file: %s\n", path);
+        fclose(f);
         exit(EXIT_FAILURE);
     }
 
-    int n = DynamicArraySize(ta->tensors);
+    // Write each tensor
     for (int i = 0; i < n; i++) {
         Tensor *t = DynamicArrayGet(ta->tensors, i);
-        char file[1024];
-        snprintf(file, sizeof(file), "%s/%d.npy", path, i);
-        TensorWrite(*t, file);
+        if (!isContiguous(t->shape, t->strides, t->dimensions)) {
+            fprintf(stderr, "Cannot write non-contiguous tensor: %s\n", path);
+            fclose(f);
+            exit(EXIT_FAILURE);
+        }
+
+        // Write tensor shape
+        int32_t dimensions = t->dimensions;
+        if (fwrite(&dimensions, sizeof(dimensions), 1, f) != 1) {
+            fprintf(stderr, "Cannot write file: %s\n", path);
+            fclose(f);
+            exit(EXIT_FAILURE);
+        }
+
+        for (int d = 0; d < t->dimensions; d++) {
+            int32_t shape = t->shape[d];
+            if (fwrite(&shape, sizeof(shape), 1, f) != 1) {
+                fprintf(stderr, "Cannot write file: %s\n", path);
+                fclose(f);
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        // Write tensor entries
+        if (fwrite(t->entries, sizeof(Entry), (size_t)TensorSize(*t), f) != (size_t)TensorSize(*t)) {
+            fprintf(stderr, "Cannot write file: %s\n", path);
+            fclose(f);
+            exit(EXIT_FAILURE);
+        }
     }
+
+    fclose(f);
 }
 
-int TensorArrayRead(TensorArray ta, char *path)
+TensorArray TensorArrayRead(char *path)
 {
-    int n = DynamicArraySize(ta->tensors);
+    // Open file
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "Cannot open file: %s\n", path); exit(EXIT_FAILURE); }
 
-    for (int i = 0; i < n; i++) {
-        char file[1024];
-        snprintf(file, sizeof(file), "%s/%d.npy", path, i);
-        FILE *f = fopen(file, "rb");
-        if (!f) return FALSE;
+    // Read and validate header
+    char magic[3];
+    uint32_t entrySize, tensors;
+
+    if (fread(magic, 1, 3, f) != 3 ||
+        memcmp(magic, "TGD", 3) != 0 ||
+        fread(&entrySize, sizeof(entrySize), 1, f) != 1 ||
+        fread(&tensors, sizeof(tensors), 1, f) != 1 ||
+        entrySize != sizeof(Entry) ||
+        tensors > INT32_MAX) {
+        fprintf(stderr, "Not a .tgd file: %s\n", path);
         fclose(f);
+        exit(EXIT_FAILURE);
     }
 
+    // Load tensors into temporary storage first
+    int n = (int)tensors;
     Tensor *loaded = malloc((size_t)n * sizeof(Tensor));
     if (n > 0 && !loaded) {
         fprintf(stderr, "Insufficient memory!\n");
@@ -662,25 +671,53 @@ int TensorArrayRead(TensorArray ta, char *path)
     }
 
     int ok = TRUE;
-    for (int i = 0; i < n; i++) {
-        char file[1024];
-        snprintf(file, sizeof(file), "%s/%d.npy", path, i);
-        loaded[i] = TensorRead(file);
-        Tensor *t = DynamicArrayGet(ta->tensors, i);
-        if (loaded[i].dimensions != t->dimensions) ok = FALSE;
-        for (int d = 0; ok && d < t->dimensions; d++)
-            if (loaded[i].shape[d] != t->shape[d]) ok = FALSE;
-    }
+    int read = 0;
+    for (; read < n; read++) {
+        // Read tensor shape
+        int32_t dimensions;
+        int shape[MAX_DIMENSIONS];
 
-    if (ok)
-        for (int i = 0; i < n; i++) {
-            Tensor *t = DynamicArrayGet(ta->tensors, i);
-            memcpy(t->entries, loaded[i].entries, (size_t)TensorSize(*t) * sizeof(Entry));
+        if (fread(&dimensions, sizeof(dimensions), 1, f) != 1 ||
+            dimensions < 0 ||
+            dimensions > MAX_DIMENSIONS) {
+            ok = FALSE;
+            break;
         }
 
-    for (int i = 0; i < n; i++) TensorFree(loaded[i]);
+        for (int d = 0; d < dimensions; d++) {
+            int32_t dim;
+            if (fread(&dim, sizeof(dim), 1, f) != 1 || dim <= 0) {
+                ok = FALSE;
+                break;
+            }
+            shape[d] = dim;
+        }
+        if (!ok) break;
+
+        // Read tensor entries
+        loaded[read] = TensorNew(dimensions, shape, FALSE);
+        if (fread(loaded[read].entries, sizeof(Entry), (size_t)TensorSize(loaded[read]), f) !=
+            (size_t)TensorSize(loaded[read])) {
+            TensorFree(loaded[read]);
+            ok = FALSE;
+            break;
+        }
+    }
+
+    fclose(f);
+
+    if (!ok) {
+        fprintf(stderr, "Cannot read .tgd file: %s\n", path);
+        for (int i = 0; i < read; i++) TensorFree(loaded[i]);
+        free(loaded);
+        exit(EXIT_FAILURE);
+    }
+
+    // Append loaded tensors to the returned array
+    TensorArray ta = TensorArrayNew();
+    for (int i = 0; i < n; i++) DynamicArrayPush(ta->tensors, &loaded[i]);
     free(loaded);
-    return ok;
+    return ta;
 }
 
 Entry TensorGet(Tensor A, int *indices)

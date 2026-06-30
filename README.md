@@ -1,6 +1,6 @@
 # tensorgrid
 
-<img src="images/logo.svg" alt="tensorgrid" width="128" align="left" hspace="20">
+<img src="images/logo.svg" alt="tensorgrid" width="128" align="left" hspace="18">
 
 tensorgrid is a lightweight and easy-to-use tensor library for building and training neural networks from scratch in C. It is optimized for both speed and simplicity.
 
@@ -13,7 +13,7 @@ New here? The best place to start is the [`examples/`](examples) directory. Ther
 - Basic tensor operations
 - Automatic differentiation
 - Multithreading/SIMD instructions for CPU performance
-- Load and save tensors as `.npy` files
+- Load and save tensors as `.tgd` files
 
 ## Prerequisites
 - Linux or mac
