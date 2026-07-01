@@ -1,10 +1,10 @@
 # tensorgrid
 
-<img src="images/logo.svg" alt="tensorgrid" width="128" align="left" hspace="18">
+<img src="images/logo.svg" alt="tensorgrid" width="128" align="left" hspace="17">
 
 tensorgrid is a lightweight and easy-to-use tensor library for building and training neural networks from scratch in C. It is optimized for both speed and simplicity.
 
-New here? The best place to start is the [`examples/`](examples) directory. There you can see a minimalist `MLP-simple` example all the way to a full `GPT2` implementation.
+New here? The best place to start is the [`examples/`](examples) directory. There you can see a minimalist `MLP` example all the way to a full `GPT2` implementation.
 <br clear="left">
 
 ## Features

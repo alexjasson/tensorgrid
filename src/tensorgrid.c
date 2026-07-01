@@ -501,7 +501,8 @@ void TensorPrint(Tensor A)
 
 Tensor TensorRead(char *path)
 {
-    TensorArray ta = TensorArrayRead(path);
+    TensorArray ta = TensorArrayNew();
+    TensorArrayRead(ta, path);
     if (DynamicArraySize(ta->tensors) != 1) {
         fprintf(stderr, "The .tgd file does not contain a single Tensor: %s\n", path);
         TensorArrayFree(ta);
@@ -641,11 +642,10 @@ void TensorArrayWrite(TensorArray ta, char *path)
     fclose(f);
 }
 
-TensorArray TensorArrayRead(char *path)
+int TensorArrayRead(TensorArray ta, char *path)
 {
-    // Open file
     FILE *f = fopen(path, "rb");
-    if (!f) { fprintf(stderr, "Cannot open file: %s\n", path); exit(EXIT_FAILURE); }
+    if (!f) return FALSE;
 
     // Read and validate header
     char magic[3];
@@ -662,62 +662,60 @@ TensorArray TensorArrayRead(char *path)
         exit(EXIT_FAILURE);
     }
 
-    // Load tensors into temporary storage first
-    int n = (int)tensors;
-    Tensor *loaded = malloc((size_t)n * sizeof(Tensor));
-    if (n > 0 && !loaded) {
-        fprintf(stderr, "Insufficient memory!\n");
+    int existing = DynamicArraySize(ta->tensors);
+    if (existing != 0 && (uint32_t)existing != tensors) {
+        fprintf(stderr, "Tensor array does not match .tgd file: %s\n", path);
+        fclose(f);
         exit(EXIT_FAILURE);
     }
 
-    int ok = TRUE;
-    int read = 0;
-    for (; read < n; read++) {
+    int n = (int)tensors;
+    for (int i = 0; i < n; i++) {
         // Read tensor shape
         int32_t dimensions;
         int shape[MAX_DIMENSIONS];
 
         if (fread(&dimensions, sizeof(dimensions), 1, f) != 1 ||
-            dimensions < 0 ||
-            dimensions > MAX_DIMENSIONS) {
-            ok = FALSE;
-            break;
-        }
+            dimensions < 0 || dimensions > MAX_DIMENSIONS)
+            goto error;
 
         for (int d = 0; d < dimensions; d++) {
             int32_t dim;
-            if (fread(&dim, sizeof(dim), 1, f) != 1 || dim <= 0) {
-                ok = FALSE;
-                break;
-            }
+            if (fread(&dim, sizeof(dim), 1, f) != 1 || dim <= 0)
+                goto error;
             shape[d] = dim;
         }
-        if (!ok) break;
 
-        // Read tensor entries
-        loaded[read] = TensorNew(dimensions, shape, FALSE);
-        if (fread(loaded[read].entries, sizeof(Entry), (size_t)TensorSize(loaded[read]), f) !=
-            (size_t)TensorSize(loaded[read])) {
-            TensorFree(loaded[read]);
-            ok = FALSE;
-            break;
+        // Check if tensor already exists, otherwise create a new one
+        Tensor *t;
+        if (existing) {
+            t = DynamicArrayGet(ta->tensors, i);
+            int mismatch = dimensions != t->dimensions;
+            for (int d = 0; !mismatch && d < dimensions; d++)
+                mismatch = shape[d] != t->shape[d];
+            if (mismatch) {
+                fprintf(stderr, "Tensor array does not match .tgd file: %s\n", path);
+                fclose(f);
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            Tensor created = TensorNew(dimensions, shape, FALSE);
+            DynamicArrayPush(ta->tensors, &created);
+            t = DynamicArrayGet(ta->tensors, i);
         }
+
+        // Read entries into the tensor
+        if (fread(t->entries, sizeof(Entry), (size_t)TensorSize(*t), f) != (size_t)TensorSize(*t))
+            goto error;
     }
 
     fclose(f);
+    return TRUE;
 
-    if (!ok) {
-        fprintf(stderr, "Cannot read .tgd file: %s\n", path);
-        for (int i = 0; i < read; i++) TensorFree(loaded[i]);
-        free(loaded);
-        exit(EXIT_FAILURE);
-    }
-
-    // Append loaded tensors to the returned array
-    TensorArray ta = TensorArrayNew();
-    for (int i = 0; i < n; i++) DynamicArrayPush(ta->tensors, &loaded[i]);
-    free(loaded);
-    return ta;
+error:
+    fprintf(stderr, "Cannot read .tgd file: %s\n", path);
+    fclose(f);
+    exit(EXIT_FAILURE);
 }
 
 Entry TensorGet(Tensor A, int *indices)

@@ -89,9 +89,11 @@ void TensorWrite(Tensor A, char *path);
 void TensorArrayWrite(TensorArray ta, char *path);
 
 /*
- * Reads a .tgd file and returns it as a tensor array.
+ * Given a tensor array, reads entries from a .tgd file into it. The tensor array
+ * must have the same shape/number of tensors as the file. Returns 1 if successful
+ * or 0 otherwise.
  */
-TensorArray TensorArrayRead(char *path);
+int TensorArrayRead(TensorArray ta, char *path);
 
 
 /*=============================================================================================
