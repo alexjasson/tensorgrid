@@ -18,8 +18,9 @@ typedef struct { f f, da, db; f fv, dav, dbv; } Binary;
 extern Unary RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
 extern Binary ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
 
-typedef float Entry; // Change data type of entry as needed
+typedef float Entry;
 typedef struct optimizer Optimizer;
+typedef enum { DataUint8, DataInt8, DataInt16, DataInt32, DataFloat32, DataFloat64 } DataType;
 
 // Tensor representation
 typedef struct {
@@ -67,15 +68,30 @@ void TensorFree(Tensor A);
 void TensorArrayFree(TensorArray ta);
 
 /*
- * Reads a .npy file and returns it as a tensor. Data is cast to the Entry
- * data type (most likely float32).
+ * Reads a .tgd file containing one tensor and returns it.
  */
 Tensor TensorRead(char *path);
 
 /*
- * Writes a tensor to a .npy file.
+ * Reads raw binary data from a file and returns it as a tensor. Data starts
+ * at offset bytes and is cast to Entry.
+ */
+Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataType d);
+
+/*
+ * Writes a tensor to a .tgd file.
  */
 void TensorWrite(Tensor A, char *path);
+
+/*
+ * Saves a tensor array to a .tgd file.
+ */
+void TensorArrayWrite(TensorArray ta, char *path);
+
+/*
+ * Reads a .tgd file and returns it as a tensor array.
+ */
+TensorArray TensorArrayRead(char *path);
 
 
 /*=============================================================================================

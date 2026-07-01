@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include "tensorgrid.h"
 
-#define NUM_CLASSES 65
+#define NUM_CLASSES 128
 #define SEQ_LENGTH  16
 #define HIDDEN_SIZE 64
 #define BATCH_SIZE  64
@@ -79,9 +79,10 @@ static Tensor forward(Tensor X, Model *m)
 
 int main(void)
 {
-    // Read data into Tensors from .npy files
-    Tensor train = TensorRead("examples/data/tinyShakespeare/train.npy"); // [1003854]
-    Tensor test  = TensorRead("examples/data/tinyShakespeare/test.npy");  // [111540]
+    // Read data into Tensors
+    Tensor data = TensorReadData("examples/data/tinyShakespeare/input.txt", 1, (int[]){1115394}, 0, DataUint8); // [1115394]
+    Tensor train = TensorSlice(data, 0, TensorShape(data, 0) * 9 / 10);                                         // [1003854]
+    Tensor test  = TensorSlice(data, TensorShape(train, 0), TensorShape(data, 0) - TensorShape(train, 0));      // [111540]
 
     // Compute number of training/test samples and number of batches
     int trainSamples = TensorShape(train, 0) - SEQ_LENGTH;
@@ -158,6 +159,6 @@ int main(void)
 
     TensorArrayFree(parameters);
     TensorFree(xTrain); TensorFree(xTest);
-    TensorFree(train); TensorFree(test);
+    TensorFree(train); TensorFree(test); TensorFree(data);
     return 0;
 }
