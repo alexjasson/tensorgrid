@@ -69,14 +69,14 @@ int main(void)
     // Create and initialize convolution filters, weights and biases
     TensorArray parameters = TensorArrayNew();
     Model m;
-    m.K_1 = TensorArrayAdd(parameters, 4, (int[]){C1_CHANNELS,  1, 3, 3});          // [16, 1, 3, 3]
-    m.b_1 = TensorArrayAdd(parameters, 3, (int[]){C1_CHANNELS, 1, 1});              // [16, 1, 1]
-    m.K_2 = TensorArrayAdd(parameters, 4, (int[]){C2_CHANNELS, C1_CHANNELS, 3, 3}); // [32, 16, 3, 3]
-    m.b_2 = TensorArrayAdd(parameters, 3, (int[]){C2_CHANNELS, 1, 1});              // [32, 1, 1]
-    m.W_h = TensorArrayAdd(parameters, 2, (int[]){FEATURES, HIDDEN_SIZE});          // [32*7*7, 128]
-    m.b_h = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE});                    // [128]
-    m.W_y = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES});       // [128, 10]
-    m.b_y = TensorArrayAdd(parameters, 1, (int[]){NUM_CLASSES});                    // [10]
+    m.K_1 = TensorArrayAdd(parameters, 4, (int[]){C1_CHANNELS,  1, 3, 3}, TRUE);          // [16, 1, 3, 3]
+    m.b_1 = TensorArrayAdd(parameters, 3, (int[]){C1_CHANNELS, 1, 1}, TRUE);              // [16, 1, 1]
+    m.K_2 = TensorArrayAdd(parameters, 4, (int[]){C2_CHANNELS, C1_CHANNELS, 3, 3}, TRUE); // [32, 16, 3, 3]
+    m.b_2 = TensorArrayAdd(parameters, 3, (int[]){C2_CHANNELS, 1, 1}, TRUE);              // [32, 1, 1]
+    m.W_h = TensorArrayAdd(parameters, 2, (int[]){FEATURES, HIDDEN_SIZE}, TRUE);          // [32*7*7, 128]
+    m.b_h = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, TRUE);                    // [128]
+    m.W_y = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE);       // [128, 10]
+    m.b_y = TensorArrayAdd(parameters, 1, (int[]){NUM_CLASSES}, TRUE);                    // [10]
     TensorXavier(m.K_1); TensorXavier(m.K_2);
     TensorXavier(m.W_h); TensorXavier(m.W_y);
 

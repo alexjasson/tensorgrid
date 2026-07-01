@@ -1,6 +1,6 @@
 # tensorgrid
 
-<img src="images/logo.svg" alt="tensorgrid" width="128" align="left" hspace="17">
+<img src="images/logo.svg" alt="tensorgrid" width="128" align="left" hspace="16">
 
 tensorgrid is a lightweight and easy-to-use tensor library for building and training neural networks from scratch in C. It is optimized for both speed and simplicity.
 

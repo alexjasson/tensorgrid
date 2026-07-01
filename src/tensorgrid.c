@@ -93,10 +93,10 @@ TensorArray TensorArrayNew(void)
     return ta;
 }
 
-Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape)
+Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape, int autograd)
 {
-    Tensor t = TensorNew(dimensions, shape, TRUE);
-    memset(t.gradients, 0, (size_t)TensorSize(t) * sizeof(Entry));
+    Tensor t = TensorNew(dimensions, shape, autograd);
+    if (autograd) memset(t.gradients, 0, (size_t)TensorSize(t) * sizeof(Entry));
     DynamicArrayPush(ta->tensors, &t);
     return t;
 }
@@ -736,6 +736,7 @@ void TensorSet(Tensor A, int *indices, Entry value)
 
 void TensorSGD(Tensor A, float lr, float momentum)
 {
+    if (!A.optimizer) return; // skip tensors without autograd
     int size = TensorSize(A);
 
     if (momentum == 0.0f) {
@@ -766,6 +767,7 @@ void TensorArraySGD(TensorArray ta, float lr, float momentum)
 
 void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, float weightDecay)
 {
+    if (!A.optimizer) return; // skip tensors without autograd
     int size = TensorSize(A);
 
     if (!A.optimizer->m) {

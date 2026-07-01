@@ -71,11 +71,11 @@ int main(void)
 
     TensorArray parameters = TensorArrayNew();
     Model m;
-    m.E   = TensorArrayAdd(parameters, 2, (int[]){NUM_CLASSES, HIDDEN_SIZE});
-    m.U_h = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE});
-    m.b_h = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE});
-    m.W_y = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES});
-    m.b_y = TensorArrayAdd(parameters, 1, (int[]){NUM_CLASSES});
+    m.E   = TensorArrayAdd(parameters, 2, (int[]){NUM_CLASSES, HIDDEN_SIZE}, TRUE);
+    m.U_h = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
+    m.b_h = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, TRUE);
+    m.W_y = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE);
+    m.b_y = TensorArrayAdd(parameters, 1, (int[]){NUM_CLASSES}, TRUE);
     TensorXavier(m.E); TensorXavier(m.U_h); TensorXavier(m.W_y);
 
     printf("Train Samples: %d\n", trainSamples);

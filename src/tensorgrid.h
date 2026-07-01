@@ -53,9 +53,9 @@ Tensor TensorNew(int dimensions, int *shape, int autograd);
 TensorArray TensorArrayNew(void);
 
 /*
- * Allocates a new autograd-enabled tensor, adds it to the array and returns it.
+ * Allocates a new tensor, adds it to the array and returns it.
  */
-Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape);
+Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape, int autograd);
 
 /*
  * Frees a tensor from memory.
