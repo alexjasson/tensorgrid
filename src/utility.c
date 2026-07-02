@@ -15,6 +15,11 @@ float powi(float base, int exp)
     return result;
 }
 
+uint64_t packi(int a, int b)
+{
+    return ((uint64_t)(uint32_t)a << 32) | (uint32_t)b;
+}
+
 float randomFloat(float lower, float upper)
 {
     static uint32_t state = 0;

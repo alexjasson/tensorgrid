@@ -8,6 +8,8 @@
 #include "tensorgrid.h"
 #include "Operation.h"
 #include "adt/DynamicArray.h"
+#include "adt/HashMap.h"
+#include "adt/Stack.h"
 #include "utility.h"
 #include "adt/MemoryPool.h"
 #include "Vector.h"
@@ -797,4 +799,112 @@ void TensorArrayAdam(TensorArray ta, float lr, float beta1, float beta2, float e
 {
     for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
         TensorAdam(*(Tensor *)DynamicArrayGet(ta->tensors, i), lr, beta1, beta2, epsilon, weightDecay);
+}
+
+void TensorBPETrain(Tensor corpus, Tensor merges)
+{
+    int targetMerges = TensorShape(merges, 0);
+    int n = TensorSize(corpus);
+    int *ids = malloc((size_t)n * sizeof *ids);
+    for (int i = 0; i < n; i++) ids[i] = (int)TensorGet(corpus, (int[]){i});
+
+    // Each loop records most frequent adjacent pair into merges, then replaces that pair in ids with new token
+    HashMap counts = HashMapNew(1024);
+    for (int numMerges = 0; numMerges < targetMerges; numMerges++) {
+        HashMapClear(counts);
+        for (int i = 0; i < n - 1; i++) {
+            uint64_t key = packi(ids[i], ids[i + 1]);
+            long c = HashMapGet(counts, key);   // -1 if absent
+            HashMapStore(counts, key, (c < 0 ? 0 : c) + 1);
+        }
+
+        uint64_t bestKey;
+        if (!HashMapArgmax(counts, &bestKey)) break;  // No pairs left
+
+        int a = (int)(bestKey >> 32);
+        int b = (int)(bestKey & 0xffffffffu);
+        TensorSet(merges, (int[]){numMerges, 0}, (Entry)a);
+        TensorSet(merges, (int[]){numMerges, 1}, (Entry)b);
+
+        int w = 0;
+        for (int i = 0; i < n; ) {
+            if (i < n - 1 && ids[i] == a && ids[i + 1] == b) { ids[w++] = 256 + numMerges; i += 2; }
+            else ids[w++] = ids[i++];
+        }
+        n = w;
+    }
+    HashMapFree(counts);
+    free(ids);
+}
+
+Tensor TensorBPEEncode(Tensor corpus, Tensor merges)
+{
+    int targetMerges = TensorShape(merges, 0);
+    int n = TensorSize(corpus);
+    int *ids = malloc((size_t)n * sizeof *ids);
+    for (int i = 0; i < n; i++) ids[i] = (int)TensorGet(corpus, (int[]){i});
+    HashMap rankMap = HashMapNew(1024);
+    for (int r = 0; r < targetMerges; r++)
+        HashMapStore(rankMap, packi((int)TensorGet(merges, (int[]){r, 0}), (int)TensorGet(merges, (int[]){r, 1})), r);
+
+    // Greedily merges the pair that the merges tensor (tokenizer) learned earliest, until none are left
+    while (TRUE) {
+        long best = -1;
+        for (int i = 0; i < n - 1; i++) {
+            long r = HashMapGet(rankMap, packi(ids[i], ids[i + 1]));
+            if (r >= 0 && (best < 0 || r < best)) best = r;
+        }
+        if (best < 0) break;
+
+        int a = (int)TensorGet(merges, (int[]){(int)best, 0});
+        int b = (int)TensorGet(merges, (int[]){(int)best, 1});
+        int w = 0;
+        for (int i = 0; i < n; ) {
+            if (i < n - 1 && ids[i] == a && ids[i + 1] == b) { ids[w++] = 256 + (int)best; i += 2; }
+            else ids[w++] = ids[i++];
+        }
+        n = w;
+    }
+
+    Tensor tokens = TensorNew(1, (int[]){n}, FALSE);
+    for (int i = 0; i < n; i++) TensorSet(tokens, (int[]){i}, (Entry)ids[i]);
+    free(ids);
+    HashMapFree(rankMap);
+    return tokens;
+}
+
+Tensor TensorBPEDecode(Tensor tokens, Tensor merges)
+{
+    int n = TensorSize(tokens);
+    int vocabSize = 256 + TensorShape(merges, 0);
+
+    // Decode each token by walking the merge tree with a stack
+    Stack stack = StackNew(sizeof(int));
+    DynamicArray out = DynamicArrayNew(sizeof(unsigned char));
+    for (int i = 0; i < n; i++) {
+        int id = (int)TensorGet(tokens, (int[]){i});
+        if (id < 0 || id >= vocabSize) continue;
+        StackPush(stack, &id);
+        int t;
+        while (StackPop(stack, &t)) {
+            if (t < 256) {
+                unsigned char b = (unsigned char)t;
+                DynamicArrayPush(out, &b);
+            } else {
+                int r = t - 256;
+                int right = (int)TensorGet(merges, (int[]){r, 1});
+                int left  = (int)TensorGet(merges, (int[]){r, 0});
+                StackPush(stack, &right);
+                StackPush(stack, &left);
+            }
+        }
+    }
+    StackFree(stack);
+
+    int total = DynamicArraySize(out);
+    Tensor bytes = TensorNew(1, (int[]){total}, FALSE);
+    for (int i = 0; i < total; i++)
+        TensorSet(bytes, (int[]){i}, (Entry)*(unsigned char *)DynamicArrayGet(out, i));
+    DynamicArrayFree(out);
+    return bytes;
 }
