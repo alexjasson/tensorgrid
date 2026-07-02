@@ -449,4 +449,19 @@ void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, flo
  */
 void TensorArrayAdam(TensorArray ta, float lr, float beta1, float beta2, float epsilon, float weightDecay);
 
+/*
+ * Byte Pair Encoding algorithm for NLP
+ * 
+ * Train learns merge pairs from corpus in merges table
+ * Encode encodes corpus into tokens using the trained merges table
+ * Decode decodes tokens back into raw bytes using the trained merges table
+ * 
+ * corpus: [numBytes] tensor of raw byte values/characters in [0, 255]
+ * tokens: [numTokens] tensor of token ids in [0, 256 + numMerges)
+ * merges: [numMerges, 2] tensor of learned merge pairs
+ */
+void TensorBPETrain(Tensor corpus, Tensor merges);
+Tensor TensorBPEEncode(Tensor corpus, Tensor merges);
+Tensor TensorBPEDecode(Tensor tokens, Tensor merges);
+
 #endif

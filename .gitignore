@@ -4,4 +4,6 @@ CNN
 RNN
 GRU
 LSTM
-GPT2
+train
+chat
+examples/GPT2/parameters.tgd
