@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "../Operation.h"
-#include "../Scalar.h"
+#include "../math/Scalar.h"
 
 typedef struct {
     Binary b;

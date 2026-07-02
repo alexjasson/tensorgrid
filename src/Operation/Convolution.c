@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <stdatomic.h>
 #include "../Operation.h"
-#include "../Matrix.h"
+#include "../math/Matrix.h"
 
 typedef struct {
     int fH, fW, stride, padding;

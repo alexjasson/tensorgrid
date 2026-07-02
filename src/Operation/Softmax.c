@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../Operation.h"
-#include "../Scalar.h"
+#include "../math/Scalar.h"
 #include "../utility.h"
 
 typedef struct {

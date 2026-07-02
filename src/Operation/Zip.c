@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include "../Operation.h"
 #include "../utility.h"
-#include "../Vector.h"
+#include "../math/Vector.h"
 
 typedef struct { Binary b; } ZipContext;
 

@@ -4,8 +4,8 @@
 #include <stdio.h>
 #include "../Operation.h"
 #include "../utility.h"
-#include "../Scalar.h"
-#include "../Vector.h"
+#include "../math/Scalar.h"
+#include "../math/Vector.h"
 
 typedef struct {
     int    rows, D, contiguous;

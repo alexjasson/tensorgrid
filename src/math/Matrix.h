@@ -1,7 +1,7 @@
 #ifndef MATRIX_H
 #define MATRIX_H
 
-#include "tensorgrid.h"
+#include "../tensorgrid.h"
 
 /*
  * A strided 2D matrix view over existing memory. Element (i, j) is

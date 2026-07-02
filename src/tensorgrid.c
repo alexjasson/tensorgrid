@@ -12,8 +12,8 @@
 #include "adt/Stack.h"
 #include "utility.h"
 #include "adt/MemoryPool.h"
-#include "Vector.h"
-#include "Scalar.h"
+#include "math/Vector.h"
+#include "math/Scalar.h"
 
 Unary  RELU     = { (f)relu,     (f)drelu,    (f)reluv,     (f)dreluv     };
 Unary  SIGMOID  = { (f)sigmoid,  (f)dsigmoid, (f)sigmoidv,  (f)dsigmoidv  };

@@ -2,7 +2,7 @@
 
 #include <string.h>
 #include "../Operation.h"
-#include "../Matrix.h"
+#include "../math/Matrix.h"
 
 static void OperationMultiplyForward(Operation *op);
 static void OperationMultiplyBackward(Operation *op);

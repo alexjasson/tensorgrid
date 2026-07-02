@@ -1,7 +1,7 @@
 #ifndef SCALAR_H
 #define SCALAR_H
 
-#include "tensorgrid.h" // Entry
+#include "../tensorgrid.h" // Entry
 
 typedef Entry Scalar;
 

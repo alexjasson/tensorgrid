@@ -3,9 +3,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "../Operation.h"
-#include "../Scalar.h"
+#include "../math/Scalar.h"
 #include "../utility.h"
-#include "../Vector.h"
+#include "../math/Vector.h"
 
 typedef struct {
     Binary b;
