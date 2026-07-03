@@ -66,7 +66,7 @@ static void multiplyForward(void *arg, int start, int end)
 
     // If B is shared and A's batches are contiguous, fuse into a single GEMM
     if (batchStrideB == 0 && batchStrideA == m * aRowStride) {
-        memset(op->out.entries + (size_t)start * n, 0, (size_t)(end - start) * n * sizeof(Entry));
+        memset(op->out.entries + (size_t)start * n, 0, (size_t)(end - start) * n * sizeof(Real));
         MatrixMultiply(MatrixView(op->A.entries + (size_t)start * aRowStride, end - start, k, aRowStride, aColStride),
                        MatrixView(op->B.entries, k, n, bRowStride, bColStride),
                        MatrixView(op->out.entries + (size_t)start * n, end - start, n, n, 1));
@@ -80,11 +80,11 @@ static void multiplyForward(void *arg, int start, int end)
         int batchEnd   = (batch + 1) * m;
         int chunkEnd   = (end < batchEnd) ? end : batchEnd;
         int r1         = r0 + (chunkEnd - i);
-        Entry *A_batch = op->A.entries   + (size_t)batch * batchStrideA;
-        Entry *B_batch = op->B.entries   + (size_t)batch * batchStrideB;
-        Entry *C_batch = op->out.entries + (size_t)batch * m * n;
+        Real *A_batch = op->A.entries   + (size_t)batch * batchStrideA;
+        Real *B_batch = op->B.entries   + (size_t)batch * batchStrideB;
+        Real *C_batch = op->out.entries + (size_t)batch * m * n;
 
-        memset(C_batch + (size_t)r0 * n, 0, (size_t)(r1 - r0) * n * sizeof(Entry));
+        memset(C_batch + (size_t)r0 * n, 0, (size_t)(r1 - r0) * n * sizeof(Real));
         MatrixMultiply(MatrixView(A_batch + (size_t)r0 * aRowStride, r1 - r0, k, aRowStride, aColStride),
                        MatrixView(B_batch, k, n, bRowStride, bColStride),
                        MatrixView(C_batch + (size_t)r0 * n, r1 - r0, n, n, 1));
@@ -107,8 +107,8 @@ static void multiplyBackwardDa(void *arg, int start, int end)
     // Column split
     if (batchStrideA == 0 && (batchSize > 1 || m < k)) {
         for (int batch = 0; batch < batchSize; batch++) {
-            Entry *dout = op->out.gradients + (size_t)batch * m * n;
-            Entry *B    = op->B.entries     + (size_t)batch * batchStrideB;
+            Real *dout = op->out.gradients + (size_t)batch * m * n;
+            Real *B    = op->B.entries     + (size_t)batch * batchStrideB;
             MatrixMultiply(MatrixView(B + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride),
                            MatrixView(dout, n, m, 1, n),
                            MatrixView(op->A.gradients + (size_t)start * aColStride, end - start, m, aColStride, aRowStride));
@@ -130,9 +130,9 @@ static void multiplyBackwardDa(void *arg, int start, int end)
         int batchEnd = (batch + 1) * m;
         int chunkEnd = (end < batchEnd) ? end : batchEnd;
         int r1       = r0 + (chunkEnd - i);
-        Entry *dout  = op->out.gradients + (size_t)batch * m * n;
-        Entry *B     = op->B.entries     + (size_t)batch * batchStrideB;
-        Entry *dA    = op->A.gradients   + (size_t)batch * batchStrideA;
+        Real *dout  = op->out.gradients + (size_t)batch * m * n;
+        Real *B     = op->B.entries     + (size_t)batch * batchStrideB;
+        Real *dA    = op->A.gradients   + (size_t)batch * batchStrideA;
         MatrixMultiply(MatrixView(dout + (size_t)r0 * n, r1 - r0, n, n, 1),
                        MatrixView(B, n, k, bColStride, bRowStride),
                        MatrixView(dA + (size_t)r0 * aRowStride, r1 - r0, k, aRowStride, aColStride));
@@ -153,8 +153,8 @@ static void multiplyBackwardDb(void *arg, int start, int end)
     int batchSize = TensorSize(op->out) / (m * n);
 
     if (batchStrideB == 0 && batchStrideA == m * aRowStride && batchSize > 1) {
-        Entry local[(size_t)k * n];
-        memset(local, 0, (size_t)k * n * sizeof(Entry));
+        Real local[(size_t)k * n];
+        memset(local, 0, (size_t)k * n * sizeof(Real));
         MatrixMultiply(MatrixView(op->A.entries + (size_t)start * aRowStride, k, end - start, aColStride, aRowStride),
                        MatrixView(op->out.gradients + (size_t)start * n, end - start, n, n, 1),
                        MatrixView(local, k, n, n, 1));
@@ -175,9 +175,9 @@ static void multiplyBackwardDb(void *arg, int start, int end)
             int batchEnd = (batch + 1) * k;
             int chunkEnd = (end < batchEnd) ? end : batchEnd;
             int r1       = r0 + (chunkEnd - i);
-            Entry *A     = op->A.entries     + (size_t)batch * batchStrideA;
-            Entry *dout  = op->out.gradients + (size_t)batch * m * n;
-            Entry *dB    = op->B.gradients   + (size_t)batch * batchStrideB;
+            Real *A     = op->A.entries     + (size_t)batch * batchStrideA;
+            Real *dout  = op->out.gradients + (size_t)batch * m * n;
+            Real *dB    = op->B.gradients   + (size_t)batch * batchStrideB;
             MatrixMultiply(MatrixView(A + (size_t)r0 * aColStride, r1 - r0, m, aColStride, aRowStride),
                            MatrixView(dout, m, n, n, 1),
                            MatrixView(dB + (size_t)r0 * bRowStride, r1 - r0, n, bRowStride, bColStride));
@@ -190,8 +190,8 @@ static void multiplyBackwardDb(void *arg, int start, int end)
                        MatrixView(op->B.gradients + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride));
     } else {
         for (int batch = 0; batch < batchSize; batch++) {
-            Entry *A    = op->A.entries     + (size_t)batch * batchStrideA;
-            Entry *dout = op->out.gradients + (size_t)batch * m * n;
+            Real *A    = op->A.entries     + (size_t)batch * batchStrideA;
+            Real *dout = op->out.gradients + (size_t)batch * m * n;
             MatrixMultiply(MatrixView(A + (size_t)start * aColStride, end - start, m, aColStride, aRowStride),
                            MatrixView(dout, m, n, n, 1),
                            MatrixView(op->B.gradients + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride));

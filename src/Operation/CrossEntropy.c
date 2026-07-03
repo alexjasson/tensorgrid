@@ -60,7 +60,7 @@ Tensor OperationCrossEntropy(Tensor labels, Tensor logits, float temperature)
 static void OperationCrossEntropyForward(Operation *op)
 {
     CrossEntropyContext *ctx = op->context;
-    Entry loss = 0.0f;
+    Real loss = 0.0f;
 
     for (int row = 0; row < ctx->rows; row++) {
         int zBase = ctx->logitsContiguous
@@ -68,16 +68,16 @@ static void OperationCrossEntropyForward(Operation *op)
                   : unravel(row, op->A.shape, op->A.strides, op->A.dimensions - 1);
         int zStride = op->A.strides[op->A.dimensions - 1];
 
-        Entry max = -FLT_MAX;
+        Real max = -FLT_MAX;
         for (int c = 0; c < ctx->classes; c++) {
-            Entry v = op->A.entries[zBase + c * zStride] * ctx->invTemperature;
+            Real v = op->A.entries[zBase + c * zStride] * ctx->invTemperature;
             if (v > max) max = v;
         }
 
-        Entry sum = 0.0f;
+        Real sum = 0.0f;
         for (int c = 0; c < ctx->classes; c++)
             sum += expe(op->A.entries[zBase + c * zStride] * ctx->invTemperature - max);
-        Entry logDenom = max + loge(sum);
+        Real logDenom = max + loge(sum);
 
         if (ctx->distribution) {
             int yBase = ctx->targetContiguous
@@ -85,8 +85,8 @@ static void OperationCrossEntropyForward(Operation *op)
                       : unravel(row, op->B.shape, op->B.strides, op->B.dimensions - 1);
             int yStride = op->B.strides[op->B.dimensions - 1];
             for (int c = 0; c < ctx->classes; c++) {
-                Entry z = op->A.entries[zBase + c * zStride];
-                Entry y = op->B.entries[yBase + c * yStride];
+                Real z = op->A.entries[zBase + c * zStride];
+                Real y = op->B.entries[yBase + c * yStride];
                 loss -= y * (z * ctx->invTemperature - logDenom);
             }
         } else {
@@ -114,8 +114,8 @@ static void crossEntropyBackward(void *arg, int start, int end)
 {
     Operation *op = arg;
     CrossEntropyContext *ctx = op->context;
-    Entry logitScale = op->out.gradients[0] * ctx->invTemperature / ctx->rows;
-    Entry targetScale = op->out.gradients[0] / ctx->rows;
+    Real logitScale = op->out.gradients[0] * ctx->invTemperature / ctx->rows;
+    Real targetScale = op->out.gradients[0] / ctx->rows;
 
     for (int row = start; row < end; row++) {
         int zBase = ctx->logitsContiguous
@@ -123,19 +123,19 @@ static void crossEntropyBackward(void *arg, int start, int end)
                   : unravel(row, op->A.shape, op->A.strides, op->A.dimensions - 1);
         int zStride = op->A.strides[op->A.dimensions - 1];
 
-        Entry max = -FLT_MAX;
+        Real max = -FLT_MAX;
         for (int c = 0; c < ctx->classes; c++) {
-            Entry v = op->A.entries[zBase + c * zStride] * ctx->invTemperature;
+            Real v = op->A.entries[zBase + c * zStride] * ctx->invTemperature;
             if (v > max) max = v;
         }
 
-        Entry sum = 0.0f;
+        Real sum = 0.0f;
         for (int c = 0; c < ctx->classes; c++)
             sum += expe(op->A.entries[zBase + c * zStride] * ctx->invTemperature - max);
-        Entry inv = 1.0f / sum;
-        Entry logDenom = max + loge(sum);
+        Real inv = 1.0f / sum;
+        Real logDenom = max + loge(sum);
 
-        Entry targetSum = 1.0f;
+        Real targetSum = 1.0f;
         int target = -1;
         int yBase = 0, yStride = 0;
         if (ctx->distribution) {
@@ -151,9 +151,9 @@ static void crossEntropyBackward(void *arg, int start, int end)
             target = (int)op->B.entries[off];
         }
         for (int c = 0; c < ctx->classes; c++) {
-            Entry z = op->A.entries[zBase + c * zStride];
-            Entry p = expe(z * ctx->invTemperature - max) * inv;
-            Entry y = c == target ? 1.0f : 0.0f;
+            Real z = op->A.entries[zBase + c * zStride];
+            Real p = expe(z * ctx->invTemperature - max) * inv;
+            Real y = c == target ? 1.0f : 0.0f;
             if (ctx->distribution) {
                 y = op->B.entries[yBase + c * yStride];
             }

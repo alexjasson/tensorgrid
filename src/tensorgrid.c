@@ -32,9 +32,9 @@ Binary MAX      = { (f)max,      (f)maxDa,    (f)maxDb,     (f)maxv,      (f)max
 Binary MIN      = { (f)min,      (f)minDa,    (f)minDb,     (f)minv,      (f)minDav,    (f)minDbv     };
 
 typedef struct optimizer {
-    Entry *m;     // SGD momentum or Adam first moment
-    Entry *v;     // Adam second moment
-    int    t;     // Adam timestep
+    Real *m;     // SGD momentum or Adam first moment
+    Real *v;     // Adam second moment
+    int   t;     // Adam timestep
 } optimizer;
 
 struct tensorArray {
@@ -73,7 +73,7 @@ Tensor TensorNew(int dimensions, int *shape, int autograd)
             t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
     }
     int size     = TensorSize(t);
-    size_t bytes = (size_t)size * sizeof(Entry);
+    size_t bytes = (size_t)size * sizeof(Real);
     MemoryPool pool = MemoryPoolGet();
     t.entries   = MemoryPoolAlloc(pool, bytes);
     memset(t.entries, 0, bytes);
@@ -98,7 +98,7 @@ TensorArray TensorArrayNew(void)
 Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape, int autograd)
 {
     Tensor t = TensorNew(dimensions, shape, autograd);
-    if (autograd) memset(t.gradients, 0, (size_t)TensorSize(t) * sizeof(Entry));
+    if (autograd) memset(t.gradients, 0, (size_t)TensorSize(t) * sizeof(Real));
     DynamicArrayPush(ta->tensors, &t);
     return t;
 }
@@ -109,7 +109,7 @@ void TensorFree(Tensor A)
     size_t footprint = 1;
     for (int i = 0; i < A.dimensions; i++)
         if (A.strides[i] > 0) footprint += (size_t)(A.shape[i] - 1) * A.strides[i];
-    size_t bytes = footprint * sizeof(Entry);
+    size_t bytes = footprint * sizeof(Real);
     MemoryPool pool = MemoryPoolGet();
     MemoryPoolFree(pool, A.entries, bytes);
     MemoryPoolFree(pool, A.gradients, bytes);
@@ -206,7 +206,7 @@ Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides, int of
     return t;
 }
 
-Tensor TensorReduce(Binary fn, Entry initial, Tensor A, int axis)
+Tensor TensorReduce(Binary fn, Real initial, Tensor A, int axis)
 {
     Tensor indices = TensorNew(1, (int[]){A.shape[axis]}, FALSE);
     Tensor out     = TensorScatter(fn, A, indices, initial, axis, 1);
@@ -219,9 +219,9 @@ Tensor TensorZip(Binary fn, Tensor A, Tensor B)                           { retu
 Tensor TensorMultiply(Tensor A, Tensor B)                                 { return OperationMultiply(A, B);               }
 Tensor TensorAffine(Unary fn, Tensor A, Tensor bias, int inner)           { return OperationAffine(fn, A, bias, inner);   }
 Tensor TensorGather(Tensor A, Tensor indices, int axis)                   { return OperationGather(A, indices, axis);     }
-Tensor TensorScatter(Binary fn, Tensor A, Tensor i, Entry e, int a, int n){ return OperationScatter(fn, A, i, e, a, n);   }
+Tensor TensorScatter(Binary fn, Tensor A, Tensor i, Real e, int a, int n) { return OperationScatter(fn, A, i, e, a, n);   }
 Tensor TensorConvolution(Tensor in, Tensor filter, int s, int p)          { return OperationConvolution(in, filter, s, p);}
-Tensor TensorPool(Binary fn, Entry e, Tensor in, int size, int s, int p)  { return OperationPool(fn, e, in, size, s, p);  }
+Tensor TensorPool(Binary fn, Real e, Tensor in, int size, int s, int p)   { return OperationPool(fn, e, in, size, s, p);  }
 Tensor TensorSoftmax(Tensor in, float temperature)                        { return OperationSoftmax(in, temperature);     }
 Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, float temp)        { return OperationCrossEntropy(y, logits, temp);}
 Tensor TensorMSE(Tensor y, Tensor y_hat)                                  { return OperationMSE(y, y_hat);                }
@@ -258,7 +258,7 @@ void TensorScale(Tensor A, float scalar)
         A.entries[i] *= scalar;
 }
 
-void TensorFill(Tensor A, Entry value)
+void TensorFill(Tensor A, Real value)
 {
     int size = TensorSize(A);
     for (int i = 0; i < size; i++)
@@ -340,7 +340,7 @@ Tensor TensorNLL(Tensor y, Tensor logP)
     sum = TensorReshape(sum, 0, NULL);
 
     Tensor n = TensorNew(0, NULL, FALSE);
-    TensorFill(n, (Entry)N);
+    TensorFill(n, (Real)N);
     Tensor result = TensorZip(DIVIDE, sum, n);
 
     TensorFree(A); TensorFree(B); TensorFree(sum); TensorFree(n);
@@ -418,7 +418,7 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
         for (int i = 0; i < n; i++)
             memcpy(out.entries + (size_t)i * rowSize,
                    A.entries + (size_t)perm[i] * rowSize,
-                   (size_t)rowSize * sizeof(Entry));
+                   (size_t)rowSize * sizeof(Real));
     } else {
         int innerDims = A.dimensions - 1;
         for (int i = 0; i < n; i++) {
@@ -438,10 +438,10 @@ void TensorXavier(Tensor A)
     int receptive = 1;
     for (int i = 2; i < A.dimensions; i++) receptive *= A.shape[i];
     int fanSum = (A.shape[0] + (A.dimensions > 1 ? A.shape[1] : 0)) * receptive;
-    Entry bound = __builtin_sqrtf(6.0f / fanSum);
+    Real bound = __builtin_sqrtf(6.0f / fanSum);
     int size = TensorSize(A);
     for (int i = 0; i < size; i++)
-        A.entries[i] = (Entry)randomFloat(-bound, bound);
+        A.entries[i] = (Real)randomFloat(-bound, bound);
 }
 
 Tensor TensorOneHot(Tensor labels, int numClasses)
@@ -534,37 +534,37 @@ Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataT
             case DataUint8: {
                 uint8_t x;
                 if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Entry)x;
+                t.entries[i] = (Real)x;
                 break;
             }
             case DataInt8: {
                 int8_t x;
                 if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Entry)x;
+                t.entries[i] = (Real)x;
                 break;
             }
             case DataInt16: {
                 int16_t x;
                 if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Entry)x;
+                t.entries[i] = (Real)x;
                 break;
             }
             case DataInt32: {
                 int32_t x;
                 if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Entry)x;
+                t.entries[i] = (Real)x;
                 break;
             }
             case DataFloat32: {
                 float x;
                 if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Entry)x;
+                t.entries[i] = (Real)x;
                 break;
             }
             case DataFloat64: {
                 double x;
                 if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Entry)x;
+                t.entries[i] = (Real)x;
                 break;
             }
         }
@@ -597,7 +597,7 @@ void TensorArrayWrite(TensorArray ta, char *path)
 
     // Write header
     int n = DynamicArraySize(ta->tensors);
-    uint32_t entrySize = sizeof(Entry), tensors = (uint32_t)n;
+    uint32_t entrySize = sizeof(Real), tensors = (uint32_t)n;
 
     if (fwrite("TGD", 1, 3, f) != 3 ||
         fwrite(&entrySize, sizeof(entrySize), 1, f) != 1 ||
@@ -634,7 +634,7 @@ void TensorArrayWrite(TensorArray ta, char *path)
         }
 
         // Write tensor entries
-        if (fwrite(t->entries, sizeof(Entry), (size_t)TensorSize(*t), f) != (size_t)TensorSize(*t)) {
+        if (fwrite(t->entries, sizeof(Real), (size_t)TensorSize(*t), f) != (size_t)TensorSize(*t)) {
             fprintf(stderr, "Cannot write file: %s\n", path);
             fclose(f);
             exit(EXIT_FAILURE);
@@ -657,7 +657,7 @@ int TensorArrayRead(TensorArray ta, char *path)
         memcmp(magic, "TGD", 3) != 0 ||
         fread(&entrySize, sizeof(entrySize), 1, f) != 1 ||
         fread(&tensors, sizeof(tensors), 1, f) != 1 ||
-        entrySize != sizeof(Entry) ||
+        entrySize != sizeof(Real) ||
         tensors > INT32_MAX) {
         fprintf(stderr, "Not a .tgd file: %s\n", path);
         fclose(f);
@@ -707,7 +707,7 @@ int TensorArrayRead(TensorArray ta, char *path)
         }
 
         // Read entries into the tensor
-        if (fread(t->entries, sizeof(Entry), (size_t)TensorSize(*t), f) != (size_t)TensorSize(*t))
+        if (fread(t->entries, sizeof(Real), (size_t)TensorSize(*t), f) != (size_t)TensorSize(*t))
             goto error;
     }
 
@@ -720,7 +720,7 @@ error:
     exit(EXIT_FAILURE);
 }
 
-Entry TensorGet(Tensor A, int *indices)
+Real TensorGet(Tensor A, int *indices)
 {
     int idx = 0;
     for (int i = 0; i < A.dimensions; i++)
@@ -728,7 +728,7 @@ Entry TensorGet(Tensor A, int *indices)
     return A.entries[idx];
 }
 
-void TensorSet(Tensor A, int *indices, Entry value)
+void TensorSet(Tensor A, int *indices, Real value)
 {
     int idx = 0;
     for (int i = 0; i < A.dimensions; i++)
@@ -748,13 +748,13 @@ void TensorSGD(Tensor A, float lr, float momentum)
     }
 
     if (!A.optimizer->m) {
-        A.optimizer->m = calloc(size, sizeof(Entry));
+        A.optimizer->m = calloc(size, sizeof(Real));
         if (!A.optimizer->m) {
             fprintf(stderr, "Insufficient memory!\n");
             exit(EXIT_FAILURE);
         }
     }
-    Entry *m = A.optimizer->m;
+    Real *m = A.optimizer->m;
     for (int i = 0; i < size; i++) {
         m[i] = momentum * m[i] + A.gradients[i];
         A.entries[i] -= lr * m[i];
@@ -773,20 +773,20 @@ void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, flo
     int size = TensorSize(A);
 
     if (!A.optimizer->m) {
-        A.optimizer->m = calloc(size, sizeof(Entry));
-        A.optimizer->v = calloc(size, sizeof(Entry));
+        A.optimizer->m = calloc(size, sizeof(Real));
+        A.optimizer->v = calloc(size, sizeof(Real));
         if (!A.optimizer->m || !A.optimizer->v) {
             fprintf(stderr, "Insufficient memory!\n");
             exit(EXIT_FAILURE);
         }
     }
     A.optimizer->t++;
-    Entry *m = A.optimizer->m;
-    Entry *v = A.optimizer->v;
+    Real *m = A.optimizer->m;
+    Real *v = A.optimizer->v;
     float biasM = 1.0f - powi(beta1, A.optimizer->t);
     float biasV = 1.0f - powi(beta2, A.optimizer->t);
     for (int i = 0; i < size; i++) {
-        Entry g = A.gradients[i];
+        Real g = A.gradients[i];
         m[i] = beta1 * m[i] + (1.0f - beta1) * g;
         v[i] = beta2 * v[i] + (1.0f - beta2) * g * g;
         float mHat = m[i] / biasM;
@@ -823,8 +823,8 @@ void TensorBPETrain(Tensor corpus, Tensor merges)
 
         int a = (int)(bestKey >> 32);
         int b = (int)(bestKey & 0xffffffffu);
-        TensorSet(merges, (int[]){numMerges, 0}, (Entry)a);
-        TensorSet(merges, (int[]){numMerges, 1}, (Entry)b);
+        TensorSet(merges, (int[]){numMerges, 0}, (Real)a);
+        TensorSet(merges, (int[]){numMerges, 1}, (Real)b);
 
         int w = 0;
         for (int i = 0; i < n; ) {
@@ -867,7 +867,7 @@ Tensor TensorBPEEncode(Tensor corpus, Tensor merges)
     }
 
     Tensor tokens = TensorNew(1, (int[]){n}, FALSE);
-    for (int i = 0; i < n; i++) TensorSet(tokens, (int[]){i}, (Entry)ids[i]);
+    for (int i = 0; i < n; i++) TensorSet(tokens, (int[]){i}, (Real)ids[i]);
     free(ids);
     HashMapFree(rankMap);
     return tokens;
@@ -904,7 +904,7 @@ Tensor TensorBPEDecode(Tensor tokens, Tensor merges)
     int total = DynamicArraySize(out);
     Tensor bytes = TensorNew(1, (int[]){total}, FALSE);
     for (int i = 0; i < total; i++)
-        TensorSet(bytes, (int[]){i}, (Entry)*(unsigned char *)DynamicArrayGet(out, i));
+        TensorSet(bytes, (int[]){i}, (Real)*(unsigned char *)DynamicArrayGet(out, i));
     DynamicArrayFree(out);
     return bytes;
 }

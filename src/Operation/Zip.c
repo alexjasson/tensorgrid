@@ -79,9 +79,9 @@ static void zipForward(void *arg, int start, int end)
 {
     Operation *op  = arg;
     ZipContext *ctx = op->context;
-    Entry     *out = op->out.entries;
-    Entry     *A   = op->A.entries;
-    Entry     *B   = op->B.entries;
+    Real     *out = op->out.entries;
+    Real     *A   = op->A.entries;
+    Real     *B   = op->B.entries;
     VectorBinary fn = (VectorBinary)ctx->b.fv;
     int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
     int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
@@ -92,7 +92,7 @@ static void zipForward(void *arg, int start, int end)
         for (; i + VECTOR_DIMS <= end; i += VECTOR_DIMS)
             VectorStore(out + i, fn(VectorLoad(A + i), VectorLoad(B + i)));
         if (i < end) {
-            Entry x[VECTOR_DIMS], y[VECTOR_DIMS], z[VECTOR_DIMS];
+            Real x[VECTOR_DIMS], y[VECTOR_DIMS], z[VECTOR_DIMS];
             int tail = end - i;
             for (int t = 0; t < VECTOR_DIMS; t++) {
                 x[t] = t < tail ? A[i + t] : 1.0f;
@@ -141,9 +141,9 @@ static void zipForward(void *arg, int start, int end)
         while (o < end) {
             int len = R - r;
             if (o + len > end) len = end - o;
-            Entry       *po = out + o;
-            const Entry *pa = A + offA + (clsA ? r : 0);
-            const Entry *pb = B + offB + (clsB ? r : 0);
+            Real       *po = out + o;
+            const Real *pa = A + offA + (clsA ? r : 0);
+            const Real *pb = B + offB + (clsB ? r : 0);
             int i = 0;
             if (clsA && clsB) {
                 for (; i + VECTOR_DIMS <= len; i += VECTOR_DIMS)
@@ -162,7 +162,7 @@ static void zipForward(void *arg, int start, int end)
                     VectorStore(po + i, v);
             }
             if (i < len) {
-                Entry x[VECTOR_DIMS], y[VECTOR_DIMS], z[VECTOR_DIMS];
+                Real x[VECTOR_DIMS], y[VECTOR_DIMS], z[VECTOR_DIMS];
                 int tail = len - i;
                 for (int t = 0; t < VECTOR_DIMS; t++) {
                     x[t] = clsA ? (t < tail ? pa[i + t] : 1.0f) : *pa;
@@ -188,7 +188,7 @@ static void zipForward(void *arg, int start, int end)
 
     // Default path
     for (int i = start; i < end; i += VECTOR_DIMS) {
-        Entry x[VECTOR_DIMS], y[VECTOR_DIMS], z[VECTOR_DIMS];
+        Real x[VECTOR_DIMS], y[VECTOR_DIMS], z[VECTOR_DIMS];
         int tail = end - i < VECTOR_DIMS ? end - i : VECTOR_DIMS;
         for (int t = 0; t < VECTOR_DIMS; t++) {
             int j = i + t;
@@ -230,11 +230,11 @@ static void zipBackward(void *arg, int start, int end)
     }
 
     ZipContext *ctx = op->context;
-    Entry       *A = op->A.entries;
-    Entry       *B = op->B.entries;
-    Entry      *dA = op->A.gradients;
-    Entry      *dB = op->B.gradients;
-    Entry    *dout = op->out.gradients;
+    Real       *A = op->A.entries;
+    Real       *B = op->B.entries;
+    Real      *dA = op->A.gradients;
+    Real      *dB = op->B.gradients;
+    Real    *dout = op->out.gradients;
     VectorBinary dafn = (VectorBinary)ctx->b.dav;
     VectorBinary dbfn = (VectorBinary)ctx->b.dbv;
     int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
@@ -251,7 +251,7 @@ static void zipBackward(void *arg, int start, int end)
             if (dB) VectorStore(dB + j, VectorFma(g, dbfn(a, b), VectorLoad(dB + j)));
         }
         if (j < end) {
-            Entry x[VECTOR_DIMS], y[VECTOR_DIMS], g[VECTOR_DIMS], r[VECTOR_DIMS], old[VECTOR_DIMS];
+            Real x[VECTOR_DIMS], y[VECTOR_DIMS], g[VECTOR_DIMS], r[VECTOR_DIMS], old[VECTOR_DIMS];
             int tail = end - j;
             for (int t = 0; t < VECTOR_DIMS; t++) {
                 x[t] = t < tail ? A[j + t] : 1.0f;
@@ -313,11 +313,11 @@ static void zipBackward(void *arg, int start, int end)
         while (o < end) {
             int len = R - r;
             if (o + len > end) len = end - o;
-            const Entry *pa  = A + offA + (clsA ? r : 0);
-            const Entry *pb  = B + offB + (clsB ? r : 0);
-            const Entry *pg  = dout + o;
-            Entry       *pdA = dA ? dA + offA + (clsA ? r : 0) : NULL;
-            Entry       *pdB = dB ? dB + offB + (clsB ? r : 0) : NULL;
+            const Real *pa  = A + offA + (clsA ? r : 0);
+            const Real *pb  = B + offB + (clsB ? r : 0);
+            const Real *pg  = dout + o;
+            Real       *pdA = dA ? dA + offA + (clsA ? r : 0) : NULL;
+            Real       *pdB = dB ? dB + offB + (clsB ? r : 0) : NULL;
             Vector accA = VectorZero(), accB = VectorZero();
             Vector va = clsA ? VectorZero() : VectorBcast(*pa);
             Vector vb = clsB ? VectorZero() : VectorBcast(*pb);
@@ -338,7 +338,7 @@ static void zipBackward(void *arg, int start, int end)
                 }
             }
             if (i < len) {
-                Entry x[VECTOR_DIMS], y[VECTOR_DIMS], gg[VECTOR_DIMS];
+                Real x[VECTOR_DIMS], y[VECTOR_DIMS], gg[VECTOR_DIMS];
                 int tail = len - i;
                 for (int t = 0; t < VECTOR_DIMS; t++) {
                     x[t]  = clsA ? (t < tail ? pa[i + t] : 0.0f) : *pa;
@@ -348,13 +348,13 @@ static void zipBackward(void *arg, int start, int end)
                 Vector av = VectorLoad(x), bv = VectorLoad(y), g = VectorLoad(gg);
                 if (pdA) {
                     Vector d = VectorMul(g, dafn(av, bv));
-                    if (clsA) { Entry tmp[VECTOR_DIMS]; VectorStore(tmp, d);
+                    if (clsA) { Real tmp[VECTOR_DIMS]; VectorStore(tmp, d);
                                 for (int t = 0; t < tail; t++) pdA[i + t] += tmp[t]; }
                     else accA = VectorAdd(accA, d);
                 }
                 if (pdB) {
                     Vector d = VectorMul(g, dbfn(av, bv));
-                    if (clsB) { Entry tmp[VECTOR_DIMS]; VectorStore(tmp, d);
+                    if (clsB) { Real tmp[VECTOR_DIMS]; VectorStore(tmp, d);
                                 for (int t = 0; t < tail; t++) pdB[i + t] += tmp[t]; }
                     else accB = VectorAdd(accB, d);
                 }
@@ -378,7 +378,7 @@ static void zipBackward(void *arg, int start, int end)
 
     // Default path
     for (int j = start; j < end; j += VECTOR_DIMS) {
-        Entry x[VECTOR_DIMS], y[VECTOR_DIMS], g[VECTOR_DIMS], r[VECTOR_DIMS];
+        Real x[VECTOR_DIMS], y[VECTOR_DIMS], g[VECTOR_DIMS], r[VECTOR_DIMS];
         int aOffs[VECTOR_DIMS], bOffs[VECTOR_DIMS];
         int tail = end - j < VECTOR_DIMS ? end - j : VECTOR_DIMS;
         for (int t = 0; t < VECTOR_DIMS; t++) {

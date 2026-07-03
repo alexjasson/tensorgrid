@@ -7,7 +7,7 @@
 
 typedef struct {
     Binary b;
-    Entry fill;
+    Real fill;
     int fH, stride, padding;
 } PoolContext;
 
@@ -16,7 +16,7 @@ static void OperationPoolBackward(Operation *op);
 static void poolForward(void *arg, int start, int end);
 static void poolBackward(void *arg, int start, int end);
 
-Tensor OperationPool(Binary fn, Entry initial, Tensor in, int size, int stride, int padding)
+Tensor OperationPool(Binary fn, Real initial, Tensor in, int size, int stride, int padding)
 {
     int N    = in.shape[0];
     int C    = in.shape[1];
@@ -75,29 +75,29 @@ static void poolForward(void *arg, int start, int end)
     int Hout = op->out.shape[2];
     int Wout = op->out.shape[3];
     int sN = A.strides[0], sC = A.strides[1], sH = A.strides[2], sW = A.strides[3];
-    Entry *input  = A.entries;
-    Entry *out    = op->out.entries;
-    Entry *argIdx = op->B.entries;
-    Entry fill    = ctx->fill;
+    Real *input  = A.entries;
+    Real *out    = op->out.entries;
+    Real *argIdx = op->B.entries;
+    Real fill    = ctx->fill;
     f reducer = ctx->b.f;
 
     for (int p = start; p < end; p++) {
         int c = p % C, n = p / C;
-        Entry *plane   = input + (size_t)n * sN + (size_t)c * sC;
+        Real *plane   = input + (size_t)n * sN + (size_t)c * sC;
         size_t outBase = (size_t)p * Hout * Wout;
         for (int oh = 0; oh < Hout; oh++)
             for (int ow = 0; ow < Wout; ow++) {
                 size_t outIdx = outBase + (size_t)oh * Wout + ow;
-                Entry acc = fill;
+                Real acc = fill;
                 int   bl  = -1;
                 for (int fh = 0; fh < size; fh++) {
                     int ih = oh * stride - padding + fh;
                     if (ih < 0 || ih >= H) continue;
-                    Entry *r = plane + (size_t)ih * sH;
+                    Real *r = plane + (size_t)ih * sH;
                     for (int fw = 0; fw < size; fw++) {
                         int iw = ow * stride - padding + fw;
                         if (iw < 0 || iw >= W) continue;
-                        Entry v = r[(size_t)iw * sW];
+                        Real v = r[(size_t)iw * sW];
                         int local = fh * size + fw;
                         if      (reducer == MAX.f) { if (v > acc) { acc = v; bl = local; } }
                         else if (reducer == MIN.f) { if (v < acc) { acc = v; bl = local; } }
@@ -107,7 +107,7 @@ static void poolForward(void *arg, int start, int end)
                 }
                 out[outIdx] = acc;
                 if ((reducer == MAX.f || reducer == MIN.f) && argIdx)
-                    argIdx[outIdx] = (Entry)bl;
+                    argIdx[outIdx] = (Real)bl;
             }
     }
 }
@@ -125,11 +125,11 @@ static void poolBackward(void *arg, int start, int end)
     int Hout = op->out.shape[2];
     int Wout = op->out.shape[3];
     int sN = A.strides[0], sC = A.strides[1], sH = A.strides[2], sW = A.strides[3];
-    Entry *input  = A.entries;
-    Entry *dInput = A.gradients;
-    Entry *dOut   = op->out.gradients;
-    Entry *argIdx = op->B.entries;
-    Entry fill    = ctx->fill;
+    Real *input  = A.entries;
+    Real *dInput = A.gradients;
+    Real *dOut   = op->out.gradients;
+    Real *argIdx = op->B.entries;
+    Real fill    = ctx->fill;
     f reducer = ctx->b.f;
     ScalarBinary da = (ScalarBinary)ctx->b.da, db = (ScalarBinary)ctx->b.db;
 
@@ -138,7 +138,7 @@ static void poolBackward(void *arg, int start, int end)
         if (stride >= size) {
             for (int p = start; p < end; p++) {
                 int c = p % C, n = p / C;
-                Entry *plane   = dInput + (size_t)n * sN + (size_t)c * sC;
+                Real *plane   = dInput + (size_t)n * sN + (size_t)c * sC;
                 size_t outBase = (size_t)p * Hout * Wout;
                 for (int oh = 0; oh < Hout; oh++)
                     for (int ow = 0; ow < Wout; ow++) {
@@ -154,7 +154,7 @@ static void poolBackward(void *arg, int start, int end)
         } else {
             for (int p = start; p < end; p++) {
                 int c = p % C, n = p / C;
-                Entry *plane   = dInput + (size_t)n * sN + (size_t)c * sC;
+                Real *plane   = dInput + (size_t)n * sN + (size_t)c * sC;
                 size_t outBase = (size_t)p * Hout * Wout;
                 for (int ih = 0; ih < H; ih++)
                     for (int iw = 0; iw < W; iw++) {
@@ -167,7 +167,7 @@ static void poolBackward(void *arg, int start, int end)
                         if (ohEnd >= Hout) ohEnd = Hout - 1;
                         if (owEnd >= Wout) owEnd = Wout - 1;
 
-                        Entry grad = 0.0f;
+                        Real grad = 0.0f;
                         for (int oh = ohStart; oh <= ohEnd; oh++)
                             for (int ow = owStart; ow <= owEnd; ow++) {
                                 int fh = ih + padding - oh * stride;
@@ -183,15 +183,15 @@ static void poolBackward(void *arg, int start, int end)
     } else if (reducer == ADD.f) {
         for (int p = start; p < end; p++) {
             int c = p % C, n = p / C;
-            Entry *plane   = dInput + (size_t)n * sN + (size_t)c * sC;
+            Real *plane   = dInput + (size_t)n * sN + (size_t)c * sC;
             size_t outBase = (size_t)p * Hout * Wout;
             for (int oh = 0; oh < Hout; oh++)
                 for (int ow = 0; ow < Wout; ow++) {
-                    Entry g = dOut[outBase + (size_t)oh * Wout + ow];
+                    Real g = dOut[outBase + (size_t)oh * Wout + ow];
                     for (int fh = 0; fh < size; fh++) {
                         int ih = oh * stride - padding + fh;
                         if (ih < 0 || ih >= H) continue;
-                        Entry *dr = plane + (size_t)ih * sH;
+                        Real *dr = plane + (size_t)ih * sH;
                         for (int fw = 0; fw < size; fw++) {
                             int iw = ow * stride - padding + fw;
                             if (iw >= 0 && iw < W) dr[(size_t)iw * sW] += g;
@@ -200,13 +200,13 @@ static void poolBackward(void *arg, int start, int end)
                 }
         }
     } else {
-        Entry chain[size * size + 1];
-        Entry vals[size * size];
+        Real chain[size * size + 1];
+        Real vals[size * size];
         size_t offs[size * size];
         for (int p = start; p < end; p++) {
             int c = p % C, n = p / C;
-            Entry *inPlane = input  + (size_t)n * sN + (size_t)c * sC;
-            Entry *dPlane  = dInput + (size_t)n * sN + (size_t)c * sC;
+            Real *inPlane = input  + (size_t)n * sN + (size_t)c * sC;
+            Real *dPlane  = dInput + (size_t)n * sN + (size_t)c * sC;
             size_t outBase = (size_t)p * Hout * Wout;
             for (int oh = 0; oh < Hout; oh++)
                 for (int ow = 0; ow < Wout; ow++) {
@@ -219,14 +219,14 @@ static void poolBackward(void *arg, int start, int end)
                             int iw = ow * stride - padding + fw;
                             if (iw < 0 || iw >= W) continue;
                             size_t off = (size_t)ih * sH + (size_t)iw * sW;
-                            Entry v = inPlane[off];
+                            Real v = inPlane[off];
                             chain[cnt + 1] = ((ScalarBinary)reducer)(chain[cnt], v);
                             vals[cnt] = v;
                             offs[cnt] = off;
                             cnt++;
                         }
                     }
-                    Entry dres = dOut[outBase + (size_t)oh * Wout + ow];
+                    Real dres = dOut[outBase + (size_t)oh * Wout + ow];
                     for (int j = cnt - 1; j >= 0; j--) {
                         dPlane[offs[j]] += dres * db(chain[j], vals[j]);
                         dres *= da(chain[j], vals[j]);

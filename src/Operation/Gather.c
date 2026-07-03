@@ -115,13 +115,13 @@ static void gatherBackward(void *arg, int start, int end)
     if (aC && iC && innerSize >= VECTOR_DIMS) {
         int outer = 1;
         for (int d = 0; d < axis; d++) outer *= A.shape[d];
-        Entry *dA   = A.gradients;
-        Entry *dout = op->out.gradients;
+        Real *dA   = A.gradients;
+        Real *dout = op->out.gradients;
         for (int o = 0; o < outer; o++) {
             for (int ix = 0; ix < idxSize; ix++) {
                 int k = (int)I.entries[ix];
-                const Entry *src = dout + ((size_t)o * idxSize  + ix) * innerSize;
-                Entry       *dst = dA   + ((size_t)o * axisSize + k)  * innerSize;
+                const Real *src = dout + ((size_t)o * idxSize  + ix) * innerSize;
+                Real       *dst = dA   + ((size_t)o * axisSize + k)  * innerSize;
                 int c = start;
                 for (; c + VECTOR_DIMS <= end; c += VECTOR_DIMS)
                     VectorStore(dst + c, VectorAdd(VectorLoad(dst + c), VectorLoad(src + c)));
@@ -150,7 +150,7 @@ static void gatherBackward(void *arg, int start, int end)
             aStride  = A.strides[axis];
         }
 
-        Entry sum = 0;
+        Real sum = 0;
         if (iC) {
             for (int ix = 0; ix < idxSize; ix++) {
                 if ((int)I.entries[ix] == kTarget)
