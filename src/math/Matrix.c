@@ -1,6 +1,7 @@
 // https://github.com/alexjasson/tensorgrid
 
 #include "Matrix.h"
+#include <stddef.h>
 #include "Vector.h"
 
 // An MR x NRV block of vector registers, used by microKernel

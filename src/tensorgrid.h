@@ -5,7 +5,6 @@
 #define TRUE 1
 #define FALSE 0
 #define INFINITE 1e+38
-#define PI 3.141592653589793f
 
 typedef void (*f)(void); // A function applied to scalars or vectors
 
@@ -18,7 +17,7 @@ typedef struct { f f, da, db; f fv, dav, dbv; } Binary;
 extern Unary RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
 extern Binary ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
 
-typedef float Real; // Floating point representation of a Real number.
+typedef float Real; // Floating point representation of a Real number, may be float or double
 typedef struct optimizer Optimizer;
 typedef enum { DataUint8, DataInt8, DataInt16, DataInt32, DataFloat32, DataFloat64 } DataType;
 
@@ -198,7 +197,7 @@ Tensor TensorMaxPool(Tensor input, int size, int stride, int padding);
  * bias:   [..., D]
  * out:    [..., D]
  */
-Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, float eps);
+Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, Real eps);
 
 /*
  * Returns an n x n causal mask: 0 on and below the diagonal, -INFINITE above.
@@ -212,7 +211,7 @@ Tensor TensorCausalMask(int n);
  * in:  Input logits    [..., numClasses]
  * out: Probabilities   [..., numClasses]
  */
-Tensor TensorSoftmax(Tensor in, float temperature);
+Tensor TensorSoftmax(Tensor in, Real temperature);
 
 /*
  * Log-softmax over the last dimension.
@@ -220,7 +219,7 @@ Tensor TensorSoftmax(Tensor in, float temperature);
  * in:  Input logits        [..., numClasses]
  * out: Log-probabilities   [..., numClasses]
  */
-Tensor TensorLogSoftmax(Tensor in, float temperature);
+Tensor TensorLogSoftmax(Tensor in, Real temperature);
 
 /*
  * Cross-entropy loss over the last dimension.
@@ -230,7 +229,7 @@ Tensor TensorLogSoftmax(Tensor in, float temperature);
  * logits: Predicted logits                [..., numClasses]
  * out:    Mean cross-entropy loss         [] (Scalar)
  */
-Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, float temperature);
+Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, Real temperature);
 
 /*
  * Negative log-likelihood over the last dimension.
@@ -376,7 +375,7 @@ Tensor TensorShuffle(Tensor A, unsigned int seed);
 /*
  * Multiplies all entries of A by scalar in-place.
  */
-void TensorScale(Tensor A, float scalar);
+void TensorScale(Tensor A, Real scalar);
 
 /*
  * Sets all entries of A to the given value.
@@ -406,7 +405,7 @@ void TensorPrint(Tensor A);
  * logits: [..., numClasses]
  * out:    [...]
  */
-Tensor TensorSample(Tensor logits, float temperature);
+Tensor TensorSample(Tensor logits, Real temperature);
 
 /*
  * Returns the number of positions at which corresponding entries of A and B differ.
@@ -427,12 +426,12 @@ void TensorBackward(Tensor loss);
  * momentum == 0: A -= lr * gradients.
  * momentum != 0: m = momentum * m + gradients; A -= lr * m.
  */
-void TensorSGD(Tensor A, float lr, float momentum);
+void TensorSGD(Tensor A, Real lr, Real momentum);
 
 /*
  * Applies a single SGD optimizer step to every tensor in the array.
  */
-void TensorArraySGD(TensorArray ta, float lr, float momentum);
+void TensorArraySGD(TensorArray ta, Real lr, Real momentum);
 
 /*
  * Adam optimizer with optional weight decay. Set weightDecay to 0 for Adam
@@ -442,12 +441,12 @@ void TensorArraySGD(TensorArray ta, float lr, float momentum);
  * v = beta2 * v + (1 - beta2) * gradients^2
  * A -= lr * (m_hat / (sqrt(v_hat) + epsilon) + weightDecay * A)
  */
-void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, float weightDecay);
+void TensorAdam(Tensor A, Real lr, Real beta1, Real beta2, Real epsilon, Real weightDecay);
 
 /*
  * Applies a single Adam optimizer step to every tensor in the array.
  */
-void TensorArrayAdam(TensorArray ta, float lr, float beta1, float beta2, float epsilon, float weightDecay);
+void TensorArrayAdam(TensorArray ta, Real lr, Real beta1, Real beta2, Real epsilon, Real weightDecay);
 
 /*
  * Byte Pair Encoding algorithm for NLP

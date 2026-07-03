@@ -9,7 +9,7 @@
 
 typedef struct {
     int    rows, D, contiguous;
-    float  eps;
+    Real   eps;
     Real *mean;   // [rows], cached in forward for backward
     Real *rstd;   // [rows]
 } NormContext;
@@ -19,7 +19,7 @@ static void OperationNormalizeBackward(Operation *op);
 static void normForward(void *arg, int start, int end);
 static void normBackward(void *arg, int start, int end);
 
-Tensor OperationNormalize(Tensor in, float eps)
+Tensor OperationNormalize(Tensor in, Real eps)
 {
     int D    = in.shape[in.dimensions - 1];
     int rows = TensorSize(in) / D;

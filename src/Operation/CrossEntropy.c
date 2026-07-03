@@ -1,6 +1,5 @@
 // https://github.com/alexjasson/tensorgrid
 
-#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "../Operation.h"
@@ -10,14 +9,14 @@
 typedef struct {
     int rows, classes;
     int distribution, logitsContiguous, targetContiguous;
-    float invTemperature;
+    Real invTemperature;
 } CrossEntropyContext;
 
 static void OperationCrossEntropyForward(Operation *op);
 static void OperationCrossEntropyBackward(Operation *op);
 static void crossEntropyBackward(void *arg, int start, int end);
 
-Tensor OperationCrossEntropy(Tensor labels, Tensor logits, float temperature)
+Tensor OperationCrossEntropy(Tensor labels, Tensor logits, Real temperature)
 {
     if (temperature <= 0.0f) {
         fprintf(stderr, "OperationCrossEntropy requires positive temperature!\n");
@@ -68,7 +67,7 @@ static void OperationCrossEntropyForward(Operation *op)
                   : unravel(row, op->A.shape, op->A.strides, op->A.dimensions - 1);
         int zStride = op->A.strides[op->A.dimensions - 1];
 
-        Real max = -FLT_MAX;
+        Real max = -INFINITE;
         for (int c = 0; c < ctx->classes; c++) {
             Real v = op->A.entries[zBase + c * zStride] * ctx->invTemperature;
             if (v > max) max = v;
@@ -123,7 +122,7 @@ static void crossEntropyBackward(void *arg, int start, int end)
                   : unravel(row, op->A.shape, op->A.strides, op->A.dimensions - 1);
         int zStride = op->A.strides[op->A.dimensions - 1];
 
-        Real max = -FLT_MAX;
+        Real max = -INFINITE;
         for (int c = 0; c < ctx->classes; c++) {
             Real v = op->A.entries[zBase + c * zStride] * ctx->invTemperature;
             if (v > max) max = v;

@@ -1,34 +1,33 @@
 #ifndef VECTOR_H
 #define VECTOR_H
 
-#include <immintrin.h>
+#include "../tensorgrid.h" // Real
 
 /*
- * The Vector type and it's dimension is determined at compile time from the
- * available SIMD instruction set. VECTOR_DIMS is how many floats fit in a
- * Vector and VECTOR_CARD is how many vector registers are available.
+ * The Vector type is a SIMD register of Reals, sized at compile time from
+ * the available SIMD instruction set. VECTOR_DIMS is how many Reals fit in
+ * a Vector and VECTOR_CARD is how many vector registers are available.
  */
 #if defined(__AVX512F__)
-typedef __m512 Vector;
-#define VECTOR_DIMS 16
+#define VECTOR_BYTES 64
 #define VECTOR_CARD 32
 #elif defined(__AVX2__)
-typedef __m256 Vector;
-#define VECTOR_DIMS 8
+#define VECTOR_BYTES 32
 #define VECTOR_CARD 16
 #else
-typedef float Vector;
-#define VECTOR_DIMS 1
+#define VECTOR_BYTES sizeof(Real)
 #define VECTOR_CARD 16
 #endif
+#define VECTOR_DIMS ((int)(VECTOR_BYTES / sizeof(Real)))
 
+typedef Real Vector __attribute__((__vector_size__(VECTOR_BYTES)));
 typedef Vector (*VectorUnary)(Vector);
 typedef Vector (*VectorBinary)(Vector, Vector);
 
-Vector VectorLoad(const float *p);
-void   VectorStore(float *p, Vector x);
-void   VectorFetch(const float *p);
-Vector VectorBcast(float x);
+Vector VectorLoad(const Real *p);
+void   VectorStore(Real *p, Vector x);
+void   VectorFetch(const Real *p);
+Vector VectorBcast(Real x);
 Vector VectorAdd(Vector a, Vector b);
 Vector VectorSub(Vector a, Vector b);
 Vector VectorMul(Vector a, Vector b);
@@ -44,7 +43,7 @@ Vector VectorSqrt(Vector x);
 Vector VectorLog2i(Vector x);
 Vector VectorMantissa(Vector x);
 Vector VectorGt0(Vector v);
-float  VectorHsum(Vector v);
+Real   VectorHsum(Vector v);
 
 // Unary activation functions and their derivatives
 Vector reluv(Vector a);

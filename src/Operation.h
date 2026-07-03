@@ -42,9 +42,9 @@ Tensor OperationConvolution(Tensor in, Tensor filter, int stride, int padding);
 Tensor OperationPool(Binary fn, Real initial, Tensor in, int size, int stride, int padding);
 Tensor OperationGather(Tensor A, Tensor B, int axis);
 Tensor OperationScatter(Binary fn, Tensor A, Tensor B, Real fill, int axis, int n);
-Tensor OperationNormalize(Tensor in, float eps);
-Tensor OperationSoftmax(Tensor logits, float temperature);
-Tensor OperationCrossEntropy(Tensor labels, Tensor logits, float temperature);
+Tensor OperationNormalize(Tensor in, Real eps);
+Tensor OperationSoftmax(Tensor logits, Real temperature);
+Tensor OperationCrossEntropy(Tensor labels, Tensor logits, Real temperature);
 Tensor OperationMSE(Tensor y, Tensor y_hat);
 
 /*

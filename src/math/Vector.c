@@ -1,138 +1,185 @@
 #include <stdint.h>
+#include <string.h>
+#include <immintrin.h>
 #include "Vector.h"
 
-#define PI 3.141592653589793f
 
-#if defined(__AVX512F__)
-
-Vector VectorLoad(const float *p)                 { return _mm512_loadu_ps(p); }
-void   VectorStore(float *p, Vector x)            { _mm512_storeu_ps(p, x); }
-void   VectorFetch(const float *p)             { _mm_prefetch((const char *)p, _MM_HINT_ET0); }
-Vector VectorBcast(float x)                       { return _mm512_set1_ps(x); }
-Vector VectorAdd(Vector a, Vector b)              { return _mm512_add_ps(a, b); }
-Vector VectorSub(Vector a, Vector b)              { return _mm512_sub_ps(a, b); }
-Vector VectorMul(Vector a, Vector b)              { return _mm512_mul_ps(a, b); }
-Vector VectorDiv(Vector a, Vector b)              { return _mm512_div_ps(a, b); }
-Vector VectorFma(Vector a, Vector b, Vector c)    { return _mm512_fmadd_ps(a, b, c); }
-Vector VectorZero(void)                           { return _mm512_setzero_ps(); }
-Vector VectorMax(Vector a, Vector b)              { return _mm512_max_ps(a, b); }
-Vector VectorMin(Vector a, Vector b)              { return _mm512_min_ps(a, b); }
-Vector VectorFnmadd(Vector a, Vector b, Vector c) { return _mm512_fnmadd_ps(a, b, c); }
-Vector VectorRound(Vector x)    { return _mm512_roundscale_ps(x, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC); }
-Vector VectorPow2i(Vector n)    { return _mm512_castsi512_ps(_mm512_slli_epi32(_mm512_add_epi32(_mm512_cvttps_epi32(n), _mm512_set1_epi32(127)), 23)); }
-Vector VectorSqrt(Vector x)     { return _mm512_sqrt_ps(x); }
-Vector VectorLog2i(Vector x)    { return _mm512_cvtepi32_ps(_mm512_sub_epi32(_mm512_and_epi32(_mm512_srli_epi32(_mm512_castps_si512(x), 23), _mm512_set1_epi32(0xFF)), _mm512_set1_epi32(127))); }
-Vector VectorMantissa(Vector x) { return _mm512_castsi512_ps(_mm512_or_epi32(_mm512_and_epi32(_mm512_castps_si512(x), _mm512_set1_epi32(0x007FFFFF)), _mm512_set1_epi32(0x3F800000))); }
-Vector VectorGt0(Vector v)      { return _mm512_maskz_mov_ps(_mm512_cmp_ps_mask(v, _mm512_setzero_ps(), _CMP_GT_OQ), _mm512_set1_ps(1.0f)); }
-float  VectorHsum(Vector v)     { return _mm512_reduce_add_ps(v); }
-
-#elif defined(__AVX2__)
-
-Vector VectorLoad(const float *p)                 { return _mm256_loadu_ps(p); }
-void   VectorStore(float *p, Vector x)            { _mm256_storeu_ps(p, x); }
-void   VectorFetch(const float *p)             { _mm_prefetch((const char *)p, _MM_HINT_ET0); }
-Vector VectorBcast(float x)                       { return _mm256_set1_ps(x); }
-Vector VectorAdd(Vector a, Vector b)              { return _mm256_add_ps(a, b); }
-Vector VectorSub(Vector a, Vector b)              { return _mm256_sub_ps(a, b); }
-Vector VectorMul(Vector a, Vector b)              { return _mm256_mul_ps(a, b); }
-Vector VectorDiv(Vector a, Vector b)              { return _mm256_div_ps(a, b); }
-Vector VectorFma(Vector a, Vector b, Vector c)    { return _mm256_fmadd_ps(a, b, c); }
-Vector VectorZero(void)                           { return _mm256_setzero_ps(); }
-Vector VectorMax(Vector a, Vector b)              { return _mm256_max_ps(a, b); }
-Vector VectorMin(Vector a, Vector b)              { return _mm256_min_ps(a, b); }
-Vector VectorFnmadd(Vector a, Vector b, Vector c) { return _mm256_fnmadd_ps(a, b, c); }
-Vector VectorRound(Vector x)    { return _mm256_round_ps(x, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC); }
-Vector VectorPow2i(Vector n)    { return _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_add_epi32(_mm256_cvttps_epi32(n), _mm256_set1_epi32(127)), 23)); }
-Vector VectorSqrt(Vector x)     { return _mm256_sqrt_ps(x); }
-Vector VectorLog2i(Vector x)    { return _mm256_cvtepi32_ps(_mm256_sub_epi32(_mm256_and_si256(_mm256_srli_epi32(_mm256_castps_si256(x), 23), _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(127))); }
-Vector VectorMantissa(Vector x) { return _mm256_castsi256_ps(_mm256_or_si256(_mm256_and_si256(_mm256_castps_si256(x), _mm256_set1_epi32(0x007FFFFF)), _mm256_set1_epi32(0x3F800000))); }
-Vector VectorGt0(Vector v)      { return _mm256_and_ps(_mm256_cmp_ps(v, _mm256_setzero_ps(), _CMP_GT_OQ), _mm256_set1_ps(1.0f)); }
-float  VectorHsum(Vector v)
-{
-    __m128 s = _mm_add_ps(_mm256_castps256_ps128(v), _mm256_extractf128_ps(v, 1));
-    s = _mm_hadd_ps(s, s);
-    s = _mm_hadd_ps(s, s);
-    return _mm_cvtss_f32(s);
-}
-
-#else
-
-Vector VectorLoad(const float *p)                 { return *p; }
-void   VectorStore(float *p, Vector x)            { *p = x; }
-void   VectorFetch(const float *p)             { (void)p; }
-Vector VectorBcast(float x)                       { return x; }
+Vector VectorLoad(const Real *p)                  { Vector x; memcpy(&x, p, sizeof(x)); return x; }
+void   VectorStore(Real *p, Vector x)             { memcpy(p, &x, sizeof(x)); }
+void   VectorFetch(const Real *p)                 { _mm_prefetch((const char *)p, _MM_HINT_ET0); }
+Vector VectorZero(void)                           { return (Vector){0}; }
+Vector VectorBcast(Real x)                        { return VectorZero() + x; }
 Vector VectorAdd(Vector a, Vector b)              { return a + b; }
 Vector VectorSub(Vector a, Vector b)              { return a - b; }
 Vector VectorMul(Vector a, Vector b)              { return a * b; }
 Vector VectorDiv(Vector a, Vector b)              { return a / b; }
 Vector VectorFma(Vector a, Vector b, Vector c)    { return a * b + c; }
-Vector VectorZero(void)                           { return 0.0f; }
-Vector VectorMax(Vector a, Vector b)              { return a > b ? a : b; }
-Vector VectorMin(Vector a, Vector b)              { return a < b ? a : b; }
 Vector VectorFnmadd(Vector a, Vector b, Vector c) { return c - a * b; }
-Vector VectorRound(Vector x)                { return __builtin_rintf(x); }
-Vector VectorPow2i(Vector n)                { return __builtin_ldexpf(1.0f, (int)n); }
-Vector VectorSqrt(Vector x)                 { return __builtin_sqrtf(x); }
-Vector VectorLog2i(Vector x)                { union { float f; int32_t i; } u = { .f = x }; return (Vector)(((u.i >> 23) & 0xFF) - 127); }
-Vector VectorMantissa(Vector x)             { union { float f; int32_t i; } u = { .f = x }; u.i = (u.i & 0x007FFFFF) | 0x3F800000; return u.f; }
-Vector VectorGt0(Vector v)                  { return v > 0.0f ? 1.0f : 0.0f; }
-float  VectorHsum(Vector v)                 { return v; }
 
-#endif
+Vector VectorMax(Vector a, Vector b)
+{
+    for (int i = 0; i < VECTOR_DIMS; i++)
+        a[i] = a[i] > b[i] ? a[i] : b[i];
+    return a;
+}
 
-// exp(a) with ~1e-6 relative error
+Vector VectorMin(Vector a, Vector b)
+{
+    for (int i = 0; i < VECTOR_DIMS; i++)
+        a[i] = a[i] < b[i] ? a[i] : b[i];
+    return a;
+}
+
+Vector VectorGt0(Vector v)
+{
+    for (int i = 0; i < VECTOR_DIMS; i++)
+        v[i] = v[i] > 0.0 ? 1.0 : 0.0;
+    return v;
+}
+
+Vector VectorSqrt(Vector x)
+{
+    for (int i = 0; i < VECTOR_DIMS; i++)
+        x[i] = sizeof(Real) == 8 ? __builtin_sqrt(x[i]) : __builtin_sqrtf(x[i]);
+    return x;
+}
+
+Vector VectorRound(Vector x)
+{
+    for (int i = 0; i < VECTOR_DIMS; i++)
+        x[i] = sizeof(Real) == 8 ? __builtin_rint(x[i]) : __builtin_rintf(x[i]);
+    return x;
+}
+
+// 2^n for integer-valued n
+Vector VectorPow2i(Vector n)
+{
+    for (int i = 0; i < VECTOR_DIMS; i++) {
+        if (sizeof(Real) == 8) {
+            union { double f; int64_t i; } u = { .i = (1023 + (int64_t)n[i]) << 52 };
+            n[i] = u.f;
+        } else {
+            union { float f; int32_t i; } u = { .i = (127 + (int32_t)n[i]) << 23 };
+            n[i] = u.f;
+        }
+    }
+    return n;
+}
+
+// The unbiased exponent of x
+Vector VectorLog2i(Vector x)
+{
+    for (int i = 0; i < VECTOR_DIMS; i++) {
+        if (sizeof(Real) == 8) {
+            union { double f; int64_t i; } u = { .f = x[i] };
+            x[i] = (Real)(((u.i >> 52) & 0x7FF) - 1023);
+        } else {
+            union { float f; int32_t i; } u = { .f = x[i] };
+            x[i] = (Real)(((u.i >> 23) & 0xFF) - 127);
+        }
+    }
+    return x;
+}
+
+// The mantissa of x, as a Vector of Reals in [1, 2)
+Vector VectorMantissa(Vector x)
+{
+    for (int i = 0; i < VECTOR_DIMS; i++) {
+        if (sizeof(Real) == 8) {
+            union { double f; int64_t i; } u = { .f = x[i] };
+            u.i = (u.i & 0x000FFFFFFFFFFFFFLL) | 0x3FF0000000000000LL;
+            x[i] = u.f;
+        } else {
+            union { float f; int32_t i; } u = { .f = x[i] };
+            u.i = (u.i & 0x007FFFFF) | 0x3F800000;
+            x[i] = u.f;
+        }
+    }
+    return x;
+}
+
+Real VectorHsum(Vector v)
+{
+    Real s = 0.0;
+    for (int i = 0; i < VECTOR_DIMS; i++) s += v[i];
+    return s;
+}
+
+// exp(a) with ~1e-6 (float) or ~1e-13 (double) relative error
 Vector expv(Vector a)
 {
-    a = VectorMin(VectorMax(a, VectorBcast(-87.3f)), VectorBcast(88.0f));
-    Vector n = VectorRound(VectorMul(a, VectorBcast(1.4426950408889634f)));
-    Vector r = VectorFnmadd(n, VectorBcast(0.6931471805599453f), a);
-    Vector p = VectorBcast(1.0f / 120.0f);
-    p = VectorFma(p, r, VectorBcast(1.0f / 24.0f));
-    p = VectorFma(p, r, VectorBcast(1.0f / 6.0f));
-    p = VectorFma(p, r, VectorBcast(0.5f));
-    p = VectorFma(p, r, VectorBcast(1.0f));
-    p = VectorFma(p, r, VectorBcast(1.0f));
+    Real expMax = sizeof(Real) == 8 ?  709.0 :  88.0;
+    Real expMin = sizeof(Real) == 8 ? -708.0 : -87.3;
+    a = VectorMin(VectorMax(a, VectorBcast(expMin)), VectorBcast(expMax));
+    Vector n = VectorRound(VectorMul(a, VectorBcast(1.4426950408889634)));
+    Vector r = VectorFnmadd(n, VectorBcast(0.6931471805599453), a);
+    Vector p = VectorBcast(1.0 / 120.0);
+    if (sizeof(Real) == 8) {
+        p = VectorBcast(1.0 / 6227020800.0);                 // 1/13!
+        p = VectorFma(p, r, VectorBcast(1.0 / 479001600.0)); // 1/12!
+        p = VectorFma(p, r, VectorBcast(1.0 / 39916800.0));  // 1/11!
+        p = VectorFma(p, r, VectorBcast(1.0 / 3628800.0));   // 1/10!
+        p = VectorFma(p, r, VectorBcast(1.0 / 362880.0));    // 1/9!
+        p = VectorFma(p, r, VectorBcast(1.0 / 40320.0));     // 1/8!
+        p = VectorFma(p, r, VectorBcast(1.0 / 5040.0));      // 1/7!
+        p = VectorFma(p, r, VectorBcast(1.0 / 720.0));       // 1/6!
+        p = VectorFma(p, r, VectorBcast(1.0 / 120.0));
+    }
+    p = VectorFma(p, r, VectorBcast(1.0 / 24.0));
+    p = VectorFma(p, r, VectorBcast(1.0 / 6.0));
+    p = VectorFma(p, r, VectorBcast(0.5));
+    p = VectorFma(p, r, VectorBcast(1.0));
+    p = VectorFma(p, r, VectorBcast(1.0));
     return VectorMul(p, VectorPow2i(n));
 }
 
-// log(a) with ~1e-5 relative error
+// log(a) with ~1e-5 (float) or ~1e-11 (double) relative error
 Vector logv(Vector a)
 {
     Vector e = VectorLog2i(a);
     Vector m = VectorMantissa(a);
-    Vector t = VectorDiv(VectorSub(m, VectorBcast(1.0f)), VectorAdd(m, VectorBcast(1.0f)));
+    Vector t = VectorDiv(VectorSub(m, VectorBcast(1.0)), VectorAdd(m, VectorBcast(1.0)));
     Vector t2 = VectorMul(t, t);
-    Vector p = VectorBcast(1.0f / 7.0f);
-    p = VectorFma(p, t2, VectorBcast(1.0f / 5.0f));
-    p = VectorFma(p, t2, VectorBcast(1.0f / 3.0f));
-    p = VectorFma(p, t2, VectorBcast(1.0f));
-    Vector l = VectorMul(VectorMul(VectorBcast(2.0f), t), p);
-    return VectorFma(e, VectorBcast(0.6931471805599453f), l);  // l + e*ln2
+    Vector p = VectorBcast(1.0 / 7.0);
+    if (sizeof(Real) == 8) {
+        p = VectorBcast(1.0 / 19.0);
+        p = VectorFma(p, t2, VectorBcast(1.0 / 17.0));
+        p = VectorFma(p, t2, VectorBcast(1.0 / 15.0));
+        p = VectorFma(p, t2, VectorBcast(1.0 / 13.0));
+        p = VectorFma(p, t2, VectorBcast(1.0 / 11.0));
+        p = VectorFma(p, t2, VectorBcast(1.0 / 9.0));
+        p = VectorFma(p, t2, VectorBcast(1.0 / 7.0));
+    }
+    p = VectorFma(p, t2, VectorBcast(1.0 / 5.0));
+    p = VectorFma(p, t2, VectorBcast(1.0 / 3.0));
+    p = VectorFma(p, t2, VectorBcast(1.0));
+    Vector l = VectorMul(VectorMul(VectorBcast(2.0), t), p);
+    return VectorFma(e, VectorBcast(0.6931471805599453), l);  // l + e*ln2
 }
 
 // Unary functions and derivatives for vectors
 Vector reluv(Vector a)      { return VectorMax(a, VectorZero()); }
 Vector dreluv(Vector a)     { return VectorGt0(a); }
 Vector identityv(Vector a)  { return a; }
-Vector didentityv(Vector a) { (void)a; return VectorBcast(1.0f); }
+Vector didentityv(Vector a) { (void)a; return VectorBcast(1.0); }
 Vector negatev(Vector a)    { return VectorSub(VectorZero(), a); }
-Vector dnegatev(Vector a)   { (void)a; return VectorBcast(-1.0f); }
-Vector sigmoidv(Vector a)   { return VectorDiv(VectorBcast(1.0f), VectorAdd(VectorBcast(1.0f), expv(VectorSub(VectorZero(), a)))); }
-Vector dsigmoidv(Vector a)  { Vector s = sigmoidv(a); return VectorMul(s, VectorSub(VectorBcast(1.0f), s)); }
-Vector tanhv(Vector a)      { return VectorSub(VectorDiv(VectorBcast(2.0f), VectorAdd(VectorBcast(1.0f), expv(VectorMul(VectorBcast(-2.0f), a)))), VectorBcast(1.0f)); }
-Vector dtanhv(Vector a)     { Vector t = tanhv(a); return VectorSub(VectorBcast(1.0f), VectorMul(t, t)); }
-Vector dlogv(Vector a)      { return VectorDiv(VectorBcast(1.0f), a); }
+Vector dnegatev(Vector a)   { (void)a; return VectorBcast(-1.0); }
+Vector sigmoidv(Vector a)   { return VectorDiv(VectorBcast(1.0), VectorAdd(VectorBcast(1.0), expv(VectorSub(VectorZero(), a)))); }
+Vector dsigmoidv(Vector a)  { Vector s = sigmoidv(a); return VectorMul(s, VectorSub(VectorBcast(1.0), s)); }
+Vector tanhv(Vector a)      { return VectorSub(VectorDiv(VectorBcast(2.0), VectorAdd(VectorBcast(1.0), expv(VectorMul(VectorBcast(-2.0), a)))), VectorBcast(1.0)); }
+Vector dtanhv(Vector a)     { Vector t = tanhv(a); return VectorSub(VectorBcast(1.0), VectorMul(t, t)); }
+Vector dlogv(Vector a)      { return VectorDiv(VectorBcast(1.0), a); }
 Vector sqrtv(Vector a)      { return VectorSqrt(a); }
-Vector dsqrtv(Vector a)     { return VectorDiv(VectorBcast(0.5f), VectorSqrt(a)); }
-static Vector geluArg(Vector a) { return VectorMul(VectorBcast(__builtin_sqrtf(2.0f / PI)), VectorAdd(a, VectorMul(VectorBcast(0.044715f), VectorMul(a, VectorMul(a, a))))); }
-Vector geluv(Vector a)      { return VectorMul(VectorBcast(0.5f), VectorMul(a, VectorAdd(VectorBcast(1.0f), tanhv(geluArg(a))))); }
+Vector dsqrtv(Vector a)     { return VectorDiv(VectorBcast(0.5), VectorSqrt(a)); }
+static Vector geluArg(Vector a) { return VectorMul(VectorBcast(0.7978845608028654), VectorAdd(a, VectorMul(VectorBcast(0.044715), VectorMul(a, VectorMul(a, a))))); } // 0.797... = sqrt(2/pi)
+Vector geluv(Vector a)      { return VectorMul(VectorBcast(0.5), VectorMul(a, VectorAdd(VectorBcast(1.0), tanhv(geluArg(a))))); }
 Vector dgeluv(Vector a)
 {
-    Vector c = VectorBcast(__builtin_sqrtf(2.0f / PI));
+    Vector c = VectorBcast(0.7978845608028654); // sqrt(2/pi)
     Vector u = tanhv(geluArg(a));
-    Vector t1 = VectorMul(VectorBcast(0.5f), VectorAdd(VectorBcast(1.0f), u));
-    Vector t2 = VectorMul(VectorMul(VectorMul(VectorBcast(0.5f), a), VectorSub(VectorBcast(1.0f), VectorMul(u, u))),
-                VectorMul(c, VectorAdd(VectorBcast(1.0f), VectorMul(VectorBcast(0.134145f), VectorMul(a, a)))));
+    Vector t1 = VectorMul(VectorBcast(0.5), VectorAdd(VectorBcast(1.0), u));
+    Vector t2 = VectorMul(VectorMul(VectorMul(VectorBcast(0.5), a), VectorSub(VectorBcast(1.0), VectorMul(u, u))),
+                VectorMul(c, VectorAdd(VectorBcast(1.0), VectorMul(VectorBcast(0.134145), VectorMul(a, a)))));
     return VectorAdd(t1, t2);
 }
 
@@ -144,12 +191,12 @@ Vector dividev(Vector a, Vector b)    { return VectorDiv(a, b); }
 Vector maxv(Vector a, Vector b)       { return VectorMax(a, b); }
 Vector firstv(Vector a, Vector b)     { (void)b; return a; }
 Vector secondv(Vector a, Vector b)    { (void)a; return b; }
-Vector onesv(Vector a, Vector b)      { (void)a; (void)b; return VectorBcast(1.0f); }
-Vector minusOnesv(Vector a, Vector b) { (void)a; (void)b; return VectorBcast(-1.0f); }
-Vector divideDav(Vector a, Vector b)  { (void)a; return VectorDiv(VectorBcast(1.0f), b); }
+Vector onesv(Vector a, Vector b)      { (void)a; (void)b; return VectorBcast(1.0); }
+Vector minusOnesv(Vector a, Vector b) { (void)a; (void)b; return VectorBcast(-1.0); }
+Vector divideDav(Vector a, Vector b)  { (void)a; return VectorDiv(VectorBcast(1.0), b); }
 Vector divideDbv(Vector a, Vector b)  { return VectorSub(VectorZero(), VectorDiv(a, VectorMul(b, b))); }
-Vector maxDav(Vector a, Vector b)     { return VectorSub(VectorBcast(1.0f), VectorGt0(VectorSub(b, a))); }
+Vector maxDav(Vector a, Vector b)     { return VectorSub(VectorBcast(1.0), VectorGt0(VectorSub(b, a))); }
 Vector maxDbv(Vector a, Vector b)     { return VectorGt0(VectorSub(b, a)); }
 Vector minv(Vector a, Vector b)       { return VectorMin(a, b); }
-Vector minDav(Vector a, Vector b)     { return VectorSub(VectorBcast(1.0f), VectorGt0(VectorSub(a, b))); }
+Vector minDav(Vector a, Vector b)     { return VectorSub(VectorBcast(1.0), VectorGt0(VectorSub(a, b))); }
 Vector minDbv(Vector a, Vector b)     { return VectorGt0(VectorSub(a, b)); }

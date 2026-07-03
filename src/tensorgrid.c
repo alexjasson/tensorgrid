@@ -3,10 +3,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <float.h>
 #include <stdint.h>
 #include "tensorgrid.h"
 #include "Operation.h"
+#include "math/Scalar.h"
 #include "adt/DynamicArray.h"
 #include "adt/HashMap.h"
 #include "adt/Stack.h"
@@ -222,8 +222,8 @@ Tensor TensorGather(Tensor A, Tensor indices, int axis)                   { retu
 Tensor TensorScatter(Binary fn, Tensor A, Tensor i, Real e, int a, int n) { return OperationScatter(fn, A, i, e, a, n);   }
 Tensor TensorConvolution(Tensor in, Tensor filter, int s, int p)          { return OperationConvolution(in, filter, s, p);}
 Tensor TensorPool(Binary fn, Real e, Tensor in, int size, int s, int p)   { return OperationPool(fn, e, in, size, s, p);  }
-Tensor TensorSoftmax(Tensor in, float temperature)                        { return OperationSoftmax(in, temperature);     }
-Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, float temp)        { return OperationCrossEntropy(y, logits, temp);}
+Tensor TensorSoftmax(Tensor in, Real temperature)                         { return OperationSoftmax(in, temperature);     }
+Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, Real temp)         { return OperationCrossEntropy(y, logits, temp);}
 Tensor TensorMSE(Tensor y, Tensor y_hat)                                  { return OperationMSE(y, y_hat);                }
 void TensorBackward(Tensor loss)                                          { OperationBackward(loss);                      }
 
@@ -232,7 +232,7 @@ Tensor TensorAdd(Tensor A, Tensor B)                                      { retu
 Tensor TensorSubtract(Tensor A, Tensor B)                                 { return TensorZip(SUBTRACT, A, B);             }
 Tensor TensorHadamard(Tensor A, Tensor B)                                 { return TensorZip(MULTIPLY, A, B);             }
 Tensor TensorEmbedding(Tensor table, Tensor indices)                      { return TensorGather(table, indices, 0);       }
-Tensor TensorMaxPool(Tensor A, int k, int s, int p)                       { return TensorPool(MAX, -FLT_MAX, A, k, s, p); }
+Tensor TensorMaxPool(Tensor A, int k, int s, int p)                       { return TensorPool(MAX, -INFINITE, A, k, s, p); }
 
 Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Unary fn)
 {
@@ -251,7 +251,7 @@ Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride,
     return out;
 }
 
-void TensorScale(Tensor A, float scalar)
+void TensorScale(Tensor A, Real scalar)
 {
     int size = TensorSize(A);
     for (int i = 0; i < size; i++)
@@ -281,7 +281,7 @@ Tensor TensorBroadcast(Tensor A, int axis, int n)
     return out;
 }
 
-Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, float eps)
+Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, Real eps)
 {
     Tensor normalized = OperationNormalize(in, eps);
     Tensor scaled     = TensorZip(MULTIPLY, normalized, weight);
@@ -299,11 +299,11 @@ Tensor TensorCausalMask(int n)
     return mask;
 }
 
-Tensor TensorLogSoftmax(Tensor in, float temperature)
+Tensor TensorLogSoftmax(Tensor in, Real temperature)
 {
     // Numerical stability trick
     Tensor inView       = TensorDetach(in);
-    Tensor temp1        = TensorReduce(MAX, -FLT_MAX, inView, in.dimensions - 1);
+    Tensor temp1        = TensorReduce(MAX, -INFINITE, inView, in.dimensions - 1);
     Tensor stableLogits = TensorZip(SUBTRACT, in, temp1);
     TensorFree(temp1);
 
@@ -347,7 +347,7 @@ Tensor TensorNLL(Tensor y, Tensor logP)
     return result;
 }
 
-Tensor TensorSample(Tensor logits, float temperature)
+Tensor TensorSample(Tensor logits, Real temperature)
 {
     int numClasses = logits.shape[logits.dimensions - 1];
     int n          = TensorSize(logits) / numClasses;
@@ -362,17 +362,17 @@ Tensor TensorSample(Tensor logits, float temperature)
             int best = 0;
             for (int j = 1; j < numClasses; j++)
                 if (logits.entries[i * numClasses + j] > logits.entries[i * numClasses + best]) best = j;
-            out.entries[i] = (float)best;
+            out.entries[i] = (Real)best;
         }
     } else {
         Tensor P = TensorSoftmax(logits, temperature);
         for (int i = 0; i < n; i++) {
-            float r   = randomFloat(0.0f, 1.0f);
-            float cdf = 0.0f;
-            out.entries[i] = (float)(numClasses - 1);
+            Real r   = randomNumber(0.0, 1.0);
+            Real cdf = 0.0;
+            out.entries[i] = (Real)(numClasses - 1);
             for (int j = 0; j < numClasses; j++) {
                 cdf += P.entries[i * numClasses + j];
-                if (r <= cdf) { out.entries[i] = (float)j; break; }
+                if (r <= cdf) { out.entries[i] = (Real)j; break; }
             }
         }
         TensorFree(P);
@@ -438,10 +438,10 @@ void TensorXavier(Tensor A)
     int receptive = 1;
     for (int i = 2; i < A.dimensions; i++) receptive *= A.shape[i];
     int fanSum = (A.shape[0] + (A.dimensions > 1 ? A.shape[1] : 0)) * receptive;
-    Real bound = __builtin_sqrtf(6.0f / fanSum);
+    Real bound = sqrte((Real)6.0 / fanSum);
     int size = TensorSize(A);
     for (int i = 0; i < size; i++)
-        A.entries[i] = (Real)randomFloat(-bound, bound);
+        A.entries[i] = randomNumber(-bound, bound);
 }
 
 Tensor TensorOneHot(Tensor labels, int numClasses)
@@ -736,7 +736,7 @@ void TensorSet(Tensor A, int *indices, Real value)
     A.entries[idx] = value;
 }
 
-void TensorSGD(Tensor A, float lr, float momentum)
+void TensorSGD(Tensor A, Real lr, Real momentum)
 {
     if (!A.optimizer) return; // skip tensors without autograd
     int size = TensorSize(A);
@@ -761,13 +761,13 @@ void TensorSGD(Tensor A, float lr, float momentum)
     }
 }
 
-void TensorArraySGD(TensorArray ta, float lr, float momentum)
+void TensorArraySGD(TensorArray ta, Real lr, Real momentum)
 {
     for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
         TensorSGD(*(Tensor *)DynamicArrayGet(ta->tensors, i), lr, momentum);
 }
 
-void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, float weightDecay)
+void TensorAdam(Tensor A, Real lr, Real beta1, Real beta2, Real epsilon, Real weightDecay)
 {
     if (!A.optimizer) return; // skip tensors without autograd
     int size = TensorSize(A);
@@ -783,19 +783,19 @@ void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, flo
     A.optimizer->t++;
     Real *m = A.optimizer->m;
     Real *v = A.optimizer->v;
-    float biasM = 1.0f - powi(beta1, A.optimizer->t);
-    float biasV = 1.0f - powi(beta2, A.optimizer->t);
+    Real biasM = 1.0 - powi(beta1, A.optimizer->t);
+    Real biasV = 1.0 - powi(beta2, A.optimizer->t);
     for (int i = 0; i < size; i++) {
         Real g = A.gradients[i];
         m[i] = beta1 * m[i] + (1.0f - beta1) * g;
         v[i] = beta2 * v[i] + (1.0f - beta2) * g * g;
-        float mHat = m[i] / biasM;
-        float vHat = v[i] / biasV;
-        A.entries[i] -= lr * (mHat / (__builtin_sqrtf(vHat) + epsilon) + weightDecay * A.entries[i]);
+        Real mHat = m[i] / biasM;
+        Real vHat = v[i] / biasV;
+        A.entries[i] -= lr * (mHat / (sqrte(vHat) + epsilon) + weightDecay * A.entries[i]);
     }
 }
 
-void TensorArrayAdam(TensorArray ta, float lr, float beta1, float beta2, float epsilon, float weightDecay)
+void TensorArrayAdam(TensorArray ta, Real lr, Real beta1, Real beta2, Real epsilon, Real weightDecay)
 {
     for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
         TensorAdam(*(Tensor *)DynamicArrayGet(ta->tensors, i), lr, beta1, beta2, epsilon, weightDecay);

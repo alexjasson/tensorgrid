@@ -1,6 +1,5 @@
 // https://github.com/alexjasson/tensorgrid
 
-#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "../Operation.h"
@@ -10,7 +9,7 @@
 typedef struct {
     int rows, classes;
     int logitsContiguous;
-    float invTemperature;
+    Real invTemperature;
 } SoftmaxContext;
 
 static void OperationSoftmaxForward(Operation *op);
@@ -18,7 +17,7 @@ static void OperationSoftmaxBackward(Operation *op);
 static void softmaxForward(void *arg, int start, int end);
 static void softmaxBackward(void *arg, int start, int end);
 
-Tensor OperationSoftmax(Tensor logits, float temperature)
+Tensor OperationSoftmax(Tensor logits, Real temperature)
 {
     if (temperature <= 0.0f) {
         fprintf(stderr, "OperationSoftmax requires positive temperature!\n");
@@ -66,7 +65,7 @@ static void softmaxForward(void *arg, int start, int end)
         int xStride = op->A.strides[op->A.dimensions - 1];
         Real *p = out + (size_t)row * classes;
 
-        Real max = -FLT_MAX;
+        Real max = -INFINITE;
         for (int c = 0; c < classes; c++) {
             Real z = logits[xBase + c * xStride] * ctx->invTemperature;
             if (z > max) max = z;

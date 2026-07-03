@@ -4,9 +4,9 @@
 #include <time.h>
 #include "utility.h"
 
-float powi(float base, int exp)
+Real powi(Real base, int exp)
 {
-    float result = 1.0f;
+    Real result = 1.0;
     while (exp > 0) {
         if (exp & 1) result *= base;
         base *= base;
@@ -20,7 +20,7 @@ uint64_t packi(int a, int b)
     return ((uint64_t)(uint32_t)a << 32) | (uint32_t)b;
 }
 
-float randomFloat(float lower, float upper)
+Real randomNumber(Real lower, Real upper)
 {
     static uint32_t state = 0;
     static int seeded = 0;
@@ -34,7 +34,7 @@ float randomFloat(float lower, float upper)
     state ^= state >> 17;
     state ^= state << 5;
 
-    float r = (state >> 8) / 16777216.0f;
+    Real r = (state >> 8) / (Real)16777216.0;
     return lower + r * (upper - lower);
 }
 
