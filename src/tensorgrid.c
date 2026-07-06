@@ -529,45 +529,23 @@ Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataT
 
     Tensor t = TensorNew(dimensions, shape, FALSE);
     int size = TensorSize(t);
-    for (int i = 0; i < size; i++) {
-        switch (d) {
-            case DataUint8: {
-                uint8_t x;
-                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Real)x;
-                break;
-            }
-            case DataInt8: {
-                int8_t x;
-                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Real)x;
-                break;
-            }
-            case DataInt16: {
-                int16_t x;
-                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Real)x;
-                break;
-            }
-            case DataInt32: {
-                int32_t x;
-                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Real)x;
-                break;
-            }
-            case DataFloat32: {
-                float x;
-                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Real)x;
-                break;
-            }
-            case DataFloat64: {
-                double x;
-                if (fread(&x, sizeof(x), 1, f) != 1) goto error;
-                t.entries[i] = (Real)x;
-                break;
+    int elemSize = d == DataUint8 || d == DataInt8 ? 1 : d == DataInt16 ? 2 : d == DataFloat64 ? 8 : 4;
+    unsigned char buf[32768];
+    for (int i = 0; i < size; ) {
+        int chunk = (int)(sizeof(buf) / elemSize);
+        if (chunk > size - i) chunk = size - i;
+        if (fread(buf, elemSize, chunk, f) != (size_t)chunk) goto error;
+        for (int k = 0; k < chunk; k++) {
+            switch (d) {
+                case DataUint8:   { uint8_t  x; memcpy(&x, buf + k,     1); t.entries[i + k] = (Real)x; break; }
+                case DataInt8:    { int8_t   x; memcpy(&x, buf + k,     1); t.entries[i + k] = (Real)x; break; }
+                case DataInt16:   { int16_t  x; memcpy(&x, buf + 2 * k, 2); t.entries[i + k] = (Real)x; break; }
+                case DataInt32:   { int32_t  x; memcpy(&x, buf + 4 * k, 4); t.entries[i + k] = (Real)x; break; }
+                case DataFloat32: { float    x; memcpy(&x, buf + 4 * k, 4); t.entries[i + k] = (Real)x; break; }
+                case DataFloat64: { double   x; memcpy(&x, buf + 8 * k, 8); t.entries[i + k] = (Real)x; break; }
             }
         }
+        i += chunk;
     }
 
     fclose(f);
