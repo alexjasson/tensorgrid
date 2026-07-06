@@ -1,6 +1,5 @@
 // https://github.com/alexjasson/tensorgrid
 
-#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "../Operation.h"
@@ -10,7 +9,7 @@
 typedef struct {
     int rows, classes;
     int logitsContiguous;
-    float invTemperature;
+    Real invTemperature;
 } SoftmaxContext;
 
 static void OperationSoftmaxForward(Operation *op);
@@ -18,7 +17,7 @@ static void OperationSoftmaxBackward(Operation *op);
 static void softmaxForward(void *arg, int start, int end);
 static void softmaxBackward(void *arg, int start, int end);
 
-Tensor OperationSoftmax(Tensor logits, float temperature)
+Tensor OperationSoftmax(Tensor logits, Real temperature)
 {
     if (temperature <= 0.0f) {
         fprintf(stderr, "OperationSoftmax requires positive temperature!\n");
@@ -56,29 +55,29 @@ static void softmaxForward(void *arg, int start, int end)
     Operation *op = arg;
     SoftmaxContext *ctx = op->context;
     int classes = ctx->classes;
-    Entry *logits = op->A.entries;
-    Entry *out = op->out.entries;
+    Real *logits = op->A.entries;
+    Real *out = op->out.entries;
 
     for (int row = start; row < end; row++) {
         int xBase = ctx->logitsContiguous
                   ? row * classes
                   : unravel(row, op->A.shape, op->A.strides, op->A.dimensions - 1);
         int xStride = op->A.strides[op->A.dimensions - 1];
-        Entry *p = out + (size_t)row * classes;
+        Real *p = out + (size_t)row * classes;
 
-        Entry max = -FLT_MAX;
+        Real max = -INFINITE;
         for (int c = 0; c < classes; c++) {
-            Entry z = logits[xBase + c * xStride] * ctx->invTemperature;
+            Real z = logits[xBase + c * xStride] * ctx->invTemperature;
             if (z > max) max = z;
         }
 
-        Entry sum = 0.0f;
+        Real sum = 0.0f;
         for (int c = 0; c < classes; c++) {
-            Entry e = expe(logits[xBase + c * xStride] * ctx->invTemperature - max);
+            Real e = expe(logits[xBase + c * xStride] * ctx->invTemperature - max);
             p[c] = e;
             sum += e;
         }
-        Entry inv = 1.0f / sum;
+        Real inv = 1.0f / sum;
         for (int c = 0; c < classes; c++) p[c] *= inv;
     }
 }
@@ -88,19 +87,19 @@ static void softmaxBackward(void *arg, int start, int end)
     Operation *op = arg;
     SoftmaxContext *ctx = op->context;
     int classes = ctx->classes;
-    Entry *p = op->out.entries;
-    Entry *dp = op->out.gradients;
-    Entry *dx = op->A.gradients;
+    Real *p = op->out.entries;
+    Real *dp = op->out.gradients;
+    Real *dx = op->A.gradients;
 
     for (int row = start; row < end; row++) {
         int xBase = ctx->logitsContiguous
                   ? row * classes
                   : unravel(row, op->A.shape, op->A.strides, op->A.dimensions - 1);
         int xStride = op->A.strides[op->A.dimensions - 1];
-        Entry *pr = p + (size_t)row * classes;
-        Entry *gr = dp + (size_t)row * classes;
+        Real *pr = p + (size_t)row * classes;
+        Real *gr = dp + (size_t)row * classes;
 
-        Entry dot = 0.0f;
+        Real dot = 0.0f;
         for (int c = 0; c < classes; c++) dot += gr[c] * pr[c];
         for (int c = 0; c < classes; c++)
             dx[xBase + c * xStride] += ctx->invTemperature * pr[c] * (gr[c] - dot);

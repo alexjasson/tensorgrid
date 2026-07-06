@@ -43,12 +43,12 @@ Tensor OperationMSE(Tensor y, Tensor y_hat)
 static void OperationMSEForward(Operation *op)
 {
     MSEContext *ctx = op->context;
-    Entry sum = 0.0f;
+    Real sum = 0.0f;
 
     for (int i = 0; i < ctx->size; i++) {
         int aOff = ctx->aContiguous ? i : unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
         int bOff = ctx->bContiguous ? i : unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
-        Entry d = op->A.entries[aOff] - op->B.entries[bOff];
+        Real d = op->A.entries[aOff] - op->B.entries[bOff];
         sum += d * d;
     }
 
@@ -66,12 +66,12 @@ static void mseBackward(void *arg, int start, int end)
 {
     Operation *op = arg;
     MSEContext *ctx = op->context;
-    Entry scale = 2.0f * op->out.gradients[0] / ctx->size;
+    Real scale = 2.0f * op->out.gradients[0] / ctx->size;
 
     for (int i = start; i < end; i++) {
         int aOff = ctx->aContiguous ? i : unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
         int bOff = ctx->bContiguous ? i : unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
-        Entry d = op->A.entries[aOff] - op->B.entries[bOff];
+        Real d = op->A.entries[aOff] - op->B.entries[bOff];
         if (op->A.gradients) op->A.gradients[aOff] += scale * d;
         if (op->B.gradients) op->B.gradients[bOff] -= scale * d;
     }

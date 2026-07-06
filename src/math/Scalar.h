@@ -1,9 +1,9 @@
 #ifndef SCALAR_H
 #define SCALAR_H
 
-#include "../tensorgrid.h" // Entry
+#include "../tensorgrid.h" // Real
 
-typedef Entry Scalar;
+typedef Real Scalar;
 
 typedef Scalar (*ScalarUnary)(Scalar);
 typedef Scalar (*ScalarBinary)(Scalar, Scalar);

@@ -66,13 +66,13 @@ static void zeroGradients(Operation *op)
 {
     Tensor *inputs[] = { &op->A, &op->B };
     for (int n = 0; n < 2; n++) {
-        Entry *gradients = inputs[n]->gradients;
+        Real *gradients = inputs[n]->gradients;
         if (!gradients) continue;
         size_t footprint = 1;
         for (int i = 0; i < inputs[n]->dimensions; i++)
             if (inputs[n]->strides[i] > 0)
                 footprint += (size_t)(inputs[n]->shape[i] - 1) * inputs[n]->strides[i];
-        memset(gradients, 0, footprint * sizeof(Entry));
+        memset(gradients, 0, footprint * sizeof(Real));
     }
 }
 

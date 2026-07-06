@@ -5,7 +5,6 @@
 #define TRUE 1
 #define FALSE 0
 #define INFINITE 1e+38
-#define PI 3.141592653589793f
 
 typedef void (*f)(void); // A function applied to scalars or vectors
 
@@ -18,7 +17,7 @@ typedef struct { f f, da, db; f fv, dav, dbv; } Binary;
 extern Unary RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
 extern Binary ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
 
-typedef float Entry;
+typedef float Real; // Floating point representation of a Real number, may be float or double
 typedef struct optimizer Optimizer;
 typedef enum { DataUint8, DataInt8, DataInt16, DataInt32, DataFloat32, DataFloat64 } DataType;
 
@@ -27,8 +26,8 @@ typedef struct {
     int dimensions;
     int shape[MAX_DIMENSIONS];
     int strides[MAX_DIMENSIONS];
-    Entry *entries;
-    Entry *gradients;     // Gradients for each entry, NULL if no autograd
+    Real *entries;
+    Real *gradients;      // Gradients for each entry, NULL if no autograd
     Optimizer *optimizer; // Optimizer state, NULL if no autograd
     int   *refcount;      // Number of references, NULL for views
 } Tensor;
@@ -74,7 +73,7 @@ Tensor TensorRead(char *path);
 
 /*
  * Reads raw binary data from a file and returns it as a tensor. Data starts
- * at offset bytes and is cast to Entry.
+ * at offset bytes and is cast to Real.
  */
 Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataType d);
 
@@ -152,12 +151,12 @@ Tensor TensorTranspose(Tensor A);
 /*
  * Returns the entry at the given N-dimensional index.
  */
-Entry TensorGet(Tensor A, int *indices);
+Real TensorGet(Tensor A, int *indices);
 
 /*
  * Sets the entry at the given N-dimensional index.
  */
-void TensorSet(Tensor A, int *indices, Entry value);
+void TensorSet(Tensor A, int *indices, Real value);
 
 
 /*=============================================================================================
@@ -167,7 +166,7 @@ void TensorSet(Tensor A, int *indices, Entry value);
 /*
  * Embedding lookup. Each integer index selects a row of the embedding table.
  * table:   [numClasses, embeddingSize]
- * indices: [...]                       (integer values in [0, numClasses), encoded as Entry)
+ * indices: [...]                       (integer values in [0, numClasses), encoded as Real)
  * out:     [..., embeddingSize]
  */
 Tensor TensorEmbedding(Tensor table, Tensor indices);
@@ -198,7 +197,7 @@ Tensor TensorMaxPool(Tensor input, int size, int stride, int padding);
  * bias:   [..., D]
  * out:    [..., D]
  */
-Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, float eps);
+Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, Real eps);
 
 /*
  * Returns an n x n causal mask: 0 on and below the diagonal, -INFINITE above.
@@ -212,7 +211,7 @@ Tensor TensorCausalMask(int n);
  * in:  Input logits    [..., numClasses]
  * out: Probabilities   [..., numClasses]
  */
-Tensor TensorSoftmax(Tensor in, float temperature);
+Tensor TensorSoftmax(Tensor in, Real temperature);
 
 /*
  * Log-softmax over the last dimension.
@@ -220,7 +219,7 @@ Tensor TensorSoftmax(Tensor in, float temperature);
  * in:  Input logits        [..., numClasses]
  * out: Log-probabilities   [..., numClasses]
  */
-Tensor TensorLogSoftmax(Tensor in, float temperature);
+Tensor TensorLogSoftmax(Tensor in, Real temperature);
 
 /*
  * Cross-entropy loss over the last dimension.
@@ -230,7 +229,7 @@ Tensor TensorLogSoftmax(Tensor in, float temperature);
  * logits: Predicted logits                [..., numClasses]
  * out:    Mean cross-entropy loss         [] (Scalar)
  */
-Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, float temperature);
+Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, Real temperature);
 
 /*
  * Negative log-likelihood over the last dimension.
@@ -277,7 +276,7 @@ Tensor TensorConvolution(Tensor input, Tensor filter, int stride, int padding);
  * output height = (input height + 2*padding - size) / stride + 1
  * output width  = (input width  + 2*padding - size) / stride + 1
  */
-Tensor TensorPool(Binary fn, Entry initial, Tensor input, int size, int stride, int padding);
+Tensor TensorPool(Binary fn, Real initial, Tensor input, int size, int stride, int padding);
 
 /*
  * Broadcasts the given axis from size 1 to size n; all entries are replicated
@@ -293,7 +292,7 @@ Tensor TensorBroadcast(Tensor A, int axis, int n);
  * A:   [..., k, ...]
  * out: [..., 1, ...]
  */
-Tensor TensorReduce(Binary fn, Entry initial, Tensor A, int axis);
+Tensor TensorReduce(Binary fn, Real initial, Tensor A, int axis);
 
 /*
  * Element-wise addition. out = A + B
@@ -346,7 +345,7 @@ Tensor TensorAffine(Unary fn, Tensor A, Tensor bias, int inner);
 * Read from A at positions given by indices.
 *
 * A:       [..., s_0, ..., s_m, ...]   (indices shape lives at axis)
-* indices: [s_0, ..., s_m]             (integer values in [0, n), encoded as Entry)
+* indices: [s_0, ..., s_m]             (integer values in [0, n), encoded as Real)
 * out:     [..., n, ...]
 */
 Tensor TensorGather(Tensor A, Tensor indices, int axis);
@@ -356,10 +355,10 @@ Tensor TensorGather(Tensor A, Tensor indices, int axis);
  * If multiple values go to the same position, combine them with f.
  *
  * A:       [..., K, ...]               (K is the size of the gathered axis)
- * indices: [s_0, ..., s_m]             (integer values in [0, K), encoded as Entry)
+ * indices: [s_0, ..., s_m]             (integer values in [0, K), encoded as Real)
  * out:     [..., s_0, ..., s_m, ...]
  */
-Tensor TensorScatter(Binary fn, Tensor A, Tensor indices, Entry initial, int axis, int n);
+Tensor TensorScatter(Binary fn, Tensor A, Tensor indices, Real initial, int axis, int n);
 
 
 /*=============================================================================================
@@ -376,12 +375,12 @@ Tensor TensorShuffle(Tensor A, unsigned int seed);
 /*
  * Multiplies all entries of A by scalar in-place.
  */
-void TensorScale(Tensor A, float scalar);
+void TensorScale(Tensor A, Real scalar);
 
 /*
  * Sets all entries of A to the given value.
  */
-void TensorFill(Tensor A, Entry value);
+void TensorFill(Tensor A, Real value);
 
 /*
  * Xavier initialize a tensor using the last two dimensions as fan_in/fan_out.
@@ -406,7 +405,7 @@ void TensorPrint(Tensor A);
  * logits: [..., numClasses]
  * out:    [...]
  */
-Tensor TensorSample(Tensor logits, float temperature);
+Tensor TensorSample(Tensor logits, Real temperature);
 
 /*
  * Returns the number of positions at which corresponding entries of A and B differ.
@@ -427,12 +426,12 @@ void TensorBackward(Tensor loss);
  * momentum == 0: A -= lr * gradients.
  * momentum != 0: m = momentum * m + gradients; A -= lr * m.
  */
-void TensorSGD(Tensor A, float lr, float momentum);
+void TensorSGD(Tensor A, Real lr, Real momentum);
 
 /*
  * Applies a single SGD optimizer step to every tensor in the array.
  */
-void TensorArraySGD(TensorArray ta, float lr, float momentum);
+void TensorArraySGD(TensorArray ta, Real lr, Real momentum);
 
 /*
  * Adam optimizer with optional weight decay. Set weightDecay to 0 for Adam
@@ -442,12 +441,12 @@ void TensorArraySGD(TensorArray ta, float lr, float momentum);
  * v = beta2 * v + (1 - beta2) * gradients^2
  * A -= lr * (m_hat / (sqrt(v_hat) + epsilon) + weightDecay * A)
  */
-void TensorAdam(Tensor A, float lr, float beta1, float beta2, float epsilon, float weightDecay);
+void TensorAdam(Tensor A, Real lr, Real beta1, Real beta2, Real epsilon, Real weightDecay);
 
 /*
  * Applies a single Adam optimizer step to every tensor in the array.
  */
-void TensorArrayAdam(TensorArray ta, float lr, float beta1, float beta2, float epsilon, float weightDecay);
+void TensorArrayAdam(TensorArray ta, Real lr, Real beta1, Real beta2, Real epsilon, Real weightDecay);
 
 /*
  * Byte Pair Encoding algorithm for NLP

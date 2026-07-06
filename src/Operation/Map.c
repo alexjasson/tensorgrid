@@ -41,15 +41,15 @@ static void mapForward(void *arg, int start, int end)
 {
     Operation  *op  = arg;
     MapContext *ctx = op->context;
-    Entry      *out = op->out.entries;
-    Entry      *A   = op->A.entries;
+    Real      *out = op->out.entries;
+    Real      *A   = op->A.entries;
     VectorUnary fn = (VectorUnary)ctx->u.fv;
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
         int i = start;
         for (; i + VECTOR_DIMS <= end; i += VECTOR_DIMS)
             VectorStore(out + i, fn(VectorLoad(A + i)));
         if (i < end) {
-            Entry x[VECTOR_DIMS], y[VECTOR_DIMS];
+            Real x[VECTOR_DIMS], y[VECTOR_DIMS];
             int tail = end - i;
             for (int t = 0; t < VECTOR_DIMS; t++)
                 x[t] = t < tail ? A[i + t] : 1.0f;
@@ -59,7 +59,7 @@ static void mapForward(void *arg, int start, int end)
         }
     } else {
         for (int i = start; i < end; i += VECTOR_DIMS) {
-            Entry x[VECTOR_DIMS], y[VECTOR_DIMS];
+            Real x[VECTOR_DIMS], y[VECTOR_DIMS];
             int tail = end - i < VECTOR_DIMS ? end - i : VECTOR_DIMS;
             for (int t = 0; t < VECTOR_DIMS; t++) {
                 int j = i + t;
@@ -76,16 +76,16 @@ static void mapBackward(void *arg, int start, int end)
 {
     Operation   *op = arg;
     MapContext *ctx = op->context;
-    Entry       *A  = op->A.entries;
-    Entry       *dA = op->A.gradients;
-    Entry     *dout = op->out.gradients;
+    Real       *A   = op->A.entries;
+    Real       *dA  = op->A.gradients;
+    Real     *dout  = op->out.gradients;
     VectorUnary dafn = (VectorUnary)ctx->u.dav;
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
         int j = start;
         for (; j + VECTOR_DIMS <= end; j += VECTOR_DIMS)
             VectorStore(dA + j, VectorFma(VectorLoad(dout + j), dafn(VectorLoad(A + j)), VectorLoad(dA + j)));
         if (j < end) {
-            Entry x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
+            Real x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
             int tail = end - j;
             for (int t = 0; t < VECTOR_DIMS; t++) {
                 x[t] = t < tail ? A[j + t] : 1.0f;
@@ -98,7 +98,7 @@ static void mapBackward(void *arg, int start, int end)
         }
     } else {
         for (int j = start; j < end; j += VECTOR_DIMS) {
-            Entry x[VECTOR_DIMS], g[VECTOR_DIMS], y[VECTOR_DIMS];
+            Real x[VECTOR_DIMS], g[VECTOR_DIMS], y[VECTOR_DIMS];
             int offs[VECTOR_DIMS];
             int tail = end - j < VECTOR_DIMS ? end - j : VECTOR_DIMS;
             for (int t = 0; t < VECTOR_DIMS; t++) {

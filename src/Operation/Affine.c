@@ -52,7 +52,7 @@ static void affineForward(void *arg, int start, int end)
 {
     Operation *op = arg;
     AffineContext *ctx = op->context;
-    Entry *out = op->out.entries, *A = op->A.entries, *bias = op->B.entries;
+    Real *out = op->out.entries, *A = op->A.entries, *bias = op->B.entries;
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     VectorUnary fn = (VectorUnary)ctx->u.fv;
     if (inner == 1) {
@@ -62,7 +62,7 @@ static void affineForward(void *arg, int start, int end)
             for (; c + VECTOR_DIMS <= biasSize; c += VECTOR_DIMS)
                 VectorStore(out + base + c, fn(VectorAdd(VectorLoad(A + base + c), VectorLoad(bias + c))));
             if (c < biasSize) {
-                Entry x[VECTOR_DIMS], y[VECTOR_DIMS];
+                Real x[VECTOR_DIMS], y[VECTOR_DIMS];
                 int tail = biasSize - c;
                 for (int t = 0; t < VECTOR_DIMS; t++)
                     x[t] = t < tail ? A[base + c + t] + bias[c + t] : 0.0f;
@@ -74,14 +74,14 @@ static void affineForward(void *arg, int start, int end)
     } else {
         for (int o = start; o < end; o++)
             for (int c = 0; c < biasSize; c++) {
-                Entry bc = bias[c];
+                Real bc = bias[c];
                 size_t base = ((size_t)o * biasSize + c) * inner;
                 int i = 0;
                 Vector bcv = VectorBcast(bc);
                 for (; i + VECTOR_DIMS <= inner; i += VECTOR_DIMS)
                     VectorStore(out + base + i, fn(VectorAdd(VectorLoad(A + base + i), bcv)));
                 if (i < inner) {
-                    Entry x[VECTOR_DIMS], y[VECTOR_DIMS];
+                    Real x[VECTOR_DIMS], y[VECTOR_DIMS];
                     int tail = inner - i;
                     for (int t = 0; t < VECTOR_DIMS; t++)
                         x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
@@ -98,7 +98,7 @@ static void affineBackwardDa(void *arg, int start, int end)
 {
     Operation *op = arg;
     AffineContext *ctx = op->context;
-    Entry *A = op->A.entries, *bias = op->B.entries, *dA = op->A.gradients, *dout = op->out.gradients;
+    Real *A = op->A.entries, *bias = op->B.entries, *dA = op->A.gradients, *dout = op->out.gradients;
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     VectorUnary dafn = (VectorUnary)ctx->u.dav;
     
@@ -122,7 +122,7 @@ static void affineBackwardDa(void *arg, int start, int end)
                 VectorStore(dA + base + c, VectorFma(VectorLoad(dout + base + c), dafn(v), VectorLoad(dA + base + c)));
             }
             if (c < biasSize) {
-                Entry x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
+                Real x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
                 int tail = biasSize - c;
                 for (int t = 0; t < VECTOR_DIMS; t++) {
                     x[t] = t < tail ? A[base + c + t] + bias[c + t] : 0.0f;
@@ -137,7 +137,7 @@ static void affineBackwardDa(void *arg, int start, int end)
     } else {
         for (int o = start; o < end; o++)
             for (int c = 0; c < biasSize; c++) {
-                Entry bc = bias[c];
+                Real bc = bias[c];
                 size_t base = ((size_t)o * biasSize + c) * inner;
                 int i = 0;
                 Vector bcv = VectorBcast(bc);
@@ -146,7 +146,7 @@ static void affineBackwardDa(void *arg, int start, int end)
                     VectorStore(dA + base + i, VectorFma(VectorLoad(dout + base + i), dafn(v), VectorLoad(dA + base + i)));
                 }
                 if (i < inner) {
-                    Entry x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
+                    Real x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
                     int tail = inner - i;
                     for (int t = 0; t < VECTOR_DIMS; t++) {
                         x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
@@ -166,7 +166,7 @@ static void affineBackwardDb(void *arg, int start, int end)
 {
     Operation *op = arg;
     AffineContext *ctx = op->context;
-    Entry *A = op->A.entries, *bias = op->B.entries, *dout = op->out.gradients, *dB = op->B.gradients;
+    Real *A = op->A.entries, *bias = op->B.entries, *dout = op->out.gradients, *dB = op->B.gradients;
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     int outer = TensorSize(op->out) / (biasSize * inner);
     VectorUnary dafn = (VectorUnary)ctx->u.dav;
@@ -181,7 +181,7 @@ static void affineBackwardDb(void *arg, int start, int end)
             VectorStore(dB + c, VectorAdd(VectorLoad(dB + c), acc));
         }
         for (; c < end; c++) {
-            Entry s = 0;
+            Real s = 0;
             for (int o = 0; o < outer; o++)
                 s += dout[(size_t)o * biasSize + c];
             dB[c] += s;
@@ -198,8 +198,8 @@ static void affineBackwardDb(void *arg, int start, int end)
             Vector acc[4 * VECTOR_DIMS / VECTOR_DIMS];
             for (int j = 0; j < nblk; j++) acc[j] = VectorZero();
             for (int o = 0; o < outer; o++) {
-                const Entry *ar = A + (size_t)o * biasSize;
-                const Entry *dr = dout + (size_t)o * biasSize;
+                const Real *ar = A + (size_t)o * biasSize;
+                const Real *dr = dout + (size_t)o * biasSize;
                 for (int j = 0; j < nblk; j++) {
                     int cj   = c + j * VECTOR_DIMS;
                     Vector z = VectorAdd(VectorLoad(ar + cj), VectorLoad(bias + cj));
@@ -213,9 +213,9 @@ static void affineBackwardDb(void *arg, int start, int end)
             c = cc;
         }
         for (; c < end; c++) {
-            Entry s = 0, bc = bias[c];
+            Real s = 0, bc = bias[c];
             for (int o = 0; o < outer; o++) {
-                Entry x[VECTOR_DIMS] = {0}, g[VECTOR_DIMS] = {0}, y[VECTOR_DIMS];
+                Real x[VECTOR_DIMS] = {0}, g[VECTOR_DIMS] = {0}, y[VECTOR_DIMS];
                 x[0] = A[(size_t)o * biasSize + c] + bc;
                 g[0] = dout[(size_t)o * biasSize + c];
                 VectorStore(y, VectorMul(VectorLoad(g), dafn(VectorLoad(x))));
@@ -227,7 +227,7 @@ static void affineBackwardDb(void *arg, int start, int end)
     }
 
     for (int c = start; c < end; c++) {
-        Entry s = 0, bc = bias[c];
+        Real s = 0, bc = bias[c];
         Vector sv = VectorZero();
         for (int o = 0; o < outer; o++) {
             size_t base = ((size_t)o * biasSize + c) * inner;
@@ -238,7 +238,7 @@ static void affineBackwardDb(void *arg, int start, int end)
                 sv = VectorFma(VectorLoad(dout + base + i), dafn(v), sv);
             }
             if (i < inner) {
-                Entry x[VECTOR_DIMS], g[VECTOR_DIMS], y[VECTOR_DIMS];
+                Real x[VECTOR_DIMS], g[VECTOR_DIMS], y[VECTOR_DIMS];
                 int tail = inner - i;
                 for (int t = 0; t < VECTOR_DIMS; t++) {
                     x[t] = t < tail ? A[base + i + t] + bc : 0.0f;

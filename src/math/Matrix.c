@@ -1,6 +1,7 @@
 // https://github.com/alexjasson/tensorgrid
 
 #include "Matrix.h"
+#include <stddef.h>
 #include "Vector.h"
 
 // An MR x NRV block of vector registers, used by microKernel
@@ -18,14 +19,14 @@
 #define SMALL_N 256
 
 static int imin(int a, int b);
-static void packB(Entry *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock);
-static void packA(Entry *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock);
-static void microKernelContiguous(Entry *Ap, Entry *Bp, int kBlock, Matrix C);
-static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, int nValid);
+static void packB(Real *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock);
+static void packA(Real *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock);
+static void microKernelContiguous(Real *Ap, Real *Bp, int kBlock, Matrix C);
+static void microKernel(Real *Ap, Real *Bp, int kBlock, Matrix C, int mValid, int nValid);
 static void smallGemm(Matrix A, Matrix B, Matrix C);
 static void packedGemm(Matrix A, Matrix B, Matrix C);
 
-Matrix MatrixView(Entry *data, int rows, int cols, int sRow, int sCol)
+Matrix MatrixView(Real *data, int rows, int cols, int sRow, int sCol)
 {
     return (Matrix){data, rows, cols, sRow, sCol};
 }
@@ -33,24 +34,24 @@ Matrix MatrixView(Entry *data, int rows, int cols, int sRow, int sCol)
 static int imin(int a, int b) { return a < b ? a : b; }
 
 // Pack a B block into NR-wide panels, padding the right edge with zeros
-static void packB(Entry *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock)
+static void packB(Real *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock)
 {
     int panels = (nBlock + NR - 1) / NR;
     int fullPanels = (B.sCol == 1) ? nBlock / NR : 0;
 
     // Vectorize contiguous rows
     for (int jp = 0; jp < fullPanels; jp++) {
-        Entry *dst = Bp + (size_t)jp * kBlock * NR;
-        Entry *src = B.data + (size_t)p0 * B.sRow + j0 + (size_t)jp * NR;
+        Real *dst = Bp + (size_t)jp * kBlock * NR;
+        Real *src = B.data + (size_t)p0 * B.sRow + j0 + (size_t)jp * NR;
         for (int p = 0; p < kBlock; p++)
             for (int v = 0; v < NR; v += VECTOR_DIMS)
                 VectorStore(dst + p * NR + v, VectorLoad(src + (size_t)p * B.sRow + v));
     }
 
     for (int jp = fullPanels; jp < panels; jp++) {
-        Entry *dst = Bp + (size_t)jp * kBlock * NR;
+        Real *dst = Bp + (size_t)jp * kBlock * NR;
         for (int p = 0; p < kBlock; p++) {
-            Entry *brow = B.data + (size_t)(p0 + p) * B.sRow;
+            Real *brow = B.data + (size_t)(p0 + p) * B.sRow;
             for (int nr = 0; nr < NR; nr++) {
                 int col = jp * NR + nr;
                 dst[p * NR + nr] = (col < nBlock) ? brow[(size_t)(j0 + col) * B.sCol] : 0.0f;
@@ -60,11 +61,11 @@ static void packB(Entry *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock)
 }
 
 // Pack an A block into MR-row panels, padding the bottom edge with zeros
-static void packA(Entry *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock)
+static void packA(Real *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock)
 {
     int panels = (mBlock + MR - 1) / MR;
     for (int ip = 0; ip < panels; ip++) {
-        Entry *dst = Ap + (size_t)ip * kBlock * MR;
+        Real *dst = Ap + (size_t)ip * kBlock * MR;
         for (int p = 0; p < kBlock; p++) {
             for (int mr = 0; mr < MR; mr++) {
                 int row = ip * MR + mr;
@@ -74,7 +75,7 @@ static void packA(Entry *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock)
     }
 }
 
-static void microKernelContiguous(Entry *Ap, Entry *Bp, int kBlock, Matrix C)
+static void microKernelContiguous(Real *Ap, Real *Bp, int kBlock, Matrix C)
 {
     Vector acc[MR][NRV];
     for (int mr = 0; mr < MR; mr++)
@@ -86,8 +87,8 @@ static void microKernelContiguous(Entry *Ap, Entry *Bp, int kBlock, Matrix C)
         VectorFetch(C.data + (size_t)mr * C.sRow + NR - 1);
     }
 
-    Entry *aRow = Ap;
-    Entry *bRow = Bp;
+    Real *aRow = Ap;
+    Real *bRow = Bp;
     for (int p = 0; p < kBlock; p++, aRow += MR, bRow += NR) {
         Vector b[NRV];
         for (int v = 0; v < NRV; v++)
@@ -100,13 +101,13 @@ static void microKernelContiguous(Entry *Ap, Entry *Bp, int kBlock, Matrix C)
     }
 
     for (int mr = 0; mr < MR; mr++) {
-        Entry *Crow = C.data + (size_t)mr * C.sRow;
+        Real *Crow = C.data + (size_t)mr * C.sRow;
         for (int v = 0; v < NRV; v++)
             VectorStore(Crow + v * VECTOR_DIMS, VectorAdd(VectorLoad(Crow + v * VECTOR_DIMS), acc[mr][v]));
     }
 }
 
-static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, int nValid)
+static void microKernel(Real *Ap, Real *Bp, int kBlock, Matrix C, int mValid, int nValid)
 {
     Vector acc[MR][NRV];
     for (int mr = 0; mr < mValid; mr++)
@@ -118,8 +119,8 @@ static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, 
         VectorFetch(C.data + (size_t)mr * C.sRow + (size_t)(NR - 1) * C.sCol);
     }
 
-    Entry *aRow = Ap;
-    Entry *bRow = Bp;
+    Real *aRow = Ap;
+    Real *bRow = Bp;
     for (int p = 0; p < kBlock; p++, aRow += MR, bRow += NR) {
         Vector b[NRV];
         for (int v = 0; v < NRV; v++)
@@ -133,7 +134,7 @@ static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, 
 
     if (C.sCol == 1 && nValid == NR) {
         for (int mr = 0; mr < mValid; mr++) {
-            Entry *Crow = C.data + (size_t)mr * C.sRow;
+            Real *Crow = C.data + (size_t)mr * C.sRow;
             for (int v = 0; v < NRV; v++)
                 VectorStore(Crow + v * VECTOR_DIMS, VectorAdd(VectorLoad(Crow + v * VECTOR_DIMS), acc[mr][v]));
         }
@@ -141,7 +142,7 @@ static void microKernel(Entry *Ap, Entry *Bp, int kBlock, Matrix C, int mValid, 
     }
 
     for (int mr = 0; mr < mValid; mr++) {
-        Entry tile[NR];
+        Real tile[NR];
         for (int v = 0; v < NRV; v++)
             VectorStore(tile + v * VECTOR_DIMS, acc[mr][v]);
         for (int nr = 0; nr < nValid; nr++)
@@ -154,8 +155,8 @@ static void smallGemm(Matrix A, Matrix B, Matrix C)
 {
     int M = C.rows, N = C.cols, K = A.cols;
     int sA = A.sRow, sAc = A.sCol, sC = C.sRow;
-    Entry Bpack[SMALL_K * SMALL_N];
-    const Entry *Bd;
+    Real Bpack[SMALL_K * SMALL_N];
+    const Real *Bd;
     int sB;
 
     if (B.sCol == 1) {
@@ -171,18 +172,18 @@ static void smallGemm(Matrix A, Matrix B, Matrix C)
 
     for (int i0 = 0; i0 < M; i0 += MR) {
         int mValid = imin(MR, M - i0);
-        const Entry *Ai = A.data + (size_t)i0 * sA;
+        const Real *Ai = A.data + (size_t)i0 * sA;
         int j0 = 0;
 
         for (; j0 + NR <= N; j0 += NR) {
-            const Entry *Bj = Bd + j0;
+            const Real *Bj = Bd + j0;
             Vector acc[MR][NRV];
             for (int m = 0; m < mValid; m++)
                 for (int v = 0; v < NRV; v++) acc[m][v] = VectorZero();
 
             if (mValid == MR) {
-                const Entry *Acol = Ai;
-                const Entry *Brow = Bj;
+                const Real *Acol = Ai;
+                const Real *Brow = Bj;
                 for (int p = 0; p < K; p++, Acol += sAc, Brow += sB) {
                     Vector b[NRV];
                     for (int v = 0; v < NRV; v++) b[v] = VectorLoad(Brow + v * VECTOR_DIMS);
@@ -192,8 +193,8 @@ static void smallGemm(Matrix A, Matrix B, Matrix C)
                     }
                 }
             } else {
-                const Entry *Acol = Ai;
-                const Entry *Brow = Bj;
+                const Real *Acol = Ai;
+                const Real *Brow = Bj;
                 for (int p = 0; p < K; p++, Acol += sAc, Brow += sB) {
                     Vector b[NRV];
                     for (int v = 0; v < NRV; v++) b[v] = VectorLoad(Brow + v * VECTOR_DIMS);
@@ -205,7 +206,7 @@ static void smallGemm(Matrix A, Matrix B, Matrix C)
             }
 
             for (int m = 0; m < mValid; m++) {
-                Entry *Cm = C.data + (size_t)(i0 + m) * sC + j0;
+                Real *Cm = C.data + (size_t)(i0 + m) * sC + j0;
                 for (int v = 0; v < NRV; v++)
                     VectorStore(Cm + v * VECTOR_DIMS, VectorAdd(VectorLoad(Cm + v * VECTOR_DIMS), acc[m][v]));
             }
@@ -213,9 +214,9 @@ static void smallGemm(Matrix A, Matrix B, Matrix C)
 
         for (; j0 < N; j0++)
             for (int m = 0; m < mValid; m++) {
-                Entry s = 0;
-                const Entry *a = Ai + (size_t)m * sA;
-                const Entry *b = Bd + j0;
+                Real s = 0;
+                const Real *a = Ai + (size_t)m * sA;
+                const Real *b = Bd + j0;
                 for (int p = 0; p < K; p++, a += sAc, b += sB)
                     s += *a * *b;
                 C.data[(size_t)(i0 + m) * sC + j0] += s;
@@ -230,8 +231,8 @@ static void packedGemm(Matrix A, Matrix B, Matrix C)
     int N = C.cols;
     int K = A.cols;
 
-    Entry packBufA[MC * KC];
-    Entry packBufB[NC * KC];
+    Real packBufA[MC * KC];
+    Real packBufB[NC * KC];
 
     for (int j0 = 0; j0 < N; j0 += NC) {
         int nBlock = imin(NC, N - j0);
@@ -242,9 +243,9 @@ static void packedGemm(Matrix A, Matrix B, Matrix C)
                 int mBlock = imin(MC, M - i0);
                 packA(packBufA, A, i0, mBlock, p0, kBlock);
                 for (int jr = 0; jr < nBlock; jr += NR) {
-                    Entry *Bpanel = packBufB + (size_t)(jr / NR) * kBlock * NR;
+                    Real *Bpanel = packBufB + (size_t)(jr / NR) * kBlock * NR;
                     for (int ir = 0; ir < mBlock; ir += MR) {
-                        Entry *Apanel = packBufA + (size_t)(ir / MR) * kBlock * MR;
+                        Real *Apanel = packBufA + (size_t)(ir / MR) * kBlock * MR;
                         Matrix Ctile = { C.data + (size_t)(i0 + ir) * C.sRow + (size_t)(j0 + jr) * C.sCol, 0, 0, C.sRow, C.sCol };
                         int mValid = imin(MR, mBlock - ir);
                         int nValid = imin(NR, nBlock - jr);

@@ -9,7 +9,7 @@
 
 typedef struct {
     Binary b;
-    Entry fill;
+    Real fill;
     int axis;
 } ScatterContext;
 
@@ -18,7 +18,7 @@ static void OperationScatterBackward(Operation *op);
 static void scatterForward(void *arg, int start, int end);
 static void scatterBackward(void *arg, int start, int end);
 
-Tensor OperationScatter(Binary fn, Tensor A, Tensor B, Entry fill, int axis, int n)
+Tensor OperationScatter(Binary fn, Tensor A, Tensor B, Real fill, int axis, int n)
 {
     int outDims = A.dimensions - B.dimensions + 1;
     int outShape[MAX_DIMENSIONS];
@@ -70,16 +70,16 @@ static void scatterForward(void *arg, int start, int end)
     f reducer = ctx->b.f;
     if (n == 1 && innerSize == 1 && aC &&
         (reducer == MAX.f || reducer == MIN.f || reducer == ADD.f)) {
-        Entry *out = op->out.entries;
-        Entry  fill = ctx->fill;
+        Real *out = op->out.entries;
+        Real  fill = ctx->fill;
         for (int i = start; i < end; i++) {
-            const Entry *row = A.entries + (size_t)i * idxSize;
+            const Real *row = A.entries + (size_t)i * idxSize;
             int j = 0;
             if (reducer == ADD.f) {
                 Vector acc = VectorZero();
                 for (; j + VECTOR_DIMS <= idxSize; j += VECTOR_DIMS)
                     acc = VectorAdd(acc, VectorLoad(row + j));
-                Entry r = fill + VectorHsum(acc);
+                Real r = fill + VectorHsum(acc);
                 for (; j < idxSize; j++) r += row[j];
                 out[i] = r;
             } else {
@@ -87,8 +87,8 @@ static void scatterForward(void *arg, int start, int end)
                 for (; j + VECTOR_DIMS <= idxSize; j += VECTOR_DIMS)
                     acc = (reducer == MAX.f) ? VectorMax(acc, VectorLoad(row + j))
                                              : VectorMin(acc, VectorLoad(row + j));
-                Entry lanes[VECTOR_DIMS]; VectorStore(lanes, acc);
-                Entry r = fill;
+                Real lanes[VECTOR_DIMS]; VectorStore(lanes, acc);
+                Real r = fill;
                 for (int t = 0; t < VECTOR_DIMS; t++)
                     r = (reducer == MAX.f) ? (lanes[t] > r ? lanes[t] : r)
                                            : (lanes[t] < r ? lanes[t] : r);
@@ -108,7 +108,7 @@ static void scatterForward(void *arg, int start, int end)
             int kTarget = rem % n;
             int outer   = rem / n;
 
-            Entry acc = ctx->fill;
+            Real acc = ctx->fill;
             for (int ix = 0; ix < idxSize; ix++) {
                 if ((int)I.entries[ix] == kTarget)
                     acc = ((ScalarBinary)ctx->b.f)(acc, A.entries[(outer * idxSize + ix) * innerSize + inner]);
@@ -128,7 +128,7 @@ static void scatterForward(void *arg, int start, int end)
                               : unravel(inner, A.shape + axis + I.dimensions,
                                         A.strides + axis + I.dimensions, aInnerDims);
 
-            Entry acc = ctx->fill;
+            Real acc = ctx->fill;
             for (int ix = 0; ix < idxSize; ix++) {
                 int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
                 if ((int)I.entries[idxOff] == kTarget) {
@@ -159,10 +159,10 @@ static void scatterBackward(void *arg, int start, int end)
 
     // ADD's gradient is 1, so each output gradient adds into its input segment
     if (n == 1 && innerSize == 1 && aC && ctx->b.f == ADD.f) {
-        Entry *dout = op->out.gradients;
+        Real *dout = op->out.gradients;
         for (int i = start; i < end; i++) {
             Vector gv = VectorBcast(dout[i]);
-            Entry *row = A.gradients + (size_t)i * idxSize;
+            Real *row = A.gradients + (size_t)i * idxSize;
             int j = 0;
             for (; j + VECTOR_DIMS <= idxSize; j += VECTOR_DIMS)
                 VectorStore(row + j, VectorAdd(VectorLoad(row + j), gv));
@@ -187,7 +187,7 @@ static void scatterBackward(void *arg, int start, int end)
                                A.strides + axis + I.dimensions, aInnerDims);
         }
 
-        Entry chain[idxSize + 1];
+        Real chain[idxSize + 1];
         chain[0] = ctx->fill;
         int count = 0;
         for (int ix = 0; ix < idxSize; ix++) {
@@ -195,13 +195,13 @@ static void scatterBackward(void *arg, int start, int end)
             if ((int)I.entries[idxOff] == kTarget) {
                 int aIxOff = aC ? ix * innerSize
                                 : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
-                Entry Av = A.entries[outerOff + aIxOff + innerOff];
+                Real Av = A.entries[outerOff + aIxOff + innerOff];
                 chain[count + 1] = ((ScalarBinary)ctx->b.f)(chain[count], Av);
                 count++;
             }
         }
 
-        Entry dresult = op->out.gradients[i];
+        Real dresult = op->out.gradients[i];
         int c = count - 1;
         for (int ix = idxSize - 1; ix >= 0 && c >= 0; ix--) {
             int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
@@ -209,7 +209,7 @@ static void scatterBackward(void *arg, int start, int end)
                 int aIxOff  = aC ? ix * innerSize
                                  : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
                 int aOffset = outerOff + aIxOff + innerOff;
-                Entry Av    = A.entries[aOffset];
+                Real Av     = A.entries[aOffset];
                 A.gradients[aOffset] += dresult * ((ScalarBinary)ctx->b.db)(chain[c], Av);
                 dresult *= ((ScalarBinary)ctx->b.da)(chain[c], Av);
                 c--;
