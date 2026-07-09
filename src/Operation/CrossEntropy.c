@@ -52,13 +52,14 @@ Tensor OperationCrossEntropy(Tensor labels, Tensor logits, Real temperature)
     ctx->targetContiguous = isContiguous(labels.shape, labels.strides, labels.dimensions);
     ctx->invTemperature = 1.0f / temperature;
 
-    Tensor out = TensorNew(0, NULL, logits.gradients != NULL || labels.gradients != NULL);
+    Tensor out = TensorNew(0, NULL, REAL, logits.gradients != NULL || labels.gradients != NULL);
     return OperationExecute(OperationNew(out, logits, labels, OperationCrossEntropyForward, OperationCrossEntropyBackward, ctx));
 }
 
 static void OperationCrossEntropyForward(Operation *op)
 {
     CrossEntropyContext *ctx = op->context;
+    Real *ze = op->A.entries, *ye = op->B.entries;
     Real loss = 0.0f;
 
     for (int row = 0; row < ctx->rows; row++) {
@@ -69,13 +70,13 @@ static void OperationCrossEntropyForward(Operation *op)
 
         Real max = -INFINITE;
         for (int c = 0; c < ctx->classes; c++) {
-            Real v = op->A.entries[zBase + c * zStride] * ctx->invTemperature;
+            Real v = ze[zBase + c * zStride] * ctx->invTemperature;
             if (v > max) max = v;
         }
 
         Real sum = 0.0f;
         for (int c = 0; c < ctx->classes; c++)
-            sum += expe(op->A.entries[zBase + c * zStride] * ctx->invTemperature - max);
+            sum += expe(ze[zBase + c * zStride] * ctx->invTemperature - max);
         Real logDenom = max + loge(sum);
 
         if (ctx->distribution) {
@@ -84,22 +85,22 @@ static void OperationCrossEntropyForward(Operation *op)
                       : unravel(row, op->B.shape, op->B.strides, op->B.dimensions - 1);
             int yStride = op->B.strides[op->B.dimensions - 1];
             for (int c = 0; c < ctx->classes; c++) {
-                Real z = op->A.entries[zBase + c * zStride];
-                Real y = op->B.entries[yBase + c * yStride];
+                Real z = ze[zBase + c * zStride];
+                Real y = ye[yBase + c * yStride];
                 loss -= y * (z * ctx->invTemperature - logDenom);
             }
         } else {
             int off = ctx->targetContiguous ? row : unravel(row, op->B.shape, op->B.strides, op->B.dimensions);
-            int target = (int)op->B.entries[off];
+            int target = (int)ye[off];
             if (target < 0 || target >= ctx->classes) {
                 fprintf(stderr, "Cross-entropy label out of range!\n");
                 exit(EXIT_FAILURE);
             }
-            loss += logDenom - op->A.entries[zBase + target * zStride] * ctx->invTemperature;
+            loss += logDenom - ze[zBase + target * zStride] * ctx->invTemperature;
         }
     }
 
-    op->out.entries[0] = loss / ctx->rows;
+    *(Real *)op->out.entries = loss / ctx->rows;
 }
 
 static void OperationCrossEntropyBackward(Operation *op)
@@ -113,6 +114,7 @@ static void crossEntropyBackward(void *arg, int start, int end)
 {
     Operation *op = arg;
     CrossEntropyContext *ctx = op->context;
+    Real *ze = op->A.entries, *ye = op->B.entries;
     Real logitScale = op->out.gradients[0] * ctx->invTemperature / ctx->rows;
     Real targetScale = op->out.gradients[0] / ctx->rows;
 
@@ -124,13 +126,13 @@ static void crossEntropyBackward(void *arg, int start, int end)
 
         Real max = -INFINITE;
         for (int c = 0; c < ctx->classes; c++) {
-            Real v = op->A.entries[zBase + c * zStride] * ctx->invTemperature;
+            Real v = ze[zBase + c * zStride] * ctx->invTemperature;
             if (v > max) max = v;
         }
 
         Real sum = 0.0f;
         for (int c = 0; c < ctx->classes; c++)
-            sum += expe(op->A.entries[zBase + c * zStride] * ctx->invTemperature - max);
+            sum += expe(ze[zBase + c * zStride] * ctx->invTemperature - max);
         Real inv = 1.0f / sum;
         Real logDenom = max + loge(sum);
 
@@ -144,17 +146,17 @@ static void crossEntropyBackward(void *arg, int start, int end)
             yStride = op->B.strides[op->B.dimensions - 1];
             targetSum = 0.0f;
             for (int c = 0; c < ctx->classes; c++)
-                targetSum += op->B.entries[yBase + c * yStride];
+                targetSum += ye[yBase + c * yStride];
         } else {
             int off = ctx->targetContiguous ? row : unravel(row, op->B.shape, op->B.strides, op->B.dimensions);
-            target = (int)op->B.entries[off];
+            target = (int)ye[off];
         }
         for (int c = 0; c < ctx->classes; c++) {
-            Real z = op->A.entries[zBase + c * zStride];
+            Real z = ze[zBase + c * zStride];
             Real p = expe(z * ctx->invTemperature - max) * inv;
             Real y = c == target ? 1.0f : 0.0f;
             if (ctx->distribution) {
-                y = op->B.entries[yBase + c * yStride];
+                y = ye[yBase + c * yStride];
             }
             if (op->A.gradients) op->A.gradients[zBase + c * zStride] += logitScale * (targetSum * p - y);
             if (ctx->distribution && op->B.gradients)

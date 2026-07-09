@@ -35,7 +35,7 @@ Tensor OperationScatter(Binary fn, Tensor A, Tensor B, Real fill, int axis, int 
     ctx->b = fn;
     ctx->fill = fill;
     ctx->axis = axis;
-    Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
+    Tensor out = TensorNew(outDims, outShape, REAL, A.gradients != NULL);
     return OperationExecute(OperationNew(out, A, B, OperationScatterForward, OperationScatterBackward, ctx));
 }
 
@@ -57,6 +57,9 @@ static void scatterForward(void *arg, int start, int end)
     ScatterContext *ctx = op->context;
     Tensor A      = op->A;
     Tensor I      = op->B;
+    Real *Ae      = A.entries;
+    Real *Ie      = I.entries;
+    Real *oute    = op->out.entries;
     int axis      = ctx->axis;
     int n         = op->out.shape[axis];
     int idxSize   = TensorSize(I);
@@ -73,7 +76,7 @@ static void scatterForward(void *arg, int start, int end)
         Real *out = op->out.entries;
         Real  fill = ctx->fill;
         for (int i = start; i < end; i++) {
-            const Real *row = A.entries + (size_t)i * idxSize;
+            const Real *row = (const Real *)A.entries + (size_t)i * idxSize;
             int j = 0;
             if (reducer == ADD.f) {
                 Vector acc = VectorZero();
@@ -110,10 +113,10 @@ static void scatterForward(void *arg, int start, int end)
 
             Real acc = ctx->fill;
             for (int ix = 0; ix < idxSize; ix++) {
-                if ((int)I.entries[ix] == kTarget)
-                    acc = ((ScalarBinary)ctx->b.f)(acc, A.entries[(outer * idxSize + ix) * innerSize + inner]);
+                if ((int)Ie[ix] == kTarget)
+                    acc = ((ScalarBinary)ctx->b.f)(acc, Ae[(outer * idxSize + ix) * innerSize + inner]);
             }
-            op->out.entries[i] = acc;
+            oute[i] = acc;
         }
     } else {
         for (int i = start; i < end; i++) {
@@ -131,13 +134,13 @@ static void scatterForward(void *arg, int start, int end)
             Real acc = ctx->fill;
             for (int ix = 0; ix < idxSize; ix++) {
                 int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
-                if ((int)I.entries[idxOff] == kTarget) {
+                if ((int)Ie[idxOff] == kTarget) {
                     int aIxOff = aC ? ix * innerSize
                                     : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
-                    acc = ((ScalarBinary)ctx->b.f)(acc, A.entries[outerOff + aIxOff + innerOff]);
+                    acc = ((ScalarBinary)ctx->b.f)(acc, Ae[outerOff + aIxOff + innerOff]);
                 }
             }
-            op->out.entries[i] = acc;
+            oute[i] = acc;
         }
     }
 }
@@ -148,6 +151,8 @@ static void scatterBackward(void *arg, int start, int end)
     ScatterContext *ctx = op->context;
     Tensor A      = op->A;
     Tensor I      = op->B;
+    Real *Ae      = A.entries;
+    Real *Ie      = I.entries;
     int axis      = ctx->axis;
     int n         = op->out.shape[axis];
     int idxSize   = TensorSize(I);
@@ -192,10 +197,10 @@ static void scatterBackward(void *arg, int start, int end)
         int count = 0;
         for (int ix = 0; ix < idxSize; ix++) {
             int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
-            if ((int)I.entries[idxOff] == kTarget) {
+            if ((int)Ie[idxOff] == kTarget) {
                 int aIxOff = aC ? ix * innerSize
                                 : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
-                Real Av = A.entries[outerOff + aIxOff + innerOff];
+                Real Av = Ae[outerOff + aIxOff + innerOff];
                 chain[count + 1] = ((ScalarBinary)ctx->b.f)(chain[count], Av);
                 count++;
             }
@@ -205,11 +210,11 @@ static void scatterBackward(void *arg, int start, int end)
         int c = count - 1;
         for (int ix = idxSize - 1; ix >= 0 && c >= 0; ix--) {
             int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
-            if ((int)I.entries[idxOff] == kTarget) {
+            if ((int)Ie[idxOff] == kTarget) {
                 int aIxOff  = aC ? ix * innerSize
                                  : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
                 int aOffset = outerOff + aIxOff + innerOff;
-                Real Av     = A.entries[aOffset];
+                Real Av     = Ae[aOffset];
                 A.gradients[aOffset] += dresult * ((ScalarBinary)ctx->b.db)(chain[c], Av);
                 dresult *= ((ScalarBinary)ctx->b.da)(chain[c], Av);
                 c--;

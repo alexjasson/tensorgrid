@@ -155,7 +155,7 @@ static inline Tensor ModelForward(Tensor X, Model *m)
 // Sample the next token id given a context window of SEQ_LENGTH token ids
 static inline int ModelPredict(Model *m, int *context, float temperature)
 {
-    Tensor X = TensorNew(2, (int[]){1, SEQ_LENGTH}, 0);
+    Tensor X = TensorNew(2, (int[]){1, SEQ_LENGTH}, REAL, 0);
     for (int i = 0; i < SEQ_LENGTH; i++)
         TensorSet(X, (int[]){0, i}, (Real)context[i]);
     Tensor Z   = ModelForward(X, m);           // [1, SEQ_LENGTH, NUM_CLASSES]

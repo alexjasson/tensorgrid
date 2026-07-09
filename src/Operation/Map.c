@@ -21,7 +21,7 @@ Tensor OperationMap(Unary fn, Tensor A)
         exit(EXIT_FAILURE);
     }
     ctx->u = fn;
-    Tensor out = TensorNew(A.dimensions, A.shape, A.gradients != NULL);
+    Tensor out = TensorNew(A.dimensions, A.shape, REAL, A.gradients != NULL);
     return OperationExecute(OperationNew(out, A, (Tensor){0}, OperationMapForward, OperationMapBackward, ctx));
 }
 

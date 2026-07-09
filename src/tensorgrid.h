@@ -6,6 +6,7 @@
 #define FALSE 0
 #define INFINITE 1e+38
 
+typedef float Real; // Floating point representation of a Real number, may be float or double
 typedef void (*f)(void); // A function applied to scalars or vectors
 
 /*
@@ -16,20 +17,20 @@ typedef struct { f f, da;     f fv, dav;      } Unary;
 typedef struct { f f, da, db; f fv, dav, dbv; } Binary;
 extern Unary RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
 extern Binary ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
-
-typedef float Real; // Floating point representation of a Real number, may be float or double
+typedef enum { UINT8, INT8, INT16, INT32, FLOAT16, FLOAT32, FLOAT64, REAL } DataType;
 typedef struct optimizer Optimizer;
-typedef enum { DataUint8, DataInt8, DataInt16, DataInt32, DataFloat32, DataFloat64 } DataType;
 
 // Tensor representation
 typedef struct {
     int dimensions;
     int shape[MAX_DIMENSIONS];
     int strides[MAX_DIMENSIONS];
-    Real *entries;
+    void *entries;
+    DataType dtype;       // Storage format of entries
     Real *gradients;      // Gradients for each entry, NULL if no autograd
     Optimizer *optimizer; // Optimizer state, NULL if no autograd
-    int   *refcount;      // Number of references, NULL for views
+    int *refcount;        // Number of references, NULL for views
+    Real scale;           // Maps stored non-REAL entries to Real
 } Tensor;
 
 typedef struct tensorArray *TensorArray; // Array of tensors intended to be used for model parameters
@@ -40,11 +41,12 @@ typedef struct tensorArray *TensorArray; // Array of tensors intended to be used
  *=============================================================================================*/
 
 /*
- * Allocates a new tensor with all entries as 0. If autograd is nonzero,
- * the tensor also allocates gradient storage and optimizer state.
+ * Allocates a new tensor with all entries as 0, each stored using the
+ * given data type. If autograd is nonzero, the tensor also allocates
+ * gradient storage and optimizer state. Autograd requires REAL as DataType.
  * Note: for a 0-dimensional tensor (scalar), pass shape = NULL.
  */
-Tensor TensorNew(int dimensions, int *shape, int autograd);
+Tensor TensorNew(int dimensions, int *shape, DataType d, int autograd);
 
 /*
  * Creates an empty tensor array.
@@ -72,10 +74,16 @@ void TensorArrayFree(TensorArray ta);
 Tensor TensorRead(char *path);
 
 /*
- * Reads raw binary data from a file and returns it as a tensor. Data starts
- * at offset bytes and is cast to Real.
+ * Reads raw binary data from a file and returns it as a tensor, starting at
+ * offset bytes into the file. Each file element is read as the given data type.
  */
 Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataType d);
+
+/*
+ * Returns a copy of A with each entry stored using the given data type.
+ * The result has scale 1 and no autograd.
+ */
+Tensor TensorToType(Tensor A, DataType d);
 
 /*
  * Writes a tensor to a .tgd file.
@@ -373,9 +381,9 @@ Tensor TensorScatter(Binary fn, Tensor A, Tensor indices, Real initial, int axis
 Tensor TensorShuffle(Tensor A, unsigned int seed);
 
 /*
- * Multiplies all entries of A by scalar in-place.
+ * Scales all entries of A by scalar, returning the scaled tensor.
  */
-void TensorScale(Tensor A, Real scalar);
+Tensor TensorScale(Tensor A, Real scalar);
 
 /*
  * Sets all entries of A to the given value.

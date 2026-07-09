@@ -16,7 +16,7 @@ int main(void)
     fflush(stdout);
     while (fgets(line, sizeof(line), stdin)) {
         int len = (int)strlen(line);
-        Tensor bytesIn = TensorNew(1, (int[]){len}, 0);
+        Tensor bytesIn = TensorNew(1, (int[]){len}, REAL, 0);
         for (int i = 0; i < len; i++) TensorSet(bytesIn, (int[]){i}, (Real)(unsigned char)line[i]);
         Tensor tokensIn = TensorBPEEncode(bytesIn, m.merges);
         for (int i = 0; i < TensorShape(tokensIn, 0); i++) {
@@ -31,7 +31,7 @@ int main(void)
             for (int i = 0; i < SEQ_LENGTH - 1; i++) context[i] = context[i + 1];
             context[SEQ_LENGTH - 1] = next;
 
-            Tensor tokenOut = TensorNew(1, (int[]){1}, 0);
+            Tensor tokenOut = TensorNew(1, (int[]){1}, REAL, 0);
             TensorSet(tokenOut, (int[]){0}, (Real)next);
             Tensor bytesOut = TensorBPEDecode(tokenOut, m.merges);
             int newline = 0;

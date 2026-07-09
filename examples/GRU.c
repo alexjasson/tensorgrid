@@ -35,10 +35,10 @@ static Tensor forward(Tensor X, Model *m)
 {
     int N = TensorShape(X, 0);
 
-    Tensor X_T       = TensorTranspose(X);                           // [SEQ_LENGTH, N]
-    Tensor embedding = TensorEmbedding(m->E, X_T);                   // [SEQ_LENGTH, N, HIDDEN_SIZE]
-    Tensor h_prev    = TensorNew(2, (int[]){N, HIDDEN_SIZE}, FALSE); // [N, HIDDEN_SIZE]
-    Tensor ones      = TensorNew(2, (int[]){N, HIDDEN_SIZE}, FALSE); // [N, HIDDEN_SIZE]
+    Tensor X_T       = TensorTranspose(X);         // [SEQ_LENGTH, N]
+    Tensor embedding = TensorEmbedding(m->E, X_T); // [SEQ_LENGTH, N, HIDDEN_SIZE]
+    Tensor h_prev    = TensorNew(2, (int[]){N, HIDDEN_SIZE}, REAL, FALSE); // [N, HIDDEN_SIZE]
+    Tensor ones      = TensorNew(2, (int[]){N, HIDDEN_SIZE}, REAL, FALSE); // [N, HIDDEN_SIZE]
     TensorFill(ones, 1.0f);
     TensorFree(X_T);
 
@@ -80,9 +80,9 @@ static Tensor forward(Tensor X, Model *m)
 int main(void)
 {
     // Read data into Tensors
-    Tensor data = TensorReadData("examples/data/tinyShakespeare/input.txt", 1, (int[]){1115394}, 0, DataUint8); // [1115394]
-    Tensor train = TensorSlice(data, 0, TensorShape(data, 0) * 9 / 10);                                         // [1003854]
-    Tensor test  = TensorSlice(data, TensorShape(train, 0), TensorShape(data, 0) - TensorShape(train, 0));      // [111540]
+    Tensor data = TensorReadData("examples/data/tinyShakespeare/input.txt", 1, (int[]){1115394}, 0, UINT8);    // [1115394]
+    Tensor train = TensorSlice(data, 0, TensorShape(data, 0) * 9 / 10);                                    // [1003854]
+    Tensor test  = TensorSlice(data, TensorShape(train, 0), TensorShape(data, 0) - TensorShape(train, 0)); // [111540]
 
     // Compute number of training/test samples and number of batches
     int trainSamples = TensorShape(train, 0) - SEQ_LENGTH;

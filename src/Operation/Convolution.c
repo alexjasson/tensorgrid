@@ -40,7 +40,7 @@ Tensor OperationConvolution(Tensor in, Tensor filter, int stride, int padding)
     ctx->padding = padding;
     ctx->fH = fH;
     ctx->fW = fW;
-    Tensor out = TensorNew(4, (int[]){N, Cout, Hout, Wout}, autograd);
+    Tensor out = TensorNew(4, (int[]){N, Cout, Hout, Wout}, REAL, autograd);
     return OperationExecute(OperationNew(out, in, filter,
                             OperationConvolutionForward, OperationConvolutionBackward, ctx));
 }
@@ -126,7 +126,7 @@ static void convolutionForward(void *arg, int start, int end)
 
     for (int n = start; n < end; n++) {
         im2col(op, patches, n, 0, K);
-        Real *prod = op->out.entries + (size_t)n * Cout * S;
+        Real *prod = (Real *)op->out.entries + (size_t)n * Cout * S;
         memset(prod, 0, (size_t)Cout * S * sizeof(Real));
         MatrixMultiply(MatrixView(filter, Cout, K, K, 1),
                        MatrixView(patches, K, S, S, 1),

@@ -87,10 +87,16 @@ Operation OperationNew(Tensor out, Tensor A, Tensor B, OperationFn forward, Oper
 
 Tensor OperationExecute(Operation op)
 {
-    Tensor out = op.out;
+    Tensor out = op.out, A = op.A, B = op.B;
+
+    // Cast entries to Real
+    if (A.entries && (A.dtype != REAL || A.scale != 1.0)) op.A = TensorToType(A, REAL);
+    if (B.entries && (B.dtype != REAL || B.scale != 1.0)) op.B = TensorToType(B, REAL);
     op.forward(&op);
     if (op.out.gradients) operationArrayPush(op);
     else free(op.context);
+    if (op.A.entries != A.entries) TensorFree(op.A);
+    if (op.B.entries != B.entries) TensorFree(op.B);
     return out;
 }
 

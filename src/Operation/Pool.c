@@ -27,8 +27,8 @@ Tensor OperationPool(Binary fn, Real initial, Tensor in, int size, int stride, i
     int autograd = in.gradients != NULL;
     int cacheArg = autograd && (fn.f == MAX.f || fn.f == MIN.f);
 
-    Tensor out     = TensorNew(4, (int[]){N, C, Hout, Wout}, autograd);
-    Tensor indices = cacheArg ? TensorNew(4, (int[]){N, C, Hout, Wout}, FALSE) : (Tensor){0};
+    Tensor out     = TensorNew(4, (int[]){N, C, Hout, Wout}, REAL, autograd);
+    Tensor indices = cacheArg ? TensorNew(4, (int[]){N, C, Hout, Wout}, REAL, FALSE) : (Tensor){0};
 
     PoolContext *ctx = malloc(sizeof(*ctx));
     if (!ctx) {

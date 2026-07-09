@@ -33,7 +33,7 @@ Tensor OperationNormalize(Tensor in, Real eps)
     ctx->mean       = (Real *)(ctx + 1);
     ctx->rstd       = ctx->mean + rows;
 
-    Tensor out = TensorNew(in.dimensions, in.shape, in.gradients != NULL);
+    Tensor out = TensorNew(in.dimensions, in.shape, REAL, in.gradients != NULL);
     return OperationExecute(OperationNew(out, in, (Tensor){0}, OperationNormalizeForward, OperationNormalizeBackward, ctx));
 }
 

@@ -1,12 +1,16 @@
 #ifndef SCALAR_H
 #define SCALAR_H
 
+#include <stddef.h>
 #include "../tensorgrid.h" // Real
 
 typedef Real Scalar;
 
 typedef Scalar (*ScalarUnary)(Scalar);
 typedef Scalar (*ScalarBinary)(Scalar, Scalar);
+
+Real ScalarLoad(const void *p, DataType d);
+void ScalarStore(void *p, DataType d, Real x);
 
 // Unary functions and derivatives
 Scalar relu(Scalar a);

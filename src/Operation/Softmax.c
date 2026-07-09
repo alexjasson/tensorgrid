@@ -33,7 +33,7 @@ Tensor OperationSoftmax(Tensor logits, Real temperature)
     ctx->logitsContiguous = isContiguous(logits.shape, logits.strides, logits.dimensions);
     ctx->invTemperature = 1.0f / temperature;
 
-    Tensor out = TensorNew(logits.dimensions, logits.shape, logits.gradients != NULL);
+    Tensor out = TensorNew(logits.dimensions, logits.shape, REAL, logits.gradients != NULL);
     return OperationExecute(OperationNew(out, logits, (Tensor){0}, OperationSoftmaxForward, OperationSoftmaxBackward, ctx));
 }
 

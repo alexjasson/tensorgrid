@@ -24,7 +24,7 @@ Tensor OperationAffine(Unary fn, Tensor A, Tensor bias, int inner)
     ctx->u = fn;
     ctx->inner = inner;
     int autograd = A.gradients != NULL || bias.gradients != NULL;
-    Tensor out = TensorNew(A.dimensions, A.shape, autograd);
+    Tensor out = TensorNew(A.dimensions, A.shape, REAL, autograd);
     return OperationExecute(OperationNew(out, A, bias, OperationAffineForward, OperationAffineBackward, ctx));
 }
 

@@ -52,7 +52,7 @@ Tensor OperationZip(Binary fn, Tensor A, Tensor B)
     }
 
     int autograd = zipA.gradients != NULL || zipB.gradients != NULL;
-    Tensor out = TensorNew(outDims, outShape, autograd);
+    Tensor out = TensorNew(outDims, outShape, REAL, autograd);
 
     ZipContext *ctx = malloc(sizeof(*ctx));
     if (!ctx) {
