@@ -26,7 +26,7 @@ typedef struct {
     int shape[MAX_DIMENSIONS];
     int strides[MAX_DIMENSIONS];
     void *entries;
-    DataType dtype;       // Storage format of entries
+    DataType type;        // Storage format of entries
     Real *gradients;      // Gradients for each entry, NULL if no autograd
     Optimizer *optimizer; // Optimizer state, NULL if no autograd
     int *refcount;        // Number of references, NULL for views

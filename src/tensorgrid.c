@@ -43,7 +43,7 @@ struct tensorArray {
 
 // Size of data type in bytes and pointer to the entry at given index
 static size_t dataSize(DataType d) { return ((0x8424211u | (unsigned)sizeof(Real) << 28) >> (4 * d)) & 0xF; }
-static void *entry(Tensor A, size_t index) { return (unsigned char *)A.entries + index * dataSize(A.dtype); }
+static void *entry(Tensor A, size_t index) { return (unsigned char *)A.entries + index * dataSize(A.type); }
 
 int TensorSize(Tensor A)
 {
@@ -80,7 +80,7 @@ Tensor TensorNew(int dimensions, int *shape, DataType d, int autograd)
     }
     Tensor t = {0};
     t.dimensions = dimensions;
-    t.dtype = d;
+    t.type = d;
     t.scale = 1.0;
     for (int i = 0; i < dimensions; i++) t.shape[i] = shape[i];
     if (dimensions > 0) {
@@ -126,7 +126,7 @@ void TensorFree(Tensor A)
     for (int i = 0; i < A.dimensions; i++)
         if (A.strides[i] > 0) footprint += (size_t)(A.shape[i] - 1) * A.strides[i];
     MemoryPool pool = MemoryPoolGet();
-    MemoryPoolFree(pool, A.entries, footprint * dataSize(A.dtype));
+    MemoryPoolFree(pool, A.entries, footprint * dataSize(A.type));
     MemoryPoolFree(pool, A.gradients, footprint * sizeof(Real));
     if (A.optimizer) {
         free(A.optimizer->m);
@@ -268,7 +268,7 @@ Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride,
 
 Tensor TensorScale(Tensor A, Real scalar)
 {
-    if (!A.gradients && A.dtype != REAL) { A.scale *= scalar; return A; }
+    if (!A.gradients && A.type != REAL) { A.scale *= scalar; return A; }
     if (!A.gradients) {
         Real *e = A.entries;
         int size = TensorSize(A);
@@ -289,7 +289,7 @@ Tensor TensorScale(Tensor A, Real scalar)
 
 void TensorFill(Tensor A, Real value)
 {
-    if (A.dtype != REAL || A.scale != 1.0) {
+    if (A.type != REAL || A.scale != 1.0) {
         fprintf(stderr, "TensorFill requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
@@ -384,7 +384,7 @@ Tensor TensorNLL(Tensor y, Tensor logP)
 
 Tensor TensorSample(Tensor logits, Real temperature)
 {
-    if (logits.dtype != REAL || logits.scale != 1.0) {
+    if (logits.type != REAL || logits.scale != 1.0) {
         fprintf(stderr, "TensorSample requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
@@ -431,7 +431,7 @@ int TensorHammingDistance(Tensor A, Tensor B)
     for (int i = 0; i < n; i++) {
         int aOff = aC ? i : unravel(i, A.shape, A.strides, A.dimensions);
         int bOff = bC ? i : unravel(i, B.shape, B.strides, B.dimensions);
-        if (A.scale * ScalarLoad(entry(A, (size_t)aOff), A.dtype) != B.scale * ScalarLoad(entry(B, (size_t)bOff), B.dtype)) count++;
+        if (A.scale * ScalarLoad(entry(A, (size_t)aOff), A.type) != B.scale * ScalarLoad(entry(B, (size_t)bOff), B.type)) count++;
     }
     return count;
 }
@@ -453,7 +453,7 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
         perm[j]   = tmp;
     }
 
-    Tensor out = TensorNew(A.dimensions, A.shape, A.dtype, 0);
+    Tensor out = TensorNew(A.dimensions, A.shape, A.type, 0);
     out.scale = A.scale;
     int rowSize = TensorSize(A) / n;
     if (isContiguous(A.shape, A.strides, A.dimensions)) {
@@ -461,15 +461,15 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
         for (int i = 0; i < n; i++)
             memcpy(entry(out, (size_t)i * rowSize),
                    entry(A, (size_t)perm[i] * rowSize),
-                   (size_t)rowSize * dataSize(A.dtype));
+                   (size_t)rowSize * dataSize(A.type));
     } else {
         int innerDims = A.dimensions - 1;
         for (int i = 0; i < n; i++) {
             int srcRowOff = perm[i] * A.strides[0];
             for (int j = 0; j < rowSize; j++) {
                 int innerOff = unravel(j, A.shape + 1, A.strides + 1, innerDims);
-                Real v = ScalarLoad(entry(A, (size_t)(srcRowOff + innerOff)), A.dtype);
-                ScalarStore(entry(out, (size_t)i * rowSize + j), out.dtype, v);
+                Real v = ScalarLoad(entry(A, (size_t)(srcRowOff + innerOff)), A.type);
+                ScalarStore(entry(out, (size_t)i * rowSize + j), out.type, v);
             }
         }
     }
@@ -479,7 +479,7 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
 
 void TensorXavier(Tensor A)
 {
-    if (A.dtype != REAL || A.scale != 1.0) {
+    if (A.type != REAL || A.scale != 1.0) {
         fprintf(stderr, "TensorXavier requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
@@ -505,7 +505,7 @@ Tensor TensorOneHot(Tensor labels, int numClasses)
 
     for (int i = 0; i < numLabels; i++) {
         int off = unravel(i, labels.shape, labels.strides, labels.dimensions);
-        oe[i * numClasses + (int)(labels.scale * ScalarLoad(entry(labels, (size_t)off), labels.dtype))] = 1.0f;
+        oe[i * numClasses + (int)(labels.scale * ScalarLoad(entry(labels, (size_t)off), labels.type))] = 1.0f;
     }
 
     return out;
@@ -597,7 +597,7 @@ Tensor TensorToType(Tensor A, DataType d)
     int contiguous = isContiguous(A.shape, A.strides, A.dimensions);
     for (int i = 0; i < size; i++) {
         int off = contiguous ? i : unravel(i, A.shape, A.strides, A.dimensions);
-        ScalarStore(entry(out, (size_t)i), out.dtype, A.scale * ScalarLoad(entry(A, (size_t)off), A.dtype));
+        ScalarStore(entry(out, (size_t)i), out.type, A.scale * ScalarLoad(entry(A, (size_t)off), A.type));
     }
     return out;
 }
@@ -632,7 +632,7 @@ void TensorArrayWrite(TensorArray ta, char *path)
     // Write each tensor
     for (int i = 0; i < n; i++) {
         Tensor *t = DynamicArrayGet(ta->tensors, i);
-        if (t->dtype != REAL || t->scale != 1.0) {
+        if (t->type != REAL || t->scale != 1.0) {
             fprintf(stderr, "TensorArrayWrite requires REAL entries, convert with TensorToType!\n");
             exit(EXIT_FAILURE);
         }
@@ -751,7 +751,7 @@ Real TensorGet(Tensor A, int *indices)
     int idx = 0;
     for (int i = 0; i < A.dimensions; i++)
         idx += indices[i] * A.strides[i];
-    return A.scale * ScalarLoad(entry(A, (size_t)idx), A.dtype);
+    return A.scale * ScalarLoad(entry(A, (size_t)idx), A.type);
 }
 
 void TensorSet(Tensor A, int *indices, Real value)
@@ -759,7 +759,7 @@ void TensorSet(Tensor A, int *indices, Real value)
     int idx = 0;
     for (int i = 0; i < A.dimensions; i++)
         idx += indices[i] * A.strides[i];
-    ScalarStore(entry(A, (size_t)idx), A.dtype, value / A.scale);
+    ScalarStore(entry(A, (size_t)idx), A.type, value / A.scale);
 }
 
 void TensorSGD(Tensor A, Real lr, Real momentum)
