@@ -636,10 +636,9 @@ void TensorArrayWrite(TensorArray ta, char *path)
 
     // Write header
     int n = DynamicArraySize(ta->tensors);
-    uint32_t entrySize = sizeof(Real), tensors = (uint32_t)n;
+    uint32_t tensors = (uint32_t)n;
 
     if (fwrite("TGD", 1, 3, f) != 3 ||
-        fwrite(&entrySize, sizeof(entrySize), 1, f) != 1 ||
         fwrite(&tensors, sizeof(tensors), 1, f) != 1) {
         fprintf(stderr, "Cannot write file: %s\n", path);
         fclose(f);
@@ -649,12 +648,18 @@ void TensorArrayWrite(TensorArray ta, char *path)
     // Write each tensor
     for (int i = 0; i < n; i++) {
         Tensor *t = DynamicArrayGet(ta->tensors, i);
-        if (t->type != REAL || t->scale != 1.0) {
-            fprintf(stderr, "TensorArrayWrite requires REAL entries, convert with TensorToType!\n");
-            exit(EXIT_FAILURE);
-        }
         if (!isContiguous(t->shape, t->strides, t->dimensions)) {
             fprintf(stderr, "Cannot write non-contiguous tensor: %s\n", path);
+            fclose(f);
+            exit(EXIT_FAILURE);
+        }
+
+        // Write data type and scale, REAL is stored as its floating point width
+        int32_t type = t->type == REAL ? (sizeof(Real) == 8 ? FLOAT64 : FLOAT32) : (int32_t)t->type;
+        double scale = t->scale;
+        if (fwrite(&type, sizeof(type), 1, f) != 1 ||
+            fwrite(&scale, sizeof(scale), 1, f) != 1) {
+            fprintf(stderr, "Cannot write file: %s\n", path);
             fclose(f);
             exit(EXIT_FAILURE);
         }
@@ -677,7 +682,8 @@ void TensorArrayWrite(TensorArray ta, char *path)
         }
 
         // Write tensor entries
-        if (fwrite(t->entries, sizeof(Real), (size_t)TensorSize(*t), f) != (size_t)TensorSize(*t)) {
+        size_t data = (size_t)TensorSize(*t) * dataSize(t->type);
+        if (fwrite(t->entries, 1, data, f) != data) {
             fprintf(stderr, "Cannot write file: %s\n", path);
             fclose(f);
             exit(EXIT_FAILURE);
@@ -694,13 +700,11 @@ int TensorArrayRead(TensorArray ta, char *path)
 
     // Read and validate header
     char magic[3];
-    uint32_t entrySize, tensors;
+    uint32_t tensors;
 
     if (fread(magic, 1, 3, f) != 3 ||
         memcmp(magic, "TGD", 3) != 0 ||
-        fread(&entrySize, sizeof(entrySize), 1, f) != 1 ||
         fread(&tensors, sizeof(tensors), 1, f) != 1 ||
-        entrySize != sizeof(Real) ||
         tensors > INT32_MAX) {
         fprintf(stderr, "Not a .tgd file: %s\n", path);
         fclose(f);
@@ -716,6 +720,15 @@ int TensorArrayRead(TensorArray ta, char *path)
 
     int n = (int)tensors;
     for (int i = 0; i < n; i++) {
+        // Read data type and scale
+        int32_t type;
+        double scale;
+        if (fread(&type, sizeof(type), 1, f) != 1 || (uint32_t)type > FLOAT64 ||
+            fread(&scale, sizeof(scale), 1, f) != 1)
+            goto error;
+        if ((type == FLOAT32 || type == FLOAT64) && dataSize(type) == sizeof(Real))
+            type = REAL;
+
         // Read tensor shape
         int32_t dimensions;
         int shape[MAX_DIMENSIONS];
@@ -735,7 +748,7 @@ int TensorArrayRead(TensorArray ta, char *path)
         Tensor *t;
         if (existing) {
             t = DynamicArrayGet(ta->tensors, i);
-            int mismatch = dimensions != t->dimensions;
+            int mismatch = dimensions != t->dimensions || type != (int32_t)t->type;
             for (int d = 0; !mismatch && d < dimensions; d++)
                 mismatch = shape[d] != t->shape[d];
             if (mismatch) {
@@ -744,13 +757,15 @@ int TensorArrayRead(TensorArray ta, char *path)
                 exit(EXIT_FAILURE);
             }
         } else {
-            Tensor created = TensorNew(dimensions, shape, REAL, FALSE);
+            Tensor created = TensorNew(dimensions, shape, type, FALSE);
             DynamicArrayPush(ta->tensors, &created);
             t = DynamicArrayGet(ta->tensors, i);
         }
+        t->scale = (Real)scale;
 
         // Read entries into the tensor
-        if (fread(t->entries, sizeof(Real), (size_t)TensorSize(*t), f) != (size_t)TensorSize(*t))
+        size_t data = (size_t)TensorSize(*t) * dataSize(t->type);
+        if (fread(t->entries, 1, data, f) != data)
             goto error;
     }
 
