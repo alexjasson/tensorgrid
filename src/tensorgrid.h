@@ -80,8 +80,9 @@ Tensor TensorRead(char *path);
 Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataType d);
 
 /*
- * Returns a copy of A with each entry stored using the given data type.
- * The result has scale 1 and no autograd.
+ * Returns a copy of A with each entry stored using the given data type, preserving
+ * the values as accurately as the type allows. The result has no autograd. Negative
+ * floating point values can't be mapped to unsigned integer types.
  */
 Tensor TensorToType(Tensor A, DataType d);
 

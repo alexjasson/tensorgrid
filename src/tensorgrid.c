@@ -595,9 +595,26 @@ Tensor TensorToType(Tensor A, DataType d)
     Tensor out = TensorNew(A.dimensions, A.shape, d, FALSE);
     int size = TensorSize(A);
     int contiguous = isContiguous(A.shape, A.strides, A.dimensions);
+    if (out.type <= INT32) { // For integer types, scale maps the largest value to the type's max
+        Real typeMax = out.type == UINT8 ? UINT8_MAX : out.type == INT8 ? INT8_MAX : out.type == INT16 ? INT16_MAX : INT32_MAX;
+        Real absmax  = 0.0;
+        for (int i = 0; i < size; i++) {
+            int off = contiguous ? i : unravel(i, A.shape, A.strides, A.dimensions);
+            Real x = A.scale * ScalarLoad(entry(A, (size_t)off), A.type);
+            if (x < 0.0) {
+                if (out.type == UINT8) {
+                    fprintf(stderr, "Negative values can't be mapped to UINT8!\n");
+                    exit(EXIT_FAILURE);
+                }
+                x = -x;
+            }
+            if (x > absmax) absmax = x;
+        }
+        if (absmax > 0.0) out.scale = absmax / typeMax;
+    }
     for (int i = 0; i < size; i++) {
         int off = contiguous ? i : unravel(i, A.shape, A.strides, A.dimensions);
-        ScalarStore(entry(out, (size_t)i), out.type, A.scale * ScalarLoad(entry(A, (size_t)off), A.type));
+        ScalarStore(entry(out, (size_t)i), out.type, A.scale * ScalarLoad(entry(A, (size_t)off), A.type) / out.scale);
     }
     return out;
 }
