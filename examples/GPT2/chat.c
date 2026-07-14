@@ -17,11 +17,11 @@ int main(void)
     while (fgets(line, sizeof(line), stdin)) {
         int len = (int)strlen(line);
         Tensor bytesIn = TensorNew(1, (int[]){len}, REAL, 0);
-        for (int i = 0; i < len; i++) TensorSet(bytesIn, (int[]){i}, (Real)(unsigned char)line[i]);
+        for (int i = 0; i < len; i++) TensorSet(bytesIn, i, (Real)(unsigned char)line[i]);
         Tensor tokensIn = TensorBPEEncode(bytesIn, m.merges);
         for (int i = 0; i < TensorShape(tokensIn, 0); i++) {
             for (int j = 0; j < SEQ_LENGTH - 1; j++) context[j] = context[j + 1];
-            context[SEQ_LENGTH - 1] = (int)TensorGet(tokensIn, (int[]){i});
+            context[SEQ_LENGTH - 1] = (int)TensorGet(tokensIn, i);
         }
         TensorFree(bytesIn); TensorFree(tokensIn);
 
@@ -32,11 +32,11 @@ int main(void)
             context[SEQ_LENGTH - 1] = next;
 
             Tensor tokenOut = TensorNew(1, (int[]){1}, REAL, 0);
-            TensorSet(tokenOut, (int[]){0}, (Real)next);
+            TensorSet(tokenOut, 0, (Real)next);
             Tensor bytesOut = TensorBPEDecode(tokenOut, m.merges);
             int newline = 0;
             for (int i = 0; i < TensorShape(bytesOut, 0); i++) {
-                char c = (char)(int)TensorGet(bytesOut, (int[]){i});
+                char c = (char)(int)TensorGet(bytesOut, i);
                 if (c == '\n') { newline = 1; break; }
                 putchar(c);
             }

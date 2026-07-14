@@ -29,7 +29,7 @@ static void packedGemm(Matrix A, Matrix B, Matrix C);
 
 Matrix MatrixView(Real *data, int rows, int cols, int sRow, int sCol)
 {
-    return (Matrix){data, rows, cols, sRow, sCol, REAL, 1.0};
+    return (Matrix){data, rows, cols, sRow, sCol, REAL, 1.0, NULL};
 }
 
 static int imin(int a, int b) { return a < b ? a : b; }
@@ -40,7 +40,7 @@ static void packB(Real *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock)
     int panels = (nBlock + NR - 1) / NR;
     int fullPanels = (B.sCol == 1) ? nBlock / NR : 0;
 
-    if (B.type == REAL && B.scale == 1.0) {
+    if (B.type == REAL && B.scale == 1.0 && !B.scales) {
         // Vectorize contiguous rows
         for (int jp = 0; jp < fullPanels; jp++) {
             Real *dst = Bp + (size_t)jp * kBlock * NR;
@@ -64,24 +64,26 @@ static void packB(Real *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock)
     }
 
     size_t esz = ScalarSize(B.type);
-    Vector scale = VectorBcast(B.scale);
     const unsigned char *base = (const unsigned char *)B.data;
 
     for (int jp = 0; jp < fullPanels; jp++) {
         Real *dst = Bp + (size_t)jp * kBlock * NR;
         const unsigned char *src = base + ((size_t)p0 * B.sRow + j0 + (size_t)jp * NR) * esz;
-        for (int p = 0; p < kBlock; p++)
+        for (int p = 0; p < kBlock; p++) {
+            Vector scale = VectorBcast(B.scales ? B.scale * B.scales[p0 + p] : B.scale);
             for (int v = 0; v < NR; v += VECTOR_DIMS)
                 VectorStore(dst + p * NR + v, VectorMul(VectorLoad(src + ((size_t)p * B.sRow + v) * esz, B.type), scale));
+        }
     }
 
     for (int jp = fullPanels; jp < panels; jp++) {
         Real *dst = Bp + (size_t)jp * kBlock * NR;
         for (int p = 0; p < kBlock; p++) {
             const unsigned char *brow = base + (size_t)(p0 + p) * B.sRow * esz;
+            Real s = B.scales ? B.scale * B.scales[p0 + p] : B.scale;
             for (int nr = 0; nr < NR; nr++) {
                 int col = jp * NR + nr;
-                dst[p * NR + nr] = (col < nBlock) ? B.scale * ScalarLoad(brow + (size_t)(j0 + col) * B.sCol * esz, B.type) : 0.0f;
+                dst[p * NR + nr] = (col < nBlock) ? s * ScalarLoad(brow + (size_t)(j0 + col) * B.sCol * esz, B.type) : 0.0f;
             }
         }
     }
@@ -92,7 +94,7 @@ static void packA(Real *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock)
 {
     int panels = (mBlock + MR - 1) / MR;
 
-    if (A.type == REAL) {
+    if (A.type == REAL && !A.scales) {
         for (int ip = 0; ip < panels; ip++) {
             Real *dst = Ap + (size_t)ip * kBlock * MR;
             for (int p = 0; p < kBlock; p++) {
@@ -112,7 +114,7 @@ static void packA(Real *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock)
         for (int p = 0; p < kBlock; p++) {
             for (int mr = 0; mr < MR; mr++) {
                 int row = ip * MR + mr;
-                dst[p * MR + mr] = (row < mBlock) ? ScalarLoad(base + ((size_t)(i0 + row) * A.sRow + (size_t)(p0 + p) * A.sCol) * esz, A.type) : 0.0f;
+                dst[p * MR + mr] = (row < mBlock) ? (A.scales ? A.scales[i0 + row] : (Real)1.0) * ScalarLoad(base + ((size_t)(i0 + row) * A.sRow + (size_t)(p0 + p) * A.sCol) * esz, A.type) : 0.0f;
             }
         }
     }
@@ -203,10 +205,10 @@ static void smallGemm(Matrix A, Matrix B, Matrix C)
     int sB;
 
     B.scale = A.scale * B.scale / C.scale;
-    if (B.sCol == 1 && B.type == REAL && B.scale == 1.0) {
+    if (B.sCol == 1 && B.type == REAL && B.scale == 1.0 && !B.scales) {
         Bd = B.data;
         sB = B.sRow;
-    } else if (B.type == REAL && B.scale == 1.0) {
+    } else if (B.type == REAL && B.scale == 1.0 && !B.scales) {
         for (int p = 0; p < K; p++)
             for (int j = 0; j < N; j++)
                 Bpack[(size_t)p * N + j] = B.data[(size_t)p * B.sRow + (size_t)j * B.sCol];
@@ -215,9 +217,11 @@ static void smallGemm(Matrix A, Matrix B, Matrix C)
     } else {
         size_t esz = ScalarSize(B.type);
         const unsigned char *base = (const unsigned char *)B.data;
-        for (int p = 0; p < K; p++)
+        for (int p = 0; p < K; p++) {
+            Real s = B.scales ? B.scale * B.scales[p] : B.scale;
             for (int j = 0; j < N; j++)
-                Bpack[(size_t)p * N + j] = B.scale * ScalarLoad(base + ((size_t)p * B.sRow + (size_t)j * B.sCol) * esz, B.type);
+                Bpack[(size_t)p * N + j] = s * ScalarLoad(base + ((size_t)p * B.sRow + (size_t)j * B.sCol) * esz, B.type);
+        }
         Bd = Bpack;
         sB = N;
     }
@@ -300,7 +304,7 @@ static void packedGemm(Matrix A, Matrix B, Matrix C)
                     Real *Bpanel = packBufB + (size_t)(jr / NR) * kBlock * NR;
                     for (int ir = 0; ir < mBlock; ir += MR) {
                         Real *Apanel = packBufA + (size_t)(ir / MR) * kBlock * MR;
-                        Matrix Ctile = { C.data + (size_t)(i0 + ir) * C.sRow + (size_t)(j0 + jr) * C.sCol, 0, 0, C.sRow, C.sCol, REAL, 1.0 };
+                        Matrix Ctile = { C.data + (size_t)(i0 + ir) * C.sRow + (size_t)(j0 + jr) * C.sCol, 0, 0, C.sRow, C.sCol, REAL, 1.0, NULL };
                         int mValid = imin(MR, mBlock - ir);
                         int nValid = imin(NR, nBlock - jr);
                         if (C.sCol == 1 && mValid == MR && nValid == NR)
@@ -316,7 +320,7 @@ static void packedGemm(Matrix A, Matrix B, Matrix C)
 
 void MatrixMultiply(Matrix A, Matrix B, Matrix C)
 {
-    if (A.type == REAL && A.cols <= SMALL_K && C.cols >= NR && C.cols <= SMALL_N && C.sCol == 1)
+    if (A.type == REAL && !A.scales && A.cols <= SMALL_K && C.cols >= NR && C.cols <= SMALL_N && C.sCol == 1)
         smallGemm(A, B, C);
     else
         packedGemm(A, B, C);

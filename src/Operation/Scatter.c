@@ -57,10 +57,6 @@ static void scatterForward(void *arg, int start, int end)
     ScatterContext *ctx = op->context;
     Tensor A      = op->A;
     Tensor I      = op->B;
-    const unsigned char *Ae = (const unsigned char *)A.entries;
-    const unsigned char *Ie = (const unsigned char *)I.entries;
-    size_t eA     = ScalarSize(A.type);
-    size_t eI     = ScalarSize(I.type);
     Real *oute    = op->out.entries;
     int axis      = ctx->axis;
     int n         = op->out.shape[axis];
@@ -73,7 +69,7 @@ static void scatterForward(void *arg, int start, int end)
 
     // Vectorized MAX/MIN/ADD reduction of each output's contiguous input segment
     f reducer = ctx->b.f;
-    if (n == 1 && innerSize == 1 && aC && A.type == REAL && A.scale == 1.0 &&
+    if (n == 1 && innerSize == 1 && aC && A.type == REAL && !A.scale &&
         (reducer == MAX.f || reducer == MIN.f || reducer == ADD.f)) {
         Real *out = op->out.entries;
         Real  fill = ctx->fill;
@@ -115,9 +111,8 @@ static void scatterForward(void *arg, int start, int end)
 
             Real acc = ctx->fill;
             for (int ix = 0; ix < idxSize; ix++) {
-                if ((int)(I.scale * ScalarLoad(Ie + (size_t)ix * eI, I.type) + (Real)0.5) == kTarget)
-                    acc = ((ScalarBinary)ctx->b.f)(acc, A.scale *
-                          ScalarLoad(Ae + (size_t)((outer * idxSize + ix) * innerSize + inner) * eA, A.type));
+                if ((int)(TensorGet(I, ix) + (Real)0.5) == kTarget)
+                    acc = ((ScalarBinary)ctx->b.f)(acc, TensorGet(A, (outer * idxSize + ix) * innerSize + inner));
             }
             oute[i] = acc;
         }
@@ -137,11 +132,10 @@ static void scatterForward(void *arg, int start, int end)
             Real acc = ctx->fill;
             for (int ix = 0; ix < idxSize; ix++) {
                 int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
-                if ((int)(I.scale * ScalarLoad(Ie + (size_t)idxOff * eI, I.type) + (Real)0.5) == kTarget) {
+                if ((int)(TensorGet(I, idxOff) + (Real)0.5) == kTarget) {
                     int aIxOff = aC ? ix * innerSize
                                     : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
-                    acc = ((ScalarBinary)ctx->b.f)(acc, A.scale *
-                          ScalarLoad(Ae + (size_t)(outerOff + aIxOff + innerOff) * eA, A.type));
+                    acc = ((ScalarBinary)ctx->b.f)(acc, TensorGet(A, outerOff + aIxOff + innerOff));
                 }
             }
             oute[i] = acc;

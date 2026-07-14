@@ -91,8 +91,8 @@ Tensor OperationExecute(Operation op)
 
     // Cast entries to Real
     if (out.gradients) {
-        if (A.entries && (A.type != REAL || A.scale != 1.0)) op.A = TensorToType(A, REAL);
-        if (B.entries && (B.type != REAL || B.scale != 1.0)) op.B = TensorToType(B, REAL);
+        if (A.entries && (A.type != REAL || A.scale)) op.A = TensorToType(A, REAL);
+        if (B.entries && (B.type != REAL || B.scale)) op.B = TensorToType(B, REAL);
     }
     op.forward(&op);
     if (op.out.gradients) operationArrayPush(op);

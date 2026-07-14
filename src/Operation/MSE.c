@@ -45,16 +45,12 @@ static void OperationMSEForward(Operation *op)
 {
     MSEContext *ctx = op->context;
     Tensor Y = op->A, Y2 = op->B;
-    const unsigned char *ye  = (const unsigned char *)Y.entries;
-    const unsigned char *ye2 = (const unsigned char *)Y2.entries;
-    size_t eY = ScalarSize(Y.type), eY2 = ScalarSize(Y2.type);
     Real sum = 0.0f;
 
     for (int i = 0; i < ctx->size; i++) {
         int aOff = ctx->aContiguous ? i : unravel(i, Y.shape, Y.strides, Y.dimensions);
         int bOff = ctx->bContiguous ? i : unravel(i, Y2.shape, Y2.strides, Y2.dimensions);
-        Real d = Y.scale  * ScalarLoad(ye  + (size_t)aOff * eY,  Y.type)
-               - Y2.scale * ScalarLoad(ye2 + (size_t)bOff * eY2, Y2.type);
+        Real d = TensorGet(Y, aOff) - TensorGet(Y2, bOff);
         sum += d * d;
     }
 

@@ -56,8 +56,6 @@ static void softmaxForward(void *arg, int start, int end)
     SoftmaxContext *ctx = op->context;
     int classes = ctx->classes;
     Tensor L = op->A;
-    const unsigned char *logits = (const unsigned char *)L.entries;
-    size_t esz = ScalarSize(L.type);
     Real *out = op->out.entries;
 
     for (int row = start; row < end; row++) {
@@ -69,13 +67,13 @@ static void softmaxForward(void *arg, int start, int end)
 
         Real max = -INFINITE;
         for (int c = 0; c < classes; c++) {
-            Real z = L.scale * ScalarLoad(logits + (size_t)(xBase + c * xStride) * esz, L.type) * ctx->invTemperature;
+            Real z = TensorGet(L, xBase + c * xStride) * ctx->invTemperature;
             if (z > max) max = z;
         }
 
         Real sum = 0.0f;
         for (int c = 0; c < classes; c++) {
-            Real e = expe(L.scale * ScalarLoad(logits + (size_t)(xBase + c * xStride) * esz, L.type) * ctx->invTemperature - max);
+            Real e = expe(TensorGet(L, xBase + c * xStride) * ctx->invTemperature - max);
             p[c] = e;
             sum += e;
         }

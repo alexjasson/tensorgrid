@@ -30,7 +30,7 @@ typedef struct {
     Real *gradients;      // Gradients for each entry, NULL if no autograd
     Optimizer *optimizer; // Optimizer state, NULL if no autograd
     int *refcount;        // Number of references, NULL for views
-    Real scale;           // Maps stored non-REAL entries to Real
+    Real *scale;          // Maps stored entries to Real, one scale for each axis 0, NULL if unscaled
 } Tensor;
 
 typedef struct tensorArray *TensorArray; // Array of tensors intended to be used for model parameters
@@ -158,14 +158,14 @@ Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides, int of
 Tensor TensorTranspose(Tensor A);
 
 /*
- * Returns the entry at the given N-dimensional index.
+ * Returns the entry at the given offset in the tensor's storage.
  */
-Real TensorGet(Tensor A, int *indices);
+Real TensorGet(Tensor A, int index);
 
 /*
- * Sets the entry at the given N-dimensional index.
+ * Sets the entry at the given offset in the tensor's storage.
  */
-void TensorSet(Tensor A, int *indices, Real value);
+void TensorSet(Tensor A, int index, Real value);
 
 
 /*=============================================================================================

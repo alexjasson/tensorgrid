@@ -61,10 +61,6 @@ static void gatherForward(void *arg, int start, int end)
     GatherContext *ctx = op->context;
     Tensor A      = op->A;
     Tensor I      = op->B;
-    const unsigned char *Ae = (const unsigned char *)A.entries;
-    const unsigned char *Ie = (const unsigned char *)I.entries;
-    size_t eA     = ScalarSize(A.type);
-    size_t eI     = ScalarSize(I.type);
     Real *oute    = op->out.entries;
     int axis      = ctx->axis;
     int axisSize  = A.shape[axis];
@@ -80,8 +76,8 @@ static void gatherForward(void *arg, int start, int end)
             int rem   = i / innerSize;
             int ix    = rem % idxSize;
             int outer = rem / idxSize;
-            int k     = (int)(I.scale * ScalarLoad(Ie + (size_t)ix * eI, I.type) + (Real)0.5);
-            oute[i] = A.scale * ScalarLoad(Ae + (size_t)((outer * axisSize + k) * innerSize + inner) * eA, A.type);
+            int k     = (int)(TensorGet(I, ix) + (Real)0.5);
+            oute[i] = TensorGet(A, (outer * axisSize + k) * innerSize + inner);
         }
     } else {
         for (int i = start; i < end; i++) {
@@ -97,8 +93,8 @@ static void gatherForward(void *arg, int start, int end)
                                         A.dimensions - axis - 1);
             int aStride  = aC ? innerSize : A.strides[axis];
             int idxOff   = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
-            int k        = (int)(I.scale * ScalarLoad(Ie + (size_t)idxOff * eI, I.type) + (Real)0.5);
-            oute[i] = A.scale * ScalarLoad(Ae + (size_t)(outerOff + k * aStride + innerOff) * eA, A.type);
+            int k        = (int)(TensorGet(I, idxOff) + (Real)0.5);
+            oute[i] = TensorGet(A, outerOff + k * aStride + innerOff);
         }
     }
 }

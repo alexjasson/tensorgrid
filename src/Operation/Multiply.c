@@ -29,8 +29,8 @@ static void OperationMultiplyForward(Operation *op)
 {
     Tensor A = op->A, B = op->B;
     int dimsA = A.dimensions, dimsB = B.dimensions;
-    if (A.type != REAL || A.scale != 1.0) op->A = TensorToType(A, REAL);
-    if (dimsB >= 3 && (B.type != REAL || B.scale != 1.0)) op->B = TensorToType(B, REAL);
+    if (A.type != REAL || A.scale) op->A = TensorToType(A, REAL);
+    if (dimsB >= 3 && (B.type != REAL || B.scale)) op->B = TensorToType(B, REAL);
 
     int m = op->A.shape[dimsA - 2], k = op->A.shape[dimsA - 1], n = op->B.shape[dimsB - 1];
     int batchSize = TensorSize(op->out) / (m * n);
@@ -73,7 +73,7 @@ static void multiplyForward(void *arg, int start, int end)
 
     Matrix Bv  = MatrixView(op->B.entries, k, n, bRowStride, bColStride);
     Bv.type    = op->B.type;
-    Bv.scale   = op->B.scale;
+    Bv.scales  = op->B.scale;
 
     // If B is shared and A's batches are contiguous, fuse into a single GEMM
     if (batchStrideB == 0 && batchStrideA == m * aRowStride) {

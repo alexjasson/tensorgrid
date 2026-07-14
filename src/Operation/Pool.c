@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "../Operation.h"
+#include "../utility.h"
 #include "../math/Scalar.h"
 
 typedef struct {
@@ -75,8 +76,6 @@ static void poolForward(void *arg, int start, int end)
     int Hout = op->out.shape[2];
     int Wout = op->out.shape[3];
     int sN = A.strides[0], sC = A.strides[1], sH = A.strides[2], sW = A.strides[3];
-    const unsigned char *input = (const unsigned char *)A.entries;
-    size_t esz   = ScalarSize(A.type);
     Real *out    = op->out.entries;
     Real *argIdx = op->B.entries;
     Real fill    = ctx->fill;
@@ -84,7 +83,7 @@ static void poolForward(void *arg, int start, int end)
 
     for (int p = start; p < end; p++) {
         int c = p % C, n = p / C;
-        const unsigned char *plane = input + ((size_t)n * sN + (size_t)c * sC) * esz;
+        int planeOff = n * sN + c * sC;
         size_t outBase = (size_t)p * Hout * Wout;
         for (int oh = 0; oh < Hout; oh++)
             for (int ow = 0; ow < Wout; ow++) {
@@ -94,11 +93,11 @@ static void poolForward(void *arg, int start, int end)
                 for (int fh = 0; fh < size; fh++) {
                     int ih = oh * stride - padding + fh;
                     if (ih < 0 || ih >= H) continue;
-                    const unsigned char *r = plane + (size_t)ih * sH * esz;
+                    int rowOff = planeOff + ih * sH;
                     for (int fw = 0; fw < size; fw++) {
                         int iw = ow * stride - padding + fw;
                         if (iw < 0 || iw >= W) continue;
-                        Real v = A.scale * ScalarLoad(r + (size_t)iw * sW * esz, A.type);
+                        Real v = TensorGet(A, rowOff + iw * sW);
                         int local = fh * size + fw;
                         if      (reducer == MAX.f) { if (v > acc) { acc = v; bl = local; } }
                         else if (reducer == MIN.f) { if (v < acc) { acc = v; bl = local; } }

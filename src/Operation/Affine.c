@@ -57,17 +57,14 @@ static void affineForward(void *arg, int start, int end)
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     VectorUnary fn = (VectorUnary)ctx->u.fv;
 
-    if (op->A.type != REAL || op->A.scale != 1.0 || op->B.type != REAL || op->B.scale != 1.0) {
+    if (op->A.type != REAL || op->A.scale || op->B.type != REAL || op->B.scale) {
         ScalarUnary sfn = (ScalarUnary)ctx->u.f;
-        const unsigned char *Ab = (const unsigned char *)op->A.entries;
-        const unsigned char *Bb = (const unsigned char *)op->B.entries;
-        size_t eA = ScalarSize(op->A.type), eB = ScalarSize(op->B.type);
         for (int o = start; o < end; o++)
             for (int c = 0; c < biasSize; c++) {
-                Real bc = op->B.scale * ScalarLoad(Bb + (size_t)c * eB, op->B.type);
-                size_t base = ((size_t)o * biasSize + c) * inner;
+                Real bc = TensorGet(op->B, c);
+                int base = (o * biasSize + c) * inner;
                 for (int i = 0; i < inner; i++)
-                    out[base + i] = sfn(op->A.scale * ScalarLoad(Ab + (base + i) * eA, op->A.type) + bc);
+                    out[base + i] = sfn(TensorGet(op->A, base + i) + bc);
             }
         return;
     }

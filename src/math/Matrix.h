@@ -5,9 +5,9 @@
 
 /*
  * A strided 2D matrix view over existing memory. Element (i, j) is
- * scale * data[i*sRow + j*sCol]
+ * scale[i] * data[i*sRow + j*sCol]
  */
-typedef struct { Real *data; int rows, cols, sRow, sCol; DataType type; Real scale; } Matrix;
+typedef struct { Real *data; int rows, cols, sRow, sCol; DataType type; Real scale; Real *scales; } Matrix;
 
 /*
  * Returns a strided matrix view over existing memory, stored as REAL

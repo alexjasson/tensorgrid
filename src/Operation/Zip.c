@@ -87,16 +87,12 @@ static void zipForward(void *arg, int start, int end)
     int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
     int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
 
-    if (op->A.type != REAL || op->A.scale != 1.0 || op->B.type != REAL || op->B.scale != 1.0) {
+    if (op->A.type != REAL || op->A.scale || op->B.type != REAL || op->B.scale) {
         ScalarBinary sfn = (ScalarBinary)ctx->b.f;
-        const unsigned char *Ab = (const unsigned char *)op->A.entries;
-        const unsigned char *Bb = (const unsigned char *)op->B.entries;
-        size_t eA = ScalarSize(op->A.type), eB = ScalarSize(op->B.type);
         for (int i = start; i < end; i++) {
             int aOff = aC ? i : unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
             int bOff = bC ? i : unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
-            out[i] = sfn(op->A.scale * ScalarLoad(Ab + (size_t)aOff * eA, op->A.type),
-                         op->B.scale * ScalarLoad(Bb + (size_t)bOff * eB, op->B.type));
+            out[i] = sfn(TensorGet(op->A, aOff), TensorGet(op->B, bOff));
         }
         return;
     }

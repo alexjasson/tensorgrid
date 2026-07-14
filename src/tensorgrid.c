@@ -44,6 +44,18 @@ struct tensorArray {
 // Pointer to the entry at given index
 static void *entry(Tensor A, size_t index) { return (unsigned char *)A.entries + index * ScalarSize(A.type); }
 
+Real TensorGet(Tensor A, int index)
+{
+    Real scale = A.scale ? A.scale[A.dimensions >= 2 ? index / A.strides[0] : 0] : 1.0;
+    return scale * ScalarLoad(entry(A, (size_t)index), A.type);
+}
+
+void TensorSet(Tensor A, int index, Real value)
+{
+    Real scale = A.scale ? A.scale[A.dimensions >= 2 ? index / A.strides[0] : 0] : 1.0;
+    ScalarStore(entry(A, (size_t)index), A.type, value / scale);
+}
+
 int TensorSize(Tensor A)
 {
     int size = 1;
@@ -80,7 +92,6 @@ Tensor TensorNew(int dimensions, int *shape, DataType d, int autograd)
     Tensor t = {0};
     t.dimensions = dimensions;
     t.type = d;
-    t.scale = 1.0;
     for (int i = 0; i < dimensions; i++) t.shape[i] = shape[i];
     if (dimensions > 0) {
         t.strides[dimensions - 1] = 1;
@@ -132,6 +143,7 @@ void TensorFree(Tensor A)
         free(A.optimizer->v);
         free(A.optimizer);
     }
+    free(A.scale);
     free(A.refcount);
 }
 
@@ -150,6 +162,7 @@ Tensor TensorSlice(Tensor A, int index, int length)
     int offset  = index * A.strides[0];
     t.entries   = entry(A, (size_t)offset);
     t.gradients = A.gradients ? A.gradients + offset : NULL;
+    if (A.scale && A.dimensions >= 2) t.scale = A.scale + index;
     t.refcount  = NULL;
     return t;
 }
@@ -165,6 +178,13 @@ Tensor TensorIndex(Tensor A, int index)
     int offset  = index * A.strides[0];
     t.entries   = entry(A, (size_t)offset);
     t.gradients = A.gradients ? A.gradients + offset : NULL;
+    if (A.scale) {
+        if (A.dimensions > 2) {
+            fprintf(stderr, "TensorIndex requires an unscaled input!\n");
+            exit(EXIT_FAILURE);
+        }
+        t.scale = A.dimensions == 2 ? A.scale + index : A.scale;
+    }
     t.refcount  = NULL;
     return t;
 }
@@ -173,6 +193,10 @@ Tensor TensorReshape(Tensor A, int dimensions, int *shape)
 {
     if (!isContiguous(A.shape, A.strides, A.dimensions)) {
         fprintf(stderr, "TensorReshape requires a contiguous input!\n");
+        exit(EXIT_FAILURE);
+    }
+    if (A.scale) {
+        fprintf(stderr, "TensorReshape requires an unscaled input!\n");
         exit(EXIT_FAILURE);
     }
     A.dimensions = dimensions;
@@ -196,6 +220,10 @@ Tensor TensorDetach(Tensor A)
 
 Tensor TensorTranspose(Tensor A)
 {
+    if (A.scale && A.dimensions == 2) {
+        fprintf(stderr, "TensorTranspose requires an unscaled input!\n");
+        exit(EXIT_FAILURE);
+    }
     int dims = A.dimensions;
     Tensor t = A;
     t.shape[dims - 2]   = A.shape[dims - 1];
@@ -208,6 +236,10 @@ Tensor TensorTranspose(Tensor A)
 
 Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides, int offset)
 {
+    if (A.scale) {
+        fprintf(stderr, "TensorRestride requires an unscaled input!\n");
+        exit(EXIT_FAILURE);
+    }
     Tensor t = A;
     t.dimensions = dimensions;
     for (int i = 0; i < dimensions; i++) {
@@ -267,7 +299,17 @@ Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride,
 
 Tensor TensorScale(Tensor A, Real scalar)
 {
-    if (!A.gradients && A.type != REAL) { A.scale *= scalar; return A; }
+    if (!A.gradients && A.type != REAL) {
+        int channels = A.dimensions >= 2 ? A.shape[0] : 1;
+        if (!A.scale) {
+            A.scale = malloc((size_t)channels * sizeof(Real));
+            if (!A.scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+            for (int c = 0; c < channels; c++) A.scale[c] = scalar;
+        } else {
+            for (int c = 0; c < channels; c++) A.scale[c] *= scalar;
+        }
+        return A;
+    }
     if (!A.gradients) {
         Real *e = A.entries;
         int size = TensorSize(A);
@@ -288,7 +330,7 @@ Tensor TensorScale(Tensor A, Real scalar)
 
 void TensorFill(Tensor A, Real value)
 {
-    if (A.type != REAL || A.scale != 1.0) {
+    if (A.type != REAL || A.scale) {
         fprintf(stderr, "TensorFill requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
@@ -383,7 +425,7 @@ Tensor TensorNLL(Tensor y, Tensor logP)
 
 Tensor TensorSample(Tensor logits, Real temperature)
 {
-    if (logits.type != REAL || logits.scale != 1.0) {
+    if (logits.type != REAL || logits.scale) {
         fprintf(stderr, "TensorSample requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
@@ -430,7 +472,7 @@ int TensorHammingDistance(Tensor A, Tensor B)
     for (int i = 0; i < n; i++) {
         int aOff = aC ? i : unravel(i, A.shape, A.strides, A.dimensions);
         int bOff = bC ? i : unravel(i, B.shape, B.strides, B.dimensions);
-        if (A.scale * ScalarLoad(entry(A, (size_t)aOff), A.type) != B.scale * ScalarLoad(entry(B, (size_t)bOff), B.type)) count++;
+        if (TensorGet(A, aOff) != TensorGet(B, bOff)) count++;
     }
     return count;
 }
@@ -453,7 +495,13 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
     }
 
     Tensor out = TensorNew(A.dimensions, A.shape, A.type, 0);
-    out.scale = A.scale;
+    if (A.scale) {
+        int channels = A.dimensions >= 2 ? n : 1;
+        out.scale = malloc((size_t)channels * sizeof(Real));
+        if (!out.scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+        for (int i = 0; i < channels; i++)
+            out.scale[i] = A.scale[A.dimensions >= 2 ? perm[i] : i];
+    }
     int rowSize = TensorSize(A) / n;
     if (isContiguous(A.shape, A.strides, A.dimensions)) {
         // Each row is contiguous, so permute rows with a single copy each
@@ -478,7 +526,7 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
 
 void TensorXavier(Tensor A)
 {
-    if (A.type != REAL || A.scale != 1.0) {
+    if (A.type != REAL || A.scale) {
         fprintf(stderr, "TensorXavier requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
@@ -504,7 +552,7 @@ Tensor TensorOneHot(Tensor labels, int numClasses)
 
     for (int i = 0; i < numLabels; i++) {
         int off = unravel(i, labels.shape, labels.strides, labels.dimensions);
-        oe[i * numClasses + (int)(labels.scale * ScalarLoad(entry(labels, (size_t)off), labels.type))] = 1.0f;
+        oe[i * numClasses + (int)TensorGet(labels, off)] = 1.0f;
     }
 
     return out;
@@ -516,7 +564,7 @@ void TensorPrint(Tensor A)
     int indices[MAX_DIMENSIONS] = {0};
 
     if (size == 1) {
-        printf("%g\n", TensorGet(A, indices));
+        printf("%g\n", TensorGet(A, 0));
         return;
     }
 
@@ -543,7 +591,7 @@ void TensorPrint(Tensor A)
             printf(",");
         }
         for (int b = 0; b < open; b++) printf("[");
-        printf("%g", TensorGet(A, indices));
+        printf("%g", TensorGet(A, unravel(i, A.shape, A.strides, A.dimensions)));
         prevClose = close;
     }
     for (int b = 0; b < prevClose; b++) printf("]");
@@ -595,12 +643,23 @@ static void toReal(void *arg, int start, int end)
     const unsigned char *src = op->A.entries;
     Real *dst = op->out.entries;
     size_t esz = ScalarSize(op->A.type);
-    Vector scale = VectorBcast(op->A.scale);
     int i = start;
-    for (; i + VECTOR_DIMS <= end; i += VECTOR_DIMS)
-        VectorStore(dst + i, VectorMul(VectorLoad(src + (size_t)i * esz, op->A.type), scale));
-    for (; i < end; i++)
-        dst[i] = op->A.scale * ScalarLoad(src + (size_t)i * esz, op->A.type);
+    while (i < end) {
+        int stop = end;
+        Real s = 1.0;
+        if (op->A.scale && op->A.dimensions >= 2) {
+            int c = i / op->A.strides[0];
+            s = op->A.scale[c];
+            if ((c + 1) * op->A.strides[0] < stop) stop = (c + 1) * op->A.strides[0];
+        } else if (op->A.scale) {
+            s = *op->A.scale;
+        }
+        Vector scale = VectorBcast(s);
+        for (; i + VECTOR_DIMS <= stop; i += VECTOR_DIMS)
+            VectorStore(dst + i, VectorMul(VectorLoad(src + (size_t)i * esz, op->A.type), scale));
+        for (; i < stop; i++)
+            dst[i] = s * ScalarLoad(src + (size_t)i * esz, op->A.type);
+    }
 }
 
 Tensor TensorToType(Tensor A, DataType d)
@@ -616,25 +675,33 @@ Tensor TensorToType(Tensor A, DataType d)
     }
 
     if (out.type <= INT32) { // For integer types, scale maps the largest value to the type's max
-        Real typeMax = out.type == UINT8 ? UINT8_MAX : out.type == INT8 ? INT8_MAX : out.type == INT16 ? INT16_MAX : INT32_MAX;
-        Real absmax  = 0.0;
-        for (int i = 0; i < size; i++) {
-            int off = contiguous ? i : unravel(i, A.shape, A.strides, A.dimensions);
-            Real x = A.scale * ScalarLoad(entry(A, (size_t)off), A.type);
-            if (x < 0.0) {
-                if (out.type == UINT8) {
-                    fprintf(stderr, "Negative values can't be mapped to UINT8!\n");
-                    exit(EXIT_FAILURE);
+        Real typeMax  = out.type == UINT8 ? UINT8_MAX : out.type == INT8 ? INT8_MAX : out.type == INT16 ? INT16_MAX : INT32_MAX;
+        int channels  = out.dimensions >= 2 ? out.shape[0] : 1;
+        int inner     = size / channels;
+        out.scale = malloc((size_t)channels * sizeof(Real));
+        if (!out.scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+        for (int c = 0; c < channels; c++) {
+            Real absmax = 0.0;
+            for (int j = 0; j < inner; j++) {
+                int i   = c * inner + j;
+                int off = contiguous ? i : unravel(i, A.shape, A.strides, A.dimensions);
+                Real x  = TensorGet(A, off);
+                if (x < 0.0) {
+                    if (out.type == UINT8) {
+                        fprintf(stderr, "Negative values can't be mapped to UINT8!\n");
+                        exit(EXIT_FAILURE);
+                    }
+                    x = -x;
                 }
-                x = -x;
+                if (x > absmax) absmax = x;
             }
-            if (x > absmax) absmax = x;
+            out.scale[c] = absmax > 0.0 ? absmax / typeMax : 1.0;
         }
-        if (absmax > 0.0) out.scale = absmax / typeMax;
     }
     for (int i = 0; i < size; i++) {
-        int off = contiguous ? i : unravel(i, A.shape, A.strides, A.dimensions);
-        ScalarStore(entry(out, (size_t)i), out.type, A.scale * ScalarLoad(entry(A, (size_t)off), A.type) / out.scale);
+        int off   = contiguous ? i : unravel(i, A.shape, A.strides, A.dimensions);
+        Real s    = out.scale ? out.scale[out.dimensions >= 2 ? i / out.strides[0] : 0] : 1.0;
+        ScalarStore(entry(out, (size_t)i), out.type, TensorGet(A, off) / s);
     }
     return out;
 }
@@ -674,11 +741,9 @@ void TensorArrayWrite(TensorArray ta, char *path)
             exit(EXIT_FAILURE);
         }
 
-        // Write data type and scale, REAL is stored as its floating point width
+        // Write data type, REAL is stored as its floating point width
         int32_t type = t->type == REAL ? (sizeof(Real) == 8 ? FLOAT64 : FLOAT32) : (int32_t)t->type;
-        double scale = t->scale;
-        if (fwrite(&type, sizeof(type), 1, f) != 1 ||
-            fwrite(&scale, sizeof(scale), 1, f) != 1) {
+        if (fwrite(&type, sizeof(type), 1, f) != 1) {
             fprintf(stderr, "Cannot write file: %s\n", path);
             fclose(f);
             exit(EXIT_FAILURE);
@@ -695,6 +760,22 @@ void TensorArrayWrite(TensorArray ta, char *path)
         for (int d = 0; d < t->dimensions; d++) {
             int32_t shape = t->shape[d];
             if (fwrite(&shape, sizeof(shape), 1, f) != 1) {
+                fprintf(stderr, "Cannot write file: %s\n", path);
+                fclose(f);
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        // Write tensor scale
+        uint32_t channels = t->scale ? (uint32_t)(t->dimensions >= 2 ? t->shape[0] : 1) : 0;
+        if (fwrite(&channels, sizeof(channels), 1, f) != 1) {
+            fprintf(stderr, "Cannot write file: %s\n", path);
+            fclose(f);
+            exit(EXIT_FAILURE);
+        }
+        for (uint32_t c = 0; c < channels; c++) {
+            double perChannel = t->scale[c];
+            if (fwrite(&perChannel, sizeof(perChannel), 1, f) != 1) {
                 fprintf(stderr, "Cannot write file: %s\n", path);
                 fclose(f);
                 exit(EXIT_FAILURE);
@@ -740,11 +821,9 @@ int TensorArrayRead(TensorArray ta, char *path)
 
     int n = (int)tensors;
     for (int i = 0; i < n; i++) {
-        // Read data type and scale
+        // Read data type
         int32_t type;
-        double scale;
-        if (fread(&type, sizeof(type), 1, f) != 1 || (uint32_t)type > FLOAT64 ||
-            fread(&scale, sizeof(scale), 1, f) != 1)
+        if (fread(&type, sizeof(type), 1, f) != 1 || (uint32_t)type > FLOAT64)
             goto error;
         if ((type == FLOAT32 || type == FLOAT64) && ScalarSize(type) == sizeof(Real))
             type = REAL;
@@ -764,6 +843,12 @@ int TensorArrayRead(TensorArray ta, char *path)
             shape[d] = dim;
         }
 
+        // Read scale count
+        uint32_t channels;
+        if (fread(&channels, sizeof(channels), 1, f) != 1 ||
+            (channels != 0 && channels != (uint32_t)(dimensions >= 2 ? shape[0] : 1)))
+            goto error;
+
         // Check if tensor already exists, otherwise create a new one
         Tensor *t;
         if (existing) {
@@ -781,7 +866,18 @@ int TensorArrayRead(TensorArray ta, char *path)
             DynamicArrayPush(ta->tensors, &created);
             t = DynamicArrayGet(ta->tensors, i);
         }
-        t->scale = (Real)scale;
+        free(t->scale);
+        t->scale = NULL;
+        if (channels) {
+            t->scale = malloc(channels * sizeof(Real));
+            if (!t->scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+            for (uint32_t c = 0; c < channels; c++) {
+                double perChannel;
+                if (fread(&perChannel, sizeof(perChannel), 1, f) != 1)
+                    goto error;
+                t->scale[c] = (Real)perChannel;
+            }
+        }
 
         // Read entries into the tensor
         size_t data = (size_t)TensorSize(*t) * ScalarSize(t->type);
@@ -796,22 +892,6 @@ error:
     fprintf(stderr, "Cannot read .tgd file: %s\n", path);
     fclose(f);
     exit(EXIT_FAILURE);
-}
-
-Real TensorGet(Tensor A, int *indices)
-{
-    int idx = 0;
-    for (int i = 0; i < A.dimensions; i++)
-        idx += indices[i] * A.strides[i];
-    return A.scale * ScalarLoad(entry(A, (size_t)idx), A.type);
-}
-
-void TensorSet(Tensor A, int *indices, Real value)
-{
-    int idx = 0;
-    for (int i = 0; i < A.dimensions; i++)
-        idx += indices[i] * A.strides[i];
-    ScalarStore(entry(A, (size_t)idx), A.type, value / A.scale);
 }
 
 void TensorSGD(Tensor A, Real lr, Real momentum)
@@ -886,7 +966,7 @@ void TensorBPETrain(Tensor corpus, Tensor merges)
     int targetMerges = TensorShape(merges, 0);
     int n = TensorSize(corpus);
     int *ids = malloc((size_t)n * sizeof *ids);
-    for (int i = 0; i < n; i++) ids[i] = (int)TensorGet(corpus, (int[MAX_DIMENSIONS]){i});
+    for (int i = 0; i < n; i++) ids[i] = (int)TensorGet(corpus, i);
 
     // Each loop records most frequent adjacent pair into merges, then replaces that pair in ids with new token
     HashMap counts = HashMapNew(1024);
@@ -903,8 +983,8 @@ void TensorBPETrain(Tensor corpus, Tensor merges)
 
         int a = (int)(bestKey >> 32);
         int b = (int)(bestKey & 0xffffffffu);
-        TensorSet(merges, (int[MAX_DIMENSIONS]){numMerges, 0}, (Real)a);
-        TensorSet(merges, (int[MAX_DIMENSIONS]){numMerges, 1}, (Real)b);
+        TensorSet(merges, 2 * numMerges, (Real)a);
+        TensorSet(merges, 2 * numMerges + 1, (Real)b);
 
         int w = 0;
         for (int i = 0; i < n; ) {
@@ -922,10 +1002,10 @@ Tensor TensorBPEEncode(Tensor corpus, Tensor merges)
     int targetMerges = TensorShape(merges, 0);
     int n = TensorSize(corpus);
     int *ids = malloc((size_t)n * sizeof *ids);
-    for (int i = 0; i < n; i++) ids[i] = (int)TensorGet(corpus, (int[MAX_DIMENSIONS]){i});
+    for (int i = 0; i < n; i++) ids[i] = (int)TensorGet(corpus, i);
     HashMap rankMap = HashMapNew(1024);
     for (int r = 0; r < targetMerges; r++)
-        HashMapStore(rankMap, packi((int)TensorGet(merges, (int[MAX_DIMENSIONS]){r, 0}), (int)TensorGet(merges, (int[MAX_DIMENSIONS]){r, 1})), r);
+        HashMapStore(rankMap, packi((int)TensorGet(merges, 2 * r), (int)TensorGet(merges, 2 * r + 1)), r);
 
     // Greedily merges the pair that the merges tensor (tokenizer) learned earliest, until none are left
     while (TRUE) {
@@ -936,8 +1016,8 @@ Tensor TensorBPEEncode(Tensor corpus, Tensor merges)
         }
         if (best < 0) break;
 
-        int a = (int)TensorGet(merges, (int[MAX_DIMENSIONS]){(int)best, 0});
-        int b = (int)TensorGet(merges, (int[MAX_DIMENSIONS]){(int)best, 1});
+        int a = (int)TensorGet(merges, 2 * (int)best);
+        int b = (int)TensorGet(merges, 2 * (int)best + 1);
         int w = 0;
         for (int i = 0; i < n; ) {
             if (i < n - 1 && ids[i] == a && ids[i + 1] == b) { ids[w++] = 256 + (int)best; i += 2; }
@@ -947,7 +1027,7 @@ Tensor TensorBPEEncode(Tensor corpus, Tensor merges)
     }
 
     Tensor tokens = TensorNew(1, (int[]){n}, REAL, FALSE);
-    for (int i = 0; i < n; i++) TensorSet(tokens, (int[MAX_DIMENSIONS]){i}, (Real)ids[i]);
+    for (int i = 0; i < n; i++) TensorSet(tokens, i, (Real)ids[i]);
     free(ids);
     HashMapFree(rankMap);
     return tokens;
@@ -962,7 +1042,7 @@ Tensor TensorBPEDecode(Tensor tokens, Tensor merges)
     Stack stack = StackNew(sizeof(int));
     DynamicArray out = DynamicArrayNew(sizeof(unsigned char));
     for (int i = 0; i < n; i++) {
-        int id = (int)TensorGet(tokens, (int[MAX_DIMENSIONS]){i});
+        int id = (int)TensorGet(tokens, i);
         if (id < 0 || id >= vocabSize) continue;
         StackPush(stack, &id);
         int t;
@@ -972,8 +1052,8 @@ Tensor TensorBPEDecode(Tensor tokens, Tensor merges)
                 DynamicArrayPush(out, &b);
             } else {
                 int r = t - 256;
-                int right = (int)TensorGet(merges, (int[MAX_DIMENSIONS]){r, 1});
-                int left  = (int)TensorGet(merges, (int[MAX_DIMENSIONS]){r, 0});
+                int right = (int)TensorGet(merges, 2 * r + 1);
+                int left  = (int)TensorGet(merges, 2 * r);
                 StackPush(stack, &right);
                 StackPush(stack, &left);
             }
@@ -984,7 +1064,7 @@ Tensor TensorBPEDecode(Tensor tokens, Tensor merges)
     int total = DynamicArraySize(out);
     Tensor bytes = TensorNew(1, (int[]){total}, REAL, FALSE);
     for (int i = 0; i < total; i++)
-        TensorSet(bytes, (int[MAX_DIMENSIONS]){i}, (Real)*(unsigned char *)DynamicArrayGet(out, i));
+        TensorSet(bytes, i, (Real)*(unsigned char *)DynamicArrayGet(out, i));
     DynamicArrayFree(out);
     return bytes;
 }

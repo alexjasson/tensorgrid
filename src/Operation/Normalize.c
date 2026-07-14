@@ -60,21 +60,19 @@ static void normForward(void *arg, int start, int end)
     Real        *out = op->out.entries;
     int          sD  = A.strides[A.dimensions - 1];
 
-    if (A.type != REAL || A.scale != 1.0) {
-        const unsigned char *xb = (const unsigned char *)A.entries;
-        size_t esz = ScalarSize(A.type);
+    if (A.type != REAL || A.scale) {
         for (int r = start; r < end; r++) {
             int xBase = ctx->contiguous ? r * D : unravel(r, A.shape, A.strides, A.dimensions - 1);
             Real *o = out + (size_t)r * D;
 
             Real sum = 0.0f;
             for (int i = 0; i < D; i++)
-                sum += A.scale * ScalarLoad(xb + (size_t)(xBase + i * sD) * esz, A.type);
+                sum += TensorGet(A, xBase + i * sD);
             Real mu = sum / D;
 
             Real var = 0.0f;
             for (int i = 0; i < D; i++) {
-                Real d = A.scale * ScalarLoad(xb + (size_t)(xBase + i * sD) * esz, A.type) - mu;
+                Real d = TensorGet(A, xBase + i * sD) - mu;
                 var += d * d;
             }
             Real rstd = 1.0f / sqrte(var / D + ctx->eps);
@@ -82,7 +80,7 @@ static void normForward(void *arg, int start, int end)
             ctx->rstd[r] = rstd;
 
             for (int i = 0; i < D; i++)
-                o[i] = (A.scale * ScalarLoad(xb + (size_t)(xBase + i * sD) * esz, A.type) - mu) * rstd;
+                o[i] = (TensorGet(A, xBase + i * sD) - mu) * rstd;
         }
         return;
     }

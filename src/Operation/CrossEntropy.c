@@ -60,9 +60,6 @@ static void OperationCrossEntropyForward(Operation *op)
 {
     CrossEntropyContext *ctx = op->context;
     Tensor Z = op->A, Y = op->B;
-    const unsigned char *ze = (const unsigned char *)Z.entries;
-    const unsigned char *ye = (const unsigned char *)Y.entries;
-    size_t eZ = ScalarSize(Z.type), eY = ScalarSize(Y.type);
     Real loss = 0.0f;
 
     for (int row = 0; row < ctx->rows; row++) {
@@ -73,13 +70,13 @@ static void OperationCrossEntropyForward(Operation *op)
 
         Real max = -INFINITE;
         for (int c = 0; c < ctx->classes; c++) {
-            Real v = Z.scale * ScalarLoad(ze + (size_t)(zBase + c * zStride) * eZ, Z.type) * ctx->invTemperature;
+            Real v = TensorGet(Z, zBase + c * zStride) * ctx->invTemperature;
             if (v > max) max = v;
         }
 
         Real sum = 0.0f;
         for (int c = 0; c < ctx->classes; c++)
-            sum += expe(Z.scale * ScalarLoad(ze + (size_t)(zBase + c * zStride) * eZ, Z.type) * ctx->invTemperature - max);
+            sum += expe(TensorGet(Z, zBase + c * zStride) * ctx->invTemperature - max);
         Real logDenom = max + loge(sum);
 
         if (ctx->distribution) {
@@ -88,18 +85,18 @@ static void OperationCrossEntropyForward(Operation *op)
                       : unravel(row, Y.shape, Y.strides, Y.dimensions - 1);
             int yStride = Y.strides[Y.dimensions - 1];
             for (int c = 0; c < ctx->classes; c++) {
-                Real z = Z.scale * ScalarLoad(ze + (size_t)(zBase + c * zStride) * eZ, Z.type);
-                Real y = Y.scale * ScalarLoad(ye + (size_t)(yBase + c * yStride) * eY, Y.type);
+                Real z = TensorGet(Z, zBase + c * zStride);
+                Real y = TensorGet(Y, yBase + c * yStride);
                 loss -= y * (z * ctx->invTemperature - logDenom);
             }
         } else {
             int off = ctx->targetContiguous ? row : unravel(row, Y.shape, Y.strides, Y.dimensions);
-            int target = (int)(Y.scale * ScalarLoad(ye + (size_t)off * eY, Y.type) + (Real)0.5);
+            int target = (int)(TensorGet(Y, off) + (Real)0.5);
             if (target < 0 || target >= ctx->classes) {
                 fprintf(stderr, "Cross-entropy label out of range!\n");
                 exit(EXIT_FAILURE);
             }
-            loss += logDenom - Z.scale * ScalarLoad(ze + (size_t)(zBase + target * zStride) * eZ, Z.type) * ctx->invTemperature;
+            loss += logDenom - TensorGet(Z, zBase + target * zStride) * ctx->invTemperature;
         }
     }
 

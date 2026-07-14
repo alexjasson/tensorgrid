@@ -46,14 +46,12 @@ static void mapForward(void *arg, int start, int end)
     Real      *A   = op->A.entries;
     VectorUnary fn = (VectorUnary)ctx->u.fv;
 
-    if (op->A.type != REAL || op->A.scale != 1.0) {
+    if (op->A.type != REAL || op->A.scale) {
         ScalarUnary sfn = (ScalarUnary)ctx->u.f;
-        const unsigned char *Ab = (const unsigned char *)op->A.entries;
-        size_t eA = ScalarSize(op->A.type);
         int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
         for (int i = start; i < end; i++) {
             int off = aC ? i : unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
-            out[i] = sfn(op->A.scale * ScalarLoad(Ab + (size_t)off * eA, op->A.type));
+            out[i] = sfn(TensorGet(op->A, off));
         }
         return;
     }
