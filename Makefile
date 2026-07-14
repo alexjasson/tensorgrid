@@ -24,7 +24,7 @@ else
     $(error Unsupported OS! Only linux and mac are supported)
 endif
 
-CFLAGS = -Wall -Wextra -Werror -pedantic -Ofast -march=native -flto
+CFLAGS = -Wall -Wextra -Werror -pedantic -Ofast -march=native -flto=auto
 
 LIBDIR     = /usr/local/lib
 INCLUDEDIR = /usr/local/include
