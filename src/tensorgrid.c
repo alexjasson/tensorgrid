@@ -589,11 +589,32 @@ Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataT
     return t;
 }
 
+static void toReal(void *arg, int start, int end)
+{
+    Operation *op = arg;
+    const unsigned char *src = op->A.entries;
+    Real *dst = op->out.entries;
+    size_t esz = ScalarSize(op->A.type);
+    Vector scale = VectorBcast(op->A.scale);
+    int i = start;
+    for (; i + VECTOR_DIMS <= end; i += VECTOR_DIMS)
+        VectorStore(dst + i, VectorMul(VectorLoad(src + (size_t)i * esz, op->A.type), scale));
+    for (; i < end; i++)
+        dst[i] = op->A.scale * ScalarLoad(src + (size_t)i * esz, op->A.type);
+}
+
 Tensor TensorToType(Tensor A, DataType d)
 {
     Tensor out = TensorNew(A.dimensions, A.shape, d, FALSE);
     int size = TensorSize(A);
     int contiguous = isContiguous(A.shape, A.strides, A.dimensions);
+
+    if (out.type == REAL && contiguous) {
+        Operation op = { .A = A, .out = out };
+        OperationDispatch(toReal, &op, size, size);
+        return out;
+    }
+
     if (out.type <= INT32) { // For integer types, scale maps the largest value to the type's max
         Real typeMax = out.type == UINT8 ? UINT8_MAX : out.type == INT8 ? INT8_MAX : out.type == INT16 ? INT16_MAX : INT32_MAX;
         Real absmax  = 0.0;
