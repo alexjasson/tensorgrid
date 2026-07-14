@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include "../Operation.h"
 #include "../utility.h"
+#include "../math/Scalar.h"
 
 typedef struct {
     int size;
@@ -43,13 +44,17 @@ Tensor OperationMSE(Tensor y, Tensor y_hat)
 static void OperationMSEForward(Operation *op)
 {
     MSEContext *ctx = op->context;
-    Real *ye = op->A.entries, *ye2 = op->B.entries;
+    Tensor Y = op->A, Y2 = op->B;
+    const unsigned char *ye  = (const unsigned char *)Y.entries;
+    const unsigned char *ye2 = (const unsigned char *)Y2.entries;
+    size_t eY = ScalarSize(Y.type), eY2 = ScalarSize(Y2.type);
     Real sum = 0.0f;
 
     for (int i = 0; i < ctx->size; i++) {
-        int aOff = ctx->aContiguous ? i : unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
-        int bOff = ctx->bContiguous ? i : unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
-        Real d = ye[aOff] - ye2[bOff];
+        int aOff = ctx->aContiguous ? i : unravel(i, Y.shape, Y.strides, Y.dimensions);
+        int bOff = ctx->bContiguous ? i : unravel(i, Y2.shape, Y2.strides, Y2.dimensions);
+        Real d = Y.scale  * ScalarLoad(ye  + (size_t)aOff * eY,  Y.type)
+               - Y2.scale * ScalarLoad(ye2 + (size_t)bOff * eY2, Y2.type);
         sum += d * d;
     }
 

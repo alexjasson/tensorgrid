@@ -55,25 +55,27 @@ static void softmaxForward(void *arg, int start, int end)
     Operation *op = arg;
     SoftmaxContext *ctx = op->context;
     int classes = ctx->classes;
-    Real *logits = op->A.entries;
+    Tensor L = op->A;
+    const unsigned char *logits = (const unsigned char *)L.entries;
+    size_t esz = ScalarSize(L.type);
     Real *out = op->out.entries;
 
     for (int row = start; row < end; row++) {
         int xBase = ctx->logitsContiguous
                   ? row * classes
-                  : unravel(row, op->A.shape, op->A.strides, op->A.dimensions - 1);
-        int xStride = op->A.strides[op->A.dimensions - 1];
+                  : unravel(row, L.shape, L.strides, L.dimensions - 1);
+        int xStride = L.strides[L.dimensions - 1];
         Real *p = out + (size_t)row * classes;
 
         Real max = -INFINITE;
         for (int c = 0; c < classes; c++) {
-            Real z = logits[xBase + c * xStride] * ctx->invTemperature;
+            Real z = L.scale * ScalarLoad(logits + (size_t)(xBase + c * xStride) * esz, L.type) * ctx->invTemperature;
             if (z > max) max = z;
         }
 
         Real sum = 0.0f;
         for (int c = 0; c < classes; c++) {
-            Real e = expe(logits[xBase + c * xStride] * ctx->invTemperature - max);
+            Real e = expe(L.scale * ScalarLoad(logits + (size_t)(xBase + c * xStride) * esz, L.type) * ctx->invTemperature - max);
             p[c] = e;
             sum += e;
         }

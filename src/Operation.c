@@ -90,8 +90,10 @@ Tensor OperationExecute(Operation op)
     Tensor out = op.out, A = op.A, B = op.B;
 
     // Cast entries to Real
-    if (A.entries && (A.type != REAL || A.scale != 1.0)) op.A = TensorToType(A, REAL);
-    if (B.entries && (B.type != REAL || B.scale != 1.0)) op.B = TensorToType(B, REAL);
+    if (out.gradients) {
+        if (A.entries && (A.type != REAL || A.scale != 1.0)) op.A = TensorToType(A, REAL);
+        if (B.entries && (B.type != REAL || B.scale != 1.0)) op.B = TensorToType(B, REAL);
+    }
     op.forward(&op);
     if (op.out.gradients) operationArrayPush(op);
     else free(op.context);

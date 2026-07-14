@@ -2,9 +2,34 @@
 #include <string.h>
 #include <immintrin.h>
 #include "Vector.h"
+#include "Scalar.h"
 
 
-Vector VectorLoad(const Real *p)                  { Vector x; memcpy(&x, p, sizeof(x)); return x; }
+Vector VectorLoad(const void *p, DataType d)
+{
+    Vector x = VectorZero();
+    switch (d) {
+        case UINT8:   { const uint8_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case INT8:    { const int8_t  *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case INT16:   { const int16_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case INT32:   { const int32_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case FLOAT32: { const float   *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case FLOAT64: { const double  *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case FLOAT16:
+#if defined(__AVX2__) && defined(__F16C__) && !defined(__AVX512F__)
+            if (sizeof(Real) == 4) {
+                __m256 v = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)p));
+                memcpy(&x, &v, sizeof(x));
+                break;
+            }
+#endif
+            for (int i = 0; i < VECTOR_DIMS; i++)
+                x[i] = ScalarLoad((const uint16_t *)p + i, FLOAT16);
+            break;
+        case REAL: memcpy(&x, p, sizeof(x)); break;
+    }
+    return x;
+}
 void   VectorStore(Real *p, Vector x)             { memcpy(p, &x, sizeof(x)); }
 void   VectorFetch(const Real *p)                 { _mm_prefetch((const char *)p, _MM_HINT_ET0); }
 Vector VectorZero(void)                           { return (Vector){0}; }

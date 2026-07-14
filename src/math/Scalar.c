@@ -51,6 +51,9 @@ static uint16_t realToHalf(Real x)
     return h;
 }
 
+// Size of the data type in bytes
+size_t ScalarSize(DataType d) { return ((0x8424211u | (unsigned)sizeof(Real) << 28) >> (4 * d)) & 0xF; }
+
 Real ScalarLoad(const void *p, DataType d)
 {
     switch (d) {

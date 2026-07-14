@@ -11,6 +11,7 @@ typedef Scalar (*ScalarBinary)(Scalar, Scalar);
 
 Real ScalarLoad(const void *p, DataType d);
 void ScalarStore(void *p, DataType d, Real x);
+size_t ScalarSize(DataType d);
 
 // Unary functions and derivatives
 Scalar relu(Scalar a);

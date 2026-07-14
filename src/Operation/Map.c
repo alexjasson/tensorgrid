@@ -5,6 +5,7 @@
 #include "../Operation.h"
 #include "../utility.h"
 #include "../math/Vector.h"
+#include "../math/Scalar.h"
 
 typedef struct { Unary u; } MapContext;
 
@@ -44,16 +45,29 @@ static void mapForward(void *arg, int start, int end)
     Real      *out = op->out.entries;
     Real      *A   = op->A.entries;
     VectorUnary fn = (VectorUnary)ctx->u.fv;
+
+    if (op->A.type != REAL || op->A.scale != 1.0) {
+        ScalarUnary sfn = (ScalarUnary)ctx->u.f;
+        const unsigned char *Ab = (const unsigned char *)op->A.entries;
+        size_t eA = ScalarSize(op->A.type);
+        int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
+        for (int i = start; i < end; i++) {
+            int off = aC ? i : unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
+            out[i] = sfn(op->A.scale * ScalarLoad(Ab + (size_t)off * eA, op->A.type));
+        }
+        return;
+    }
+
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
         int i = start;
         for (; i + VECTOR_DIMS <= end; i += VECTOR_DIMS)
-            VectorStore(out + i, fn(VectorLoad(A + i)));
+            VectorStore(out + i, fn(VectorLoad(A + i, REAL)));
         if (i < end) {
             Real x[VECTOR_DIMS], y[VECTOR_DIMS];
             int tail = end - i;
             for (int t = 0; t < VECTOR_DIMS; t++)
                 x[t] = t < tail ? A[i + t] : 1.0f;
-            VectorStore(y, fn(VectorLoad(x)));
+            VectorStore(y, fn(VectorLoad(x, REAL)));
             for (int t = 0; t < tail; t++)
                 out[i + t] = y[t];
         }
@@ -65,7 +79,7 @@ static void mapForward(void *arg, int start, int end)
                 int j = i + t;
                 x[t] = t < tail ? A[unravel(j, op->A.shape, op->A.strides, op->A.dimensions)] : 1.0f;
             }
-            VectorStore(y, fn(VectorLoad(x)));
+            VectorStore(y, fn(VectorLoad(x, REAL)));
             for (int t = 0; t < tail; t++)
                 out[i + t] = y[t];
         }
@@ -83,7 +97,7 @@ static void mapBackward(void *arg, int start, int end)
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
         int j = start;
         for (; j + VECTOR_DIMS <= end; j += VECTOR_DIMS)
-            VectorStore(dA + j, VectorFma(VectorLoad(dout + j), dafn(VectorLoad(A + j)), VectorLoad(dA + j)));
+            VectorStore(dA + j, VectorFma(VectorLoad(dout + j, REAL), dafn(VectorLoad(A + j, REAL)), VectorLoad(dA + j, REAL)));
         if (j < end) {
             Real x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
             int tail = end - j;
@@ -92,7 +106,7 @@ static void mapBackward(void *arg, int start, int end)
                 g[t] = t < tail ? dout[j + t] : 0.0f;
                 old[t] = t < tail ? dA[j + t] : 0.0f;
             }
-            VectorStore(y, VectorFma(VectorLoad(g), dafn(VectorLoad(x)), VectorLoad(old)));
+            VectorStore(y, VectorFma(VectorLoad(g, REAL), dafn(VectorLoad(x, REAL)), VectorLoad(old, REAL)));
             for (int t = 0; t < tail; t++)
                 dA[j + t] = y[t];
         }
@@ -112,7 +126,7 @@ static void mapBackward(void *arg, int start, int end)
                     g[t] = dout[i];
                 }
             }
-            VectorStore(y, VectorMul(VectorLoad(g), dafn(VectorLoad(x))));
+            VectorStore(y, VectorMul(VectorLoad(g, REAL), dafn(VectorLoad(x, REAL))));
             for (int t = 0; t < tail; t++)
                 dA[offs[t]] += y[t];
         }

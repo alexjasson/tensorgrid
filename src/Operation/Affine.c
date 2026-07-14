@@ -5,6 +5,7 @@
 #include "../Operation.h"
 #include "../utility.h"
 #include "../math/Vector.h"
+#include "../math/Scalar.h"
 
 typedef struct { Unary u; int inner; } AffineContext;
 
@@ -55,18 +56,34 @@ static void affineForward(void *arg, int start, int end)
     Real *out = op->out.entries, *A = op->A.entries, *bias = op->B.entries;
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     VectorUnary fn = (VectorUnary)ctx->u.fv;
+
+    if (op->A.type != REAL || op->A.scale != 1.0 || op->B.type != REAL || op->B.scale != 1.0) {
+        ScalarUnary sfn = (ScalarUnary)ctx->u.f;
+        const unsigned char *Ab = (const unsigned char *)op->A.entries;
+        const unsigned char *Bb = (const unsigned char *)op->B.entries;
+        size_t eA = ScalarSize(op->A.type), eB = ScalarSize(op->B.type);
+        for (int o = start; o < end; o++)
+            for (int c = 0; c < biasSize; c++) {
+                Real bc = op->B.scale * ScalarLoad(Bb + (size_t)c * eB, op->B.type);
+                size_t base = ((size_t)o * biasSize + c) * inner;
+                for (int i = 0; i < inner; i++)
+                    out[base + i] = sfn(op->A.scale * ScalarLoad(Ab + (base + i) * eA, op->A.type) + bc);
+            }
+        return;
+    }
+
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
             int c = 0;
             for (; c + VECTOR_DIMS <= biasSize; c += VECTOR_DIMS)
-                VectorStore(out + base + c, fn(VectorAdd(VectorLoad(A + base + c), VectorLoad(bias + c))));
+                VectorStore(out + base + c, fn(VectorAdd(VectorLoad(A + base + c, REAL), VectorLoad(bias + c, REAL))));
             if (c < biasSize) {
                 Real x[VECTOR_DIMS], y[VECTOR_DIMS];
                 int tail = biasSize - c;
                 for (int t = 0; t < VECTOR_DIMS; t++)
                     x[t] = t < tail ? A[base + c + t] + bias[c + t] : 0.0f;
-                VectorStore(y, fn(VectorLoad(x)));
+                VectorStore(y, fn(VectorLoad(x, REAL)));
                 for (int t = 0; t < tail; t++)
                     out[base + c + t] = y[t];
             }
@@ -79,13 +96,13 @@ static void affineForward(void *arg, int start, int end)
                 int i = 0;
                 Vector bcv = VectorBcast(bc);
                 for (; i + VECTOR_DIMS <= inner; i += VECTOR_DIMS)
-                    VectorStore(out + base + i, fn(VectorAdd(VectorLoad(A + base + i), bcv)));
+                    VectorStore(out + base + i, fn(VectorAdd(VectorLoad(A + base + i, REAL), bcv)));
                 if (i < inner) {
                     Real x[VECTOR_DIMS], y[VECTOR_DIMS];
                     int tail = inner - i;
                     for (int t = 0; t < VECTOR_DIMS; t++)
                         x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
-                    VectorStore(y, fn(VectorLoad(x)));
+                    VectorStore(y, fn(VectorLoad(x, REAL)));
                     for (int t = 0; t < tail; t++)
                         out[base + i + t] = y[t];
                 }
@@ -108,7 +125,7 @@ static void affineBackwardDa(void *arg, int start, int end)
         size_t hi = (size_t)end   * biasSize * inner;
         size_t i  = lo;
         for (; i + VECTOR_DIMS <= hi; i += VECTOR_DIMS)
-            VectorStore(dA + i, VectorAdd(VectorLoad(dA + i), VectorLoad(dout + i)));
+            VectorStore(dA + i, VectorAdd(VectorLoad(dA + i, REAL), VectorLoad(dout + i, REAL)));
         for (; i < hi; i++)
             dA[i] += dout[i];
         return;
@@ -118,8 +135,8 @@ static void affineBackwardDa(void *arg, int start, int end)
             size_t base = (size_t)o * biasSize;
             int c = 0;
             for (; c + VECTOR_DIMS <= biasSize; c += VECTOR_DIMS) {
-                Vector v = VectorAdd(VectorLoad(A + base + c), VectorLoad(bias + c));
-                VectorStore(dA + base + c, VectorFma(VectorLoad(dout + base + c), dafn(v), VectorLoad(dA + base + c)));
+                Vector v = VectorAdd(VectorLoad(A + base + c, REAL), VectorLoad(bias + c, REAL));
+                VectorStore(dA + base + c, VectorFma(VectorLoad(dout + base + c, REAL), dafn(v), VectorLoad(dA + base + c, REAL)));
             }
             if (c < biasSize) {
                 Real x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
@@ -129,7 +146,7 @@ static void affineBackwardDa(void *arg, int start, int end)
                     g[t] = t < tail ? dout[base + c + t] : 0.0f;
                     old[t] = t < tail ? dA[base + c + t] : 0.0f;
                 }
-                VectorStore(y, VectorFma(VectorLoad(g), dafn(VectorLoad(x)), VectorLoad(old)));
+                VectorStore(y, VectorFma(VectorLoad(g, REAL), dafn(VectorLoad(x, REAL)), VectorLoad(old, REAL)));
                 for (int t = 0; t < tail; t++)
                     dA[base + c + t] = y[t];
             }
@@ -142,8 +159,8 @@ static void affineBackwardDa(void *arg, int start, int end)
                 int i = 0;
                 Vector bcv = VectorBcast(bc);
                 for (; i + VECTOR_DIMS <= inner; i += VECTOR_DIMS) {
-                    Vector v = VectorAdd(VectorLoad(A + base + i), bcv);
-                    VectorStore(dA + base + i, VectorFma(VectorLoad(dout + base + i), dafn(v), VectorLoad(dA + base + i)));
+                    Vector v = VectorAdd(VectorLoad(A + base + i, REAL), bcv);
+                    VectorStore(dA + base + i, VectorFma(VectorLoad(dout + base + i, REAL), dafn(v), VectorLoad(dA + base + i, REAL)));
                 }
                 if (i < inner) {
                     Real x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
@@ -153,7 +170,7 @@ static void affineBackwardDa(void *arg, int start, int end)
                         g[t] = t < tail ? dout[base + i + t] : 0.0f;
                         old[t] = t < tail ? dA[base + i + t] : 0.0f;
                     }
-                    VectorStore(y, VectorFma(VectorLoad(g), dafn(VectorLoad(x)), VectorLoad(old)));
+                    VectorStore(y, VectorFma(VectorLoad(g, REAL), dafn(VectorLoad(x, REAL)), VectorLoad(old, REAL)));
                     for (int t = 0; t < tail; t++)
                         dA[base + i + t] = y[t];
                 }
@@ -177,8 +194,8 @@ static void affineBackwardDb(void *arg, int start, int end)
         for (; c + VECTOR_DIMS <= end; c += VECTOR_DIMS) {
             Vector acc = VectorZero();
             for (int o = 0; o < outer; o++)
-                acc = VectorAdd(acc, VectorLoad(dout + (size_t)o * biasSize + c));
-            VectorStore(dB + c, VectorAdd(VectorLoad(dB + c), acc));
+                acc = VectorAdd(acc, VectorLoad(dout + (size_t)o * biasSize + c, REAL));
+            VectorStore(dB + c, VectorAdd(VectorLoad(dB + c, REAL), acc));
         }
         for (; c < end; c++) {
             Real s = 0;
@@ -202,13 +219,13 @@ static void affineBackwardDb(void *arg, int start, int end)
                 const Real *dr = dout + (size_t)o * biasSize;
                 for (int j = 0; j < nblk; j++) {
                     int cj   = c + j * VECTOR_DIMS;
-                    Vector z = VectorAdd(VectorLoad(ar + cj), VectorLoad(bias + cj));
-                    acc[j]   = VectorFma(VectorLoad(dr + cj), dafn(z), acc[j]);
+                    Vector z = VectorAdd(VectorLoad(ar + cj, REAL), VectorLoad(bias + cj, REAL));
+                    acc[j]   = VectorFma(VectorLoad(dr + cj, REAL), dafn(z), acc[j]);
                 }
             }
             for (int j = 0; j < nblk; j++) {
                 int cj = c + j * VECTOR_DIMS;
-                VectorStore(dB + cj, VectorAdd(VectorLoad(dB + cj), acc[j]));
+                VectorStore(dB + cj, VectorAdd(VectorLoad(dB + cj, REAL), acc[j]));
             }
             c = cc;
         }
@@ -218,7 +235,7 @@ static void affineBackwardDb(void *arg, int start, int end)
                 Real x[VECTOR_DIMS] = {0}, g[VECTOR_DIMS] = {0}, y[VECTOR_DIMS];
                 x[0] = A[(size_t)o * biasSize + c] + bc;
                 g[0] = dout[(size_t)o * biasSize + c];
-                VectorStore(y, VectorMul(VectorLoad(g), dafn(VectorLoad(x))));
+                VectorStore(y, VectorMul(VectorLoad(g, REAL), dafn(VectorLoad(x, REAL))));
                 s += y[0];
             }
             dB[c] += s;
@@ -234,8 +251,8 @@ static void affineBackwardDb(void *arg, int start, int end)
             int i = 0;
             Vector bcv = VectorBcast(bc);
             for (; i + VECTOR_DIMS <= inner; i += VECTOR_DIMS) {
-                Vector v = VectorAdd(VectorLoad(A + base + i), bcv);
-                sv = VectorFma(VectorLoad(dout + base + i), dafn(v), sv);
+                Vector v = VectorAdd(VectorLoad(A + base + i, REAL), bcv);
+                sv = VectorFma(VectorLoad(dout + base + i, REAL), dafn(v), sv);
             }
             if (i < inner) {
                 Real x[VECTOR_DIMS], g[VECTOR_DIMS], y[VECTOR_DIMS];
@@ -244,7 +261,7 @@ static void affineBackwardDb(void *arg, int start, int end)
                     x[t] = t < tail ? A[base + i + t] + bc : 0.0f;
                     g[t] = t < tail ? dout[base + i + t] : 0.0f;
                 }
-                VectorStore(y, VectorMul(VectorLoad(g), dafn(VectorLoad(x))));
+                VectorStore(y, VectorMul(VectorLoad(g, REAL), dafn(VectorLoad(x, REAL))));
                 for (int t = 0; t < tail; t++)
                     s += y[t];
             }

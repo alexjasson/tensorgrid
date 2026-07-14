@@ -57,8 +57,10 @@ static void scatterForward(void *arg, int start, int end)
     ScatterContext *ctx = op->context;
     Tensor A      = op->A;
     Tensor I      = op->B;
-    Real *Ae      = A.entries;
-    Real *Ie      = I.entries;
+    const unsigned char *Ae = (const unsigned char *)A.entries;
+    const unsigned char *Ie = (const unsigned char *)I.entries;
+    size_t eA     = ScalarSize(A.type);
+    size_t eI     = ScalarSize(I.type);
     Real *oute    = op->out.entries;
     int axis      = ctx->axis;
     int n         = op->out.shape[axis];
@@ -71,7 +73,7 @@ static void scatterForward(void *arg, int start, int end)
 
     // Vectorized MAX/MIN/ADD reduction of each output's contiguous input segment
     f reducer = ctx->b.f;
-    if (n == 1 && innerSize == 1 && aC &&
+    if (n == 1 && innerSize == 1 && aC && A.type == REAL && A.scale == 1.0 &&
         (reducer == MAX.f || reducer == MIN.f || reducer == ADD.f)) {
         Real *out = op->out.entries;
         Real  fill = ctx->fill;
@@ -81,15 +83,15 @@ static void scatterForward(void *arg, int start, int end)
             if (reducer == ADD.f) {
                 Vector acc = VectorZero();
                 for (; j + VECTOR_DIMS <= idxSize; j += VECTOR_DIMS)
-                    acc = VectorAdd(acc, VectorLoad(row + j));
+                    acc = VectorAdd(acc, VectorLoad(row + j, REAL));
                 Real r = fill + VectorHsum(acc);
                 for (; j < idxSize; j++) r += row[j];
                 out[i] = r;
             } else {
                 Vector acc = VectorBcast(fill);
                 for (; j + VECTOR_DIMS <= idxSize; j += VECTOR_DIMS)
-                    acc = (reducer == MAX.f) ? VectorMax(acc, VectorLoad(row + j))
-                                             : VectorMin(acc, VectorLoad(row + j));
+                    acc = (reducer == MAX.f) ? VectorMax(acc, VectorLoad(row + j, REAL))
+                                             : VectorMin(acc, VectorLoad(row + j, REAL));
                 Real lanes[VECTOR_DIMS]; VectorStore(lanes, acc);
                 Real r = fill;
                 for (int t = 0; t < VECTOR_DIMS; t++)
@@ -113,8 +115,9 @@ static void scatterForward(void *arg, int start, int end)
 
             Real acc = ctx->fill;
             for (int ix = 0; ix < idxSize; ix++) {
-                if ((int)Ie[ix] == kTarget)
-                    acc = ((ScalarBinary)ctx->b.f)(acc, Ae[(outer * idxSize + ix) * innerSize + inner]);
+                if ((int)(I.scale * ScalarLoad(Ie + (size_t)ix * eI, I.type) + (Real)0.5) == kTarget)
+                    acc = ((ScalarBinary)ctx->b.f)(acc, A.scale *
+                          ScalarLoad(Ae + (size_t)((outer * idxSize + ix) * innerSize + inner) * eA, A.type));
             }
             oute[i] = acc;
         }
@@ -134,10 +137,11 @@ static void scatterForward(void *arg, int start, int end)
             Real acc = ctx->fill;
             for (int ix = 0; ix < idxSize; ix++) {
                 int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
-                if ((int)Ie[idxOff] == kTarget) {
+                if ((int)(I.scale * ScalarLoad(Ie + (size_t)idxOff * eI, I.type) + (Real)0.5) == kTarget) {
                     int aIxOff = aC ? ix * innerSize
                                     : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
-                    acc = ((ScalarBinary)ctx->b.f)(acc, Ae[outerOff + aIxOff + innerOff]);
+                    acc = ((ScalarBinary)ctx->b.f)(acc, A.scale *
+                          ScalarLoad(Ae + (size_t)(outerOff + aIxOff + innerOff) * eA, A.type));
                 }
             }
             oute[i] = acc;
@@ -170,7 +174,7 @@ static void scatterBackward(void *arg, int start, int end)
             Real *row = A.gradients + (size_t)i * idxSize;
             int j = 0;
             for (; j + VECTOR_DIMS <= idxSize; j += VECTOR_DIMS)
-                VectorStore(row + j, VectorAdd(VectorLoad(row + j), gv));
+                VectorStore(row + j, VectorAdd(VectorLoad(row + j, REAL), gv));
             for (; j < idxSize; j++) row[j] += dout[i];
         }
         return;
@@ -197,7 +201,7 @@ static void scatterBackward(void *arg, int start, int end)
         int count = 0;
         for (int ix = 0; ix < idxSize; ix++) {
             int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
-            if ((int)Ie[idxOff] == kTarget) {
+            if ((int)(Ie[idxOff] + (Real)0.5) == kTarget) {
                 int aIxOff = aC ? ix * innerSize
                                 : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
                 Real Av = Ae[outerOff + aIxOff + innerOff];
@@ -210,7 +214,7 @@ static void scatterBackward(void *arg, int start, int end)
         int c = count - 1;
         for (int ix = idxSize - 1; ix >= 0 && c >= 0; ix--) {
             int idxOff = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
-            if ((int)Ie[idxOff] == kTarget) {
+            if ((int)(Ie[idxOff] + (Real)0.5) == kTarget) {
                 int aIxOff  = aC ? ix * innerSize
                                  : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
                 int aOffset = outerOff + aIxOff + innerOff;

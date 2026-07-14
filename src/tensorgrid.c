@@ -41,9 +41,8 @@ struct tensorArray {
     DynamicArray tensors;
 };
 
-// Size of data type in bytes and pointer to the entry at given index
-static size_t dataSize(DataType d) { return ((0x8424211u | (unsigned)sizeof(Real) << 28) >> (4 * d)) & 0xF; }
-static void *entry(Tensor A, size_t index) { return (unsigned char *)A.entries + index * dataSize(A.type); }
+// Pointer to the entry at given index
+static void *entry(Tensor A, size_t index) { return (unsigned char *)A.entries + index * ScalarSize(A.type); }
 
 int TensorSize(Tensor A)
 {
@@ -72,7 +71,7 @@ Tensor TensorNew(int dimensions, int *shape, DataType d, int autograd)
         fprintf(stderr, "TensorNew requires a valid DataType!\n");
         exit(EXIT_FAILURE);
     }
-    if ((d == FLOAT32 || d == FLOAT64) && dataSize(d) == sizeof(Real))
+    if ((d == FLOAT32 || d == FLOAT64) && ScalarSize(d) == sizeof(Real))
         d = REAL;
     if (autograd && d != REAL) {
         fprintf(stderr, "TensorNew autograd requires REAL entries!\n");
@@ -89,7 +88,7 @@ Tensor TensorNew(int dimensions, int *shape, DataType d, int autograd)
             t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
     }
     int size = TensorSize(t);
-    size_t footprint = (size_t)size * dataSize(d);
+    size_t footprint = (size_t)size * ScalarSize(d);
     MemoryPool pool = MemoryPoolGet();
     t.entries   = MemoryPoolAlloc(pool, footprint);
     memset(t.entries, 0, footprint);
@@ -126,7 +125,7 @@ void TensorFree(Tensor A)
     for (int i = 0; i < A.dimensions; i++)
         if (A.strides[i] > 0) footprint += (size_t)(A.shape[i] - 1) * A.strides[i];
     MemoryPool pool = MemoryPoolGet();
-    MemoryPoolFree(pool, A.entries, footprint * dataSize(A.type));
+    MemoryPoolFree(pool, A.entries, footprint * ScalarSize(A.type));
     MemoryPoolFree(pool, A.gradients, footprint * sizeof(Real));
     if (A.optimizer) {
         free(A.optimizer->m);
@@ -461,7 +460,7 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
         for (int i = 0; i < n; i++)
             memcpy(entry(out, (size_t)i * rowSize),
                    entry(A, (size_t)perm[i] * rowSize),
-                   (size_t)rowSize * dataSize(A.type));
+                   (size_t)rowSize * ScalarSize(A.type));
     } else {
         int innerDims = A.dimensions - 1;
         for (int i = 0; i < n; i++) {
@@ -578,7 +577,7 @@ Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataT
     }
 
     Tensor t = TensorNew(dimensions, shape, d, FALSE);
-    size_t data = (size_t)TensorSize(t) * dataSize(d);
+    size_t data = (size_t)TensorSize(t) * ScalarSize(d);
     if (fread(t.entries, 1, data, f) != data) {
         fprintf(stderr, "Cannot read file: %s\n", path);
         TensorFree(t);
@@ -682,7 +681,7 @@ void TensorArrayWrite(TensorArray ta, char *path)
         }
 
         // Write tensor entries
-        size_t data = (size_t)TensorSize(*t) * dataSize(t->type);
+        size_t data = (size_t)TensorSize(*t) * ScalarSize(t->type);
         if (fwrite(t->entries, 1, data, f) != data) {
             fprintf(stderr, "Cannot write file: %s\n", path);
             fclose(f);
@@ -726,7 +725,7 @@ int TensorArrayRead(TensorArray ta, char *path)
         if (fread(&type, sizeof(type), 1, f) != 1 || (uint32_t)type > FLOAT64 ||
             fread(&scale, sizeof(scale), 1, f) != 1)
             goto error;
-        if ((type == FLOAT32 || type == FLOAT64) && dataSize(type) == sizeof(Real))
+        if ((type == FLOAT32 || type == FLOAT64) && ScalarSize(type) == sizeof(Real))
             type = REAL;
 
         // Read tensor shape
@@ -764,7 +763,7 @@ int TensorArrayRead(TensorArray ta, char *path)
         t->scale = (Real)scale;
 
         // Read entries into the tensor
-        size_t data = (size_t)TensorSize(*t) * dataSize(t->type);
+        size_t data = (size_t)TensorSize(*t) * ScalarSize(t->type);
         if (fread(t->entries, 1, data, f) != data)
             goto error;
     }

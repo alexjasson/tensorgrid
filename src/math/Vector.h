@@ -24,7 +24,7 @@ typedef Real Vector __attribute__((__vector_size__(VECTOR_BYTES)));
 typedef Vector (*VectorUnary)(Vector);
 typedef Vector (*VectorBinary)(Vector, Vector);
 
-Vector VectorLoad(const Real *p);
+Vector VectorLoad(const void *p, DataType d);
 void   VectorStore(Real *p, Vector x);
 void   VectorFetch(const Real *p);
 Vector VectorBcast(Real x);

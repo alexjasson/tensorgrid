@@ -60,6 +60,33 @@ static void normForward(void *arg, int start, int end)
     Real        *out = op->out.entries;
     int          sD  = A.strides[A.dimensions - 1];
 
+    if (A.type != REAL || A.scale != 1.0) {
+        const unsigned char *xb = (const unsigned char *)A.entries;
+        size_t esz = ScalarSize(A.type);
+        for (int r = start; r < end; r++) {
+            int xBase = ctx->contiguous ? r * D : unravel(r, A.shape, A.strides, A.dimensions - 1);
+            Real *o = out + (size_t)r * D;
+
+            Real sum = 0.0f;
+            for (int i = 0; i < D; i++)
+                sum += A.scale * ScalarLoad(xb + (size_t)(xBase + i * sD) * esz, A.type);
+            Real mu = sum / D;
+
+            Real var = 0.0f;
+            for (int i = 0; i < D; i++) {
+                Real d = A.scale * ScalarLoad(xb + (size_t)(xBase + i * sD) * esz, A.type) - mu;
+                var += d * d;
+            }
+            Real rstd = 1.0f / sqrte(var / D + ctx->eps);
+            ctx->mean[r] = mu;
+            ctx->rstd[r] = rstd;
+
+            for (int i = 0; i < D; i++)
+                o[i] = (A.scale * ScalarLoad(xb + (size_t)(xBase + i * sD) * esz, A.type) - mu) * rstd;
+        }
+        return;
+    }
+
     for (int r = start; r < end; r++) {
         int xBase = ctx->contiguous ? r * D : unravel(r, A.shape, A.strides, A.dimensions - 1);
         const Real *x = in + xBase;
@@ -69,7 +96,7 @@ static void normForward(void *arg, int start, int end)
         int i = 0;
         if (ctx->contiguous || sD == 1) {
             Vector vs = VectorZero();
-            for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) vs = VectorAdd(vs, VectorLoad(x + i));
+            for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) vs = VectorAdd(vs, VectorLoad(x + i, REAL));
             sum = VectorHsum(vs);
             for (; i < D; i++) sum += x[i];
         } else {
@@ -82,7 +109,7 @@ static void normForward(void *arg, int start, int end)
         if (ctx->contiguous || sD == 1) {
             Vector vmu = VectorBcast(mu), vv = VectorZero();
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) {
-                Vector d = VectorSub(VectorLoad(x + i), vmu);
+                Vector d = VectorSub(VectorLoad(x + i, REAL), vmu);
                 vv = VectorFma(d, d, vv);
             }
             var = VectorHsum(vv);
@@ -100,7 +127,7 @@ static void normForward(void *arg, int start, int end)
         if (ctx->contiguous || sD == 1) {
             Vector vmu = VectorBcast(mu), vr = VectorBcast(rstd);
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS)
-                VectorStore(o + i, VectorMul(VectorSub(VectorLoad(x + i), vmu), vr));
+                VectorStore(o + i, VectorMul(VectorSub(VectorLoad(x + i, REAL), vmu), vr));
             for (; i < D; i++) o[i] = (x[i] - mu) * rstd;
         } else {
             for (; i < D; i++) o[i] = (x[i * sD] - mu) * rstd;
@@ -133,8 +160,8 @@ static void normBackward(void *arg, int start, int end)
             Vector vmu = VectorBcast(mu), vr = VectorBcast(rstd);
             Vector vs1 = VectorZero(), vs2 = VectorZero();
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) {
-                Vector dyv = VectorLoad(dy + i);
-                Vector y   = VectorMul(VectorSub(VectorLoad(x + i), vmu), vr);
+                Vector dyv = VectorLoad(dy + i, REAL);
+                Vector y   = VectorMul(VectorSub(VectorLoad(x + i, REAL), vmu), vr);
                 vs1 = VectorAdd(vs1, dyv);
                 vs2 = VectorFma(dyv, y, vs2);
             }
@@ -151,10 +178,10 @@ static void normBackward(void *arg, int start, int end)
             Vector vmu = VectorBcast(mu), vr = VectorBcast(rstd);
             Vector vc1 = VectorBcast(c1), vc2 = VectorBcast(c2);
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) {
-                Vector y   = VectorMul(VectorSub(VectorLoad(x + i), vmu), vr);
-                Vector dyv = VectorLoad(dy + i);
+                Vector y   = VectorMul(VectorSub(VectorLoad(x + i, REAL), vmu), vr);
+                Vector dyv = VectorLoad(dy + i, REAL);
                 Vector res = VectorMul(vr, VectorSub(VectorSub(dyv, vc1), VectorMul(y, vc2)));
-                VectorStore(gx + i, VectorAdd(VectorLoad(gx + i), res));
+                VectorStore(gx + i, VectorAdd(VectorLoad(gx + i, REAL), res));
             }
             for (; i < D; i++) {
                 Real y = (x[i] - mu) * rstd;

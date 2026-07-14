@@ -27,10 +27,17 @@ Tensor OperationMultiply(Tensor A, Tensor B)
 
 static void OperationMultiplyForward(Operation *op)
 {
-    int dimsA = op->A.dimensions, dimsB = op->B.dimensions;
+    Tensor A = op->A, B = op->B;
+    int dimsA = A.dimensions, dimsB = B.dimensions;
+    if (A.type != REAL || A.scale != 1.0) op->A = TensorToType(A, REAL);
+    if (dimsB >= 3 && (B.type != REAL || B.scale != 1.0)) op->B = TensorToType(B, REAL);
+
     int m = op->A.shape[dimsA - 2], k = op->A.shape[dimsA - 1], n = op->B.shape[dimsB - 1];
     int batchSize = TensorSize(op->out) / (m * n);
     OperationDispatch(multiplyForward, op, batchSize * m, (long)TensorSize(op->out) * k);
+
+    if (op->A.entries != A.entries) { TensorFree(op->A); op->A = A; }
+    if (op->B.entries != B.entries) { TensorFree(op->B); op->B = B; }
 }
 
 static void OperationMultiplyBackward(Operation *op)
@@ -64,11 +71,15 @@ static void multiplyForward(void *arg, int start, int end)
     int aRowStride = op->A.strides[dimsA - 2], aColStride = op->A.strides[dimsA - 1];
     int bRowStride = op->B.strides[dimsB - 2], bColStride = op->B.strides[dimsB - 1];
 
+    Matrix Bv  = MatrixView(op->B.entries, k, n, bRowStride, bColStride);
+    Bv.type    = op->B.type;
+    Bv.scale   = op->B.scale;
+
     // If B is shared and A's batches are contiguous, fuse into a single GEMM
     if (batchStrideB == 0 && batchStrideA == m * aRowStride) {
         memset((Real *)op->out.entries + (size_t)start * n, 0, (size_t)(end - start) * n * sizeof(Real));
         MatrixMultiply(MatrixView((Real *)(Real *)op->A.entries + (size_t)start * aRowStride, end - start, k, aRowStride, aColStride),
-                       MatrixView(op->B.entries, k, n, bRowStride, bColStride),
+                       Bv,
                        MatrixView((Real *)op->out.entries + (size_t)start * n, end - start, n, n, 1));
         return;
     }
@@ -81,12 +92,12 @@ static void multiplyForward(void *arg, int start, int end)
         int chunkEnd   = (end < batchEnd) ? end : batchEnd;
         int r1         = r0 + (chunkEnd - i);
         Real *A_batch = (Real *)(Real *)op->A.entries + (size_t)batch * batchStrideA;
-        Real *B_batch = (Real *)op->B.entries + (size_t)batch * batchStrideB;
         Real *C_batch = (Real *)op->out.entries + (size_t)batch * m * n;
 
+        Bv.data = (Real *)op->B.entries + (size_t)batch * batchStrideB;
         memset(C_batch + (size_t)r0 * n, 0, (size_t)(r1 - r0) * n * sizeof(Real));
         MatrixMultiply(MatrixView(A_batch + (size_t)r0 * aRowStride, r1 - r0, k, aRowStride, aColStride),
-                       MatrixView(B_batch, k, n, bRowStride, bColStride),
+                       Bv,
                        MatrixView(C_batch + (size_t)r0 * n, r1 - r0, n, n, 1));
         i = chunkEnd;
     }

@@ -59,44 +59,47 @@ Tensor OperationCrossEntropy(Tensor labels, Tensor logits, Real temperature)
 static void OperationCrossEntropyForward(Operation *op)
 {
     CrossEntropyContext *ctx = op->context;
-    Real *ze = op->A.entries, *ye = op->B.entries;
+    Tensor Z = op->A, Y = op->B;
+    const unsigned char *ze = (const unsigned char *)Z.entries;
+    const unsigned char *ye = (const unsigned char *)Y.entries;
+    size_t eZ = ScalarSize(Z.type), eY = ScalarSize(Y.type);
     Real loss = 0.0f;
 
     for (int row = 0; row < ctx->rows; row++) {
         int zBase = ctx->logitsContiguous
                   ? row * ctx->classes
-                  : unravel(row, op->A.shape, op->A.strides, op->A.dimensions - 1);
-        int zStride = op->A.strides[op->A.dimensions - 1];
+                  : unravel(row, Z.shape, Z.strides, Z.dimensions - 1);
+        int zStride = Z.strides[Z.dimensions - 1];
 
         Real max = -INFINITE;
         for (int c = 0; c < ctx->classes; c++) {
-            Real v = ze[zBase + c * zStride] * ctx->invTemperature;
+            Real v = Z.scale * ScalarLoad(ze + (size_t)(zBase + c * zStride) * eZ, Z.type) * ctx->invTemperature;
             if (v > max) max = v;
         }
 
         Real sum = 0.0f;
         for (int c = 0; c < ctx->classes; c++)
-            sum += expe(ze[zBase + c * zStride] * ctx->invTemperature - max);
+            sum += expe(Z.scale * ScalarLoad(ze + (size_t)(zBase + c * zStride) * eZ, Z.type) * ctx->invTemperature - max);
         Real logDenom = max + loge(sum);
 
         if (ctx->distribution) {
             int yBase = ctx->targetContiguous
                       ? row * ctx->classes
-                      : unravel(row, op->B.shape, op->B.strides, op->B.dimensions - 1);
-            int yStride = op->B.strides[op->B.dimensions - 1];
+                      : unravel(row, Y.shape, Y.strides, Y.dimensions - 1);
+            int yStride = Y.strides[Y.dimensions - 1];
             for (int c = 0; c < ctx->classes; c++) {
-                Real z = ze[zBase + c * zStride];
-                Real y = ye[yBase + c * yStride];
+                Real z = Z.scale * ScalarLoad(ze + (size_t)(zBase + c * zStride) * eZ, Z.type);
+                Real y = Y.scale * ScalarLoad(ye + (size_t)(yBase + c * yStride) * eY, Y.type);
                 loss -= y * (z * ctx->invTemperature - logDenom);
             }
         } else {
-            int off = ctx->targetContiguous ? row : unravel(row, op->B.shape, op->B.strides, op->B.dimensions);
-            int target = (int)ye[off];
+            int off = ctx->targetContiguous ? row : unravel(row, Y.shape, Y.strides, Y.dimensions);
+            int target = (int)(Y.scale * ScalarLoad(ye + (size_t)off * eY, Y.type) + (Real)0.5);
             if (target < 0 || target >= ctx->classes) {
                 fprintf(stderr, "Cross-entropy label out of range!\n");
                 exit(EXIT_FAILURE);
             }
-            loss += logDenom - ze[zBase + target * zStride] * ctx->invTemperature;
+            loss += logDenom - Z.scale * ScalarLoad(ze + (size_t)(zBase + target * zStride) * eZ, Z.type) * ctx->invTemperature;
         }
     }
 
@@ -149,7 +152,7 @@ static void crossEntropyBackward(void *arg, int start, int end)
                 targetSum += ye[yBase + c * yStride];
         } else {
             int off = ctx->targetContiguous ? row : unravel(row, op->B.shape, op->B.strides, op->B.dimensions);
-            target = (int)ye[off];
+            target = (int)(ye[off] + (Real)0.5);
         }
         for (int c = 0; c < ctx->classes; c++) {
             Real z = ze[zBase + c * zStride];

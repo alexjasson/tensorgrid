@@ -5,6 +5,7 @@
 #include "../Operation.h"
 #include "../utility.h"
 #include "../math/Vector.h"
+#include "../math/Scalar.h"
 
 typedef struct { int axis; } GatherContext;
 
@@ -60,8 +61,10 @@ static void gatherForward(void *arg, int start, int end)
     GatherContext *ctx = op->context;
     Tensor A      = op->A;
     Tensor I      = op->B;
-    Real *Ae      = A.entries;
-    Real *Ie      = I.entries;
+    const unsigned char *Ae = (const unsigned char *)A.entries;
+    const unsigned char *Ie = (const unsigned char *)I.entries;
+    size_t eA     = ScalarSize(A.type);
+    size_t eI     = ScalarSize(I.type);
     Real *oute    = op->out.entries;
     int axis      = ctx->axis;
     int axisSize  = A.shape[axis];
@@ -77,8 +80,8 @@ static void gatherForward(void *arg, int start, int end)
             int rem   = i / innerSize;
             int ix    = rem % idxSize;
             int outer = rem / idxSize;
-            int k     = (int)Ie[ix];
-            oute[i] = Ae[(outer * axisSize + k) * innerSize + inner];
+            int k     = (int)(I.scale * ScalarLoad(Ie + (size_t)ix * eI, I.type) + (Real)0.5);
+            oute[i] = A.scale * ScalarLoad(Ae + (size_t)((outer * axisSize + k) * innerSize + inner) * eA, A.type);
         }
     } else {
         for (int i = start; i < end; i++) {
@@ -94,8 +97,8 @@ static void gatherForward(void *arg, int start, int end)
                                         A.dimensions - axis - 1);
             int aStride  = aC ? innerSize : A.strides[axis];
             int idxOff   = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
-            int k        = (int)Ie[idxOff];
-            oute[i] = Ae[outerOff + k * aStride + innerOff];
+            int k        = (int)(I.scale * ScalarLoad(Ie + (size_t)idxOff * eI, I.type) + (Real)0.5);
+            oute[i] = A.scale * ScalarLoad(Ae + (size_t)(outerOff + k * aStride + innerOff) * eA, A.type);
         }
     }
 }
@@ -123,12 +126,12 @@ static void gatherBackward(void *arg, int start, int end)
         Real *dout = op->out.gradients;
         for (int o = 0; o < outer; o++) {
             for (int ix = 0; ix < idxSize; ix++) {
-                int k = (int)Ie[ix];
+                int k = (int)(Ie[ix] + (Real)0.5);
                 const Real *src = dout + ((size_t)o * idxSize  + ix) * innerSize;
                 Real       *dst = dA   + ((size_t)o * axisSize + k)  * innerSize;
                 int c = start;
                 for (; c + VECTOR_DIMS <= end; c += VECTOR_DIMS)
-                    VectorStore(dst + c, VectorAdd(VectorLoad(dst + c), VectorLoad(src + c)));
+                    VectorStore(dst + c, VectorAdd(VectorLoad(dst + c, REAL), VectorLoad(src + c, REAL)));
                 for (; c < end; c++)
                     dst[c] += src[c];
             }
@@ -157,13 +160,13 @@ static void gatherBackward(void *arg, int start, int end)
         Real sum = 0;
         if (iC) {
             for (int ix = 0; ix < idxSize; ix++) {
-                if ((int)Ie[ix] == kTarget)
+                if ((int)(Ie[ix] + (Real)0.5) == kTarget)
                     sum += op->out.gradients[(outer * idxSize + ix) * innerSize + inner];
             }
         } else {
             for (int ix = 0; ix < idxSize; ix++) {
                 int idxOff = unravel(ix, I.shape, I.strides, I.dimensions);
-                if ((int)Ie[idxOff] == kTarget)
+                if ((int)(Ie[idxOff] + (Real)0.5) == kTarget)
                     sum += op->out.gradients[(outer * idxSize + ix) * innerSize + inner];
             }
         }
