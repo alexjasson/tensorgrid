@@ -130,6 +130,59 @@ Real VectorHsum(Vector v)
     return s;
 }
 
+// MR x NRV block of vector registers, matching the register block in Matrix.c
+#define NRV 2
+#define NR  (NRV * VECTOR_DIMS)
+#define MR  ((VECTOR_CARD - NRV - 1) / NRV)
+
+void VectorDot(void *A, void *B, Real *C, int n, int k)
+{
+    int32_t acc[MR][NRV] __attribute__((__vector_size__(VECTOR_DIMS * 4))) = {0};
+    int kPairs = (k + 1) / 2;
+
+    const Real *scale = A;
+    const int16_t *aRow = (const int16_t *)(scale + MR);
+    const int16_t *bRow = B;
+    for (int p2 = 0; p2 < kPairs; p2++, aRow += 2 * MR, bRow += 2 * NR) {
+        int32_t b[NRV] __attribute__((__vector_size__(VECTOR_DIMS * 4)));
+        for (int v = 0; v < NRV; v++)
+            memcpy(&b[v], bRow + v * 2 * VECTOR_DIMS, sizeof(b[v]));
+
+        for (int mr = 0; mr < MR; mr++)
+            for (int v = 0; v < NRV; v++) {
+                int32_t c __attribute__((__vector_size__(VECTOR_DIMS * 4))) = acc[mr][v];
+#if defined(__AVX2__) && !defined(__AVX512F__)
+                if (sizeof(Real) == 4) {
+                    int32_t pair;
+                    memcpy(&pair, aRow + 2 * mr, sizeof(pair));
+                    __m256i bv, cv;
+                    memcpy(&bv, &b[v], sizeof(b[v]));
+                    memcpy(&cv, &c, sizeof(c));
+                    cv = _mm256_add_epi32(cv, _mm256_madd_epi16(_mm256_set1_epi32(pair), bv));
+                    memcpy(&c, &cv, sizeof(c));
+                    acc[mr][v] = c;
+                    continue;
+                }
+#endif
+                for (int i = 0; i < VECTOR_DIMS; i++)
+                    c[i] += (int32_t)aRow[2 * mr] * bRow[v * 2 * VECTOR_DIMS + 2 * i]
+                          + (int32_t)aRow[2 * mr + 1] * bRow[v * 2 * VECTOR_DIMS + 2 * i + 1];
+                acc[mr][v] = c;
+            }
+    }
+
+    for (int mr = 0; mr < MR; mr++) {
+        Real *Crow = C + (size_t)mr * n;
+        Vector s = VectorBcast(scale[mr]);
+        for (int v = 0; v < NRV; v++) {
+            Vector sum = VectorZero();
+            for (int i = 0; i < VECTOR_DIMS; i++)
+                sum[i] = (Real)acc[mr][v][i];
+            VectorStore(Crow + v * VECTOR_DIMS, VectorFma(s, sum, VectorLoad(Crow + v * VECTOR_DIMS, REAL)));
+        }
+    }
+}
+
 // exp(a) with ~1e-6 (float) or ~1e-13 (double) relative error
 Vector expv(Vector a)
 {

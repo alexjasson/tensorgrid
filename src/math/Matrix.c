@@ -2,6 +2,7 @@
 
 #include "Matrix.h"
 #include <stddef.h>
+#include <stdint.h>
 #include "Vector.h"
 #include "Scalar.h"
 
@@ -20,10 +21,10 @@
 #define SMALL_N 256
 
 static int imin(int a, int b);
-static void packB(Real *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock);
-static void packA(Real *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock);
-static void microKernelContiguous(Real *Ap, Real *Bp, int kBlock, Matrix C);
-static void microKernel(Real *Ap, Real *Bp, int kBlock, Matrix C, int mValid, int nValid);
+static void packB(void *buf, Matrix B, int p0, int kBlock, int j0, int nBlock);
+static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int kBlock);
+static void microKernelContiguous(const void *Ap, const void *Bp, int kBlock, Matrix C);
+static void microKernel(void *Ap, void *Bp, int kBlock, Matrix C, int mValid, int nValid);
 static void smallGemm(Matrix A, Matrix B, Matrix C);
 static void packedGemm(Matrix A, Matrix B, Matrix C);
 
@@ -35,11 +36,46 @@ Matrix MatrixView(Real *data, int rows, int cols, int sRow, int sCol)
 static int imin(int a, int b) { return a < b ? a : b; }
 
 // Pack a B block into NR-wide panels, padding the right edge with zeros
-static void packB(Real *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock)
+static void packB(void *buf, Matrix B, int p0, int kBlock, int j0, int nBlock)
 {
     int panels = (nBlock + NR - 1) / NR;
     int fullPanels = (B.sCol == 1) ? nBlock / NR : 0;
 
+    // Integer path
+    if (B.type == INT8 && sizeof(Real) == 4) {
+        const int8_t *base = (const int8_t *)B.data;
+        int kPairs = (kBlock + 1) / 2;
+
+        for (int jp = 0; jp < fullPanels; jp++) {
+            int16_t *dst = (int16_t *)buf + (size_t)jp * kPairs * 2 * NR;
+            const int8_t *src = base + (size_t)p0 * B.sRow + j0 + (size_t)jp * NR;
+            for (int p2 = 0; p2 < kBlock / 2; p2++)
+                for (int nr = 0; nr < NR; nr++) {
+                    dst[(p2 * NR + nr) * 2]     = src[(size_t)(2 * p2) * B.sRow + nr];
+                    dst[(p2 * NR + nr) * 2 + 1] = src[(size_t)(2 * p2 + 1) * B.sRow + nr];
+                }
+            if (kBlock % 2)
+                for (int nr = 0; nr < NR; nr++) {
+                    dst[((kBlock / 2) * NR + nr) * 2]     = src[(size_t)(kBlock - 1) * B.sRow + nr];
+                    dst[((kBlock / 2) * NR + nr) * 2 + 1] = 0;
+                }
+        }
+
+        for (int jp = fullPanels; jp < panels; jp++) {
+            int16_t *dst = (int16_t *)buf + (size_t)jp * kPairs * 2 * NR;
+            for (int p2 = 0; p2 < kPairs; p2++)
+                for (int nr = 0; nr < NR; nr++)
+                    for (int i = 0; i < 2; i++) {
+                        int p = 2 * p2 + i, col = jp * NR + nr;
+                        dst[(p2 * NR + nr) * 2 + i] = p < kBlock && col < nBlock
+                            ? base[(size_t)(p0 + p) * B.sRow + (size_t)(j0 + col) * B.sCol] : 0;
+                    }
+        }
+        return;
+    }
+
+    // Default path
+    Real *Bp = buf;
     if (B.type == REAL && B.scale == 1.0 && !B.scales) {
         // Vectorize contiguous rows
         for (int jp = 0; jp < fullPanels; jp++) {
@@ -90,10 +126,58 @@ static void packB(Real *Bp, Matrix B, int p0, int kBlock, int j0, int nBlock)
 }
 
 // Pack an A block into MR-row panels, padding the bottom edge with zeros
-static void packA(Real *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock)
+static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int kBlock)
 {
     int panels = (mBlock + MR - 1) / MR;
+    size_t esz = ScalarSize(A.type);
+    const unsigned char *base = (const unsigned char *)A.data;
 
+    // Integer path
+    if (B.type == INT8 && sizeof(Real) == 4) {
+        int kPairs = (kBlock + 1) / 2;
+        size_t panelSize = MR * sizeof(Real) + (size_t)kPairs * 2 * MR * sizeof(int16_t);
+        Real sB[KC];
+        for (int p = 0; p < kBlock; p++)
+            sB[p] = B.scales ? B.scale * B.scales[p0 + p] : B.scale;
+
+        for (int ip = 0; ip < panels; ip++) {
+            Real *rowScale = (Real *)((char *)buf + ip * panelSize);
+            int16_t *dst = (int16_t *)(rowScale + MR);
+            for (int mr = 0; mr < MR; mr++) {
+                int row = ip * MR + mr;
+                if (row >= mBlock) {
+                    for (int p2 = 0; p2 < kPairs; p2++)
+                        for (int i = 0; i < 2; i++)
+                            dst[(p2 * MR + mr) * 2 + i] = 0;
+                    rowScale[mr] = 0;
+                    continue;
+                }
+
+                const unsigned char *a = base + ((size_t)(i0 + row) * A.sRow + (size_t)p0 * A.sCol) * esz;
+                Real vals[KC];
+                Real m = 0;
+                for (int p = 0; p < kBlock; p++) {
+                    const void *e = a + (size_t)p * A.sCol * esz;
+                    Real f = (A.type == REAL ? *(const Real *)e : ScalarLoad(e, A.type)) * sB[p];
+                    vals[p] = f;
+                    m = f < -m ? -f : f > m ? f : m;
+                }
+                Real inv = m > 0 ? 32767 / m : 0;
+                rowScale[mr] = (A.scales ? A.scale * A.scales[i0 + row] : A.scale) * m / 32767;
+
+                for (int p2 = 0; p2 < kPairs; p2++)
+                    for (int i = 0; i < 2; i++) {
+                        int p = 2 * p2 + i;
+                        Real f = p < kBlock ? vals[p] * inv : 0;
+                        dst[(p2 * MR + mr) * 2 + i] = (int16_t)(f < 0 ? f - 0.5f : f + 0.5f);
+                    }
+            }
+        }
+        return;
+    }
+
+    // Default path
+    Real *Ap = buf;
     if (A.type == REAL && !A.scales) {
         for (int ip = 0; ip < panels; ip++) {
             Real *dst = Ap + (size_t)ip * kBlock * MR;
@@ -107,8 +191,6 @@ static void packA(Real *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock)
         return;
     }
 
-    size_t esz = ScalarSize(A.type);
-    const unsigned char *base = (const unsigned char *)A.data;
     for (int ip = 0; ip < panels; ip++) {
         Real *dst = Ap + (size_t)ip * kBlock * MR;
         for (int p = 0; p < kBlock; p++) {
@@ -120,7 +202,7 @@ static void packA(Real *Ap, Matrix A, int i0, int mBlock, int p0, int kBlock)
     }
 }
 
-static void microKernelContiguous(Real *Ap, Real *Bp, int kBlock, Matrix C)
+static void microKernelContiguous(const void *Ap, const void *Bp, int kBlock, Matrix C)
 {
     Vector acc[MR][NRV];
     for (int mr = 0; mr < MR; mr++)
@@ -132,8 +214,8 @@ static void microKernelContiguous(Real *Ap, Real *Bp, int kBlock, Matrix C)
         VectorFetch(C.data + (size_t)mr * C.sRow + NR - 1);
     }
 
-    Real *aRow = Ap;
-    Real *bRow = Bp;
+    const Real *aRow = Ap;
+    const Real *bRow = Bp;
     for (int p = 0; p < kBlock; p++, aRow += MR, bRow += NR) {
         Vector b[NRV];
         for (int v = 0; v < NRV; v++)
@@ -152,20 +234,36 @@ static void microKernelContiguous(Real *Ap, Real *Bp, int kBlock, Matrix C)
     }
 }
 
-static void microKernel(Real *Ap, Real *Bp, int kBlock, Matrix C, int mValid, int nValid)
+static void microKernel(void *Ap, void *Bp, int kBlock, Matrix C, int mValid, int nValid)
 {
-    Vector acc[MR][NRV];
-    for (int mr = 0; mr < mValid; mr++)
-        for (int v = 0; v < NRV; v++)
-            acc[mr][v] = VectorZero();
-
     for (int mr = 0; mr < mValid; mr++) {
         VectorFetch(C.data + (size_t)mr * C.sRow);
         VectorFetch(C.data + (size_t)mr * C.sRow + (size_t)(NR - 1) * C.sCol);
     }
 
-    Real *aRow = Ap;
-    Real *bRow = Bp;
+    // Integer path
+    if (C.scales) {
+        if (C.sCol == 1 && mValid == MR && nValid == NR) {
+            VectorDot(Ap, Bp, C.data, C.sRow, kBlock);
+            return;
+        }
+
+        Real tile[MR * NR] = {0};
+        VectorDot(Ap, Bp, tile, NR, kBlock);
+        for (int mr = 0; mr < mValid; mr++)
+            for (int nr = 0; nr < nValid; nr++)
+                C.data[mr * C.sRow + nr * C.sCol] += tile[mr * NR + nr];
+        return;
+    }
+
+    // Default path
+    Vector acc[MR][NRV];
+    for (int mr = 0; mr < mValid; mr++)
+        for (int v = 0; v < NRV; v++)
+            acc[mr][v] = VectorZero();
+
+    const Real *aRow = Ap;
+    const Real *bRow = Bp;
     for (int p = 0; p < kBlock; p++, aRow += MR, bRow += NR) {
         Vector b[NRV];
         for (int v = 0; v < NRV; v++)
@@ -286,28 +384,35 @@ static void packedGemm(Matrix A, Matrix B, Matrix C)
     int M = C.rows;
     int N = C.cols;
     int K = A.cols;
+    int integer = B.type == INT8 && sizeof(Real) == 4;
 
-    Real packBufA[MC * KC];
-    Real packBufB[NC * KC];
+    union { Real r[MC * KC]; int16_t i[MC * (KC + 2)]; } bufA;
+    union { Real r[NC * KC]; int16_t i[NC * KC]; } bufB;
 
-    B.scale = A.scale * B.scale / C.scale;
+    if (integer)
+        A.scale /= C.scale;
+    else
+        B.scale = A.scale * B.scale / C.scale;
 
     for (int j0 = 0; j0 < N; j0 += NC) {
         int nBlock = imin(NC, N - j0);
         for (int p0 = 0; p0 < K; p0 += KC) {
             int kBlock = imin(KC, K - p0);
-            packB(packBufB, B, p0, kBlock, j0, nBlock);
+            int kPairs = (kBlock + 1) / 2;
+            packB(&bufB, B, p0, kBlock, j0, nBlock);
             for (int i0 = 0; i0 < M; i0 += MC) {
                 int mBlock = imin(MC, M - i0);
-                packA(packBufA, A, i0, mBlock, p0, kBlock);
+                packA(&bufA, A, B, i0, mBlock, p0, kBlock);
                 for (int jr = 0; jr < nBlock; jr += NR) {
-                    Real *Bpanel = packBufB + (size_t)(jr / NR) * kBlock * NR;
+                    void *Bpanel = integer ? (void *)(bufB.i + (size_t)(jr / NR) * kPairs * 2 * NR)
+                                           : (void *)(bufB.r + (size_t)(jr / NR) * kBlock * NR);
                     for (int ir = 0; ir < mBlock; ir += MR) {
-                        Real *Apanel = packBufA + (size_t)(ir / MR) * kBlock * MR;
-                        Matrix Ctile = { C.data + (size_t)(i0 + ir) * C.sRow + (size_t)(j0 + jr) * C.sCol, 0, 0, C.sRow, C.sCol, REAL, 1.0, NULL };
+                        void *Apanel = integer ? (void *)((char *)&bufA + (size_t)(ir / MR) * (MR * sizeof(Real) + (size_t)kPairs * 2 * MR * sizeof(int16_t)))
+                                               : (void *)(bufA.r + (size_t)(ir / MR) * kBlock * MR);
+                        Matrix Ctile = { C.data + (size_t)(i0 + ir) * C.sRow + (size_t)(j0 + jr) * C.sCol, 0, 0, C.sRow, C.sCol, REAL, 1.0, integer ? Apanel : NULL };
                         int mValid = imin(MR, mBlock - ir);
                         int nValid = imin(NR, nBlock - jr);
-                        if (C.sCol == 1 && mValid == MR && nValid == NR)
+                        if (C.sCol == 1 && mValid == MR && nValid == NR && !integer)
                             microKernelContiguous(Apanel, Bpanel, kBlock, Ctile);
                         else
                             microKernel(Apanel, Bpanel, kBlock, Ctile, mValid, nValid);
@@ -320,7 +425,8 @@ static void packedGemm(Matrix A, Matrix B, Matrix C)
 
 void MatrixMultiply(Matrix A, Matrix B, Matrix C)
 {
-    if (A.type == REAL && !A.scales && A.cols <= SMALL_K && C.cols >= NR && C.cols <= SMALL_N && C.sCol == 1)
+    int integer = B.type == INT8 && sizeof(Real) == 4;
+    if (!integer && A.type == REAL && !A.scales && A.cols <= SMALL_K && C.cols >= NR && C.cols <= SMALL_N && C.sCol == 1)
         smallGemm(A, B, C);
     else
         packedGemm(A, B, C);
