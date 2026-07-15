@@ -42,21 +42,24 @@ static void packB(void *buf, Matrix B, int p0, int kBlock, int j0, int nBlock)
     int fullPanels = (B.sCol == 1) ? nBlock / NR : 0;
 
     // Integer path
-    if (B.type == INT8 && sizeof(Real) == 4) {
-        const int8_t *base = (const int8_t *)B.data;
+    if ((B.type == INT8 || B.type == INT16) && sizeof(Real) == 4) {
+        const int8_t  *b8  = (const int8_t  *)B.data;
+        const int16_t *b16 = (const int16_t *)B.data;
         int kPairs = (kBlock + 1) / 2;
 
         for (int jp = 0; jp < fullPanels; jp++) {
             int16_t *dst = (int16_t *)buf + (size_t)jp * kPairs * 2 * NR;
-            const int8_t *src = base + (size_t)p0 * B.sRow + j0 + (size_t)jp * NR;
+            size_t src = (size_t)p0 * B.sRow + j0 + (size_t)jp * NR;
             for (int p2 = 0; p2 < kBlock / 2; p2++)
                 for (int nr = 0; nr < NR; nr++) {
-                    dst[(p2 * NR + nr) * 2]     = src[(size_t)(2 * p2) * B.sRow + nr];
-                    dst[(p2 * NR + nr) * 2 + 1] = src[(size_t)(2 * p2 + 1) * B.sRow + nr];
+                    size_t e = src + (size_t)(2 * p2) * B.sRow + nr;
+                    dst[(p2 * NR + nr) * 2]     = B.type == INT8 ? b8[e] : b16[e];
+                    dst[(p2 * NR + nr) * 2 + 1] = B.type == INT8 ? b8[e + B.sRow] : b16[e + B.sRow];
                 }
             if (kBlock % 2)
                 for (int nr = 0; nr < NR; nr++) {
-                    dst[((kBlock / 2) * NR + nr) * 2]     = src[(size_t)(kBlock - 1) * B.sRow + nr];
+                    size_t e = src + (size_t)(kBlock - 1) * B.sRow + nr;
+                    dst[((kBlock / 2) * NR + nr) * 2]     = B.type == INT8 ? b8[e] : b16[e];
                     dst[((kBlock / 2) * NR + nr) * 2 + 1] = 0;
                 }
         }
@@ -67,8 +70,9 @@ static void packB(void *buf, Matrix B, int p0, int kBlock, int j0, int nBlock)
                 for (int nr = 0; nr < NR; nr++)
                     for (int i = 0; i < 2; i++) {
                         int p = 2 * p2 + i, col = jp * NR + nr;
+                        size_t e = (size_t)(p0 + p) * B.sRow + (size_t)(j0 + col) * B.sCol;
                         dst[(p2 * NR + nr) * 2 + i] = p < kBlock && col < nBlock
-                            ? base[(size_t)(p0 + p) * B.sRow + (size_t)(j0 + col) * B.sCol] : 0;
+                            ? (B.type == INT8 ? b8[e] : b16[e]) : 0;
                     }
         }
         return;
@@ -133,9 +137,10 @@ static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int
     const unsigned char *base = (const unsigned char *)A.data;
 
     // Integer path
-    if (B.type == INT8 && sizeof(Real) == 4) {
+    if ((B.type == INT8 || B.type == INT16) && sizeof(Real) == 4) {
         int kPairs = (kBlock + 1) / 2;
         size_t panelSize = MR * sizeof(Real) + (size_t)kPairs * 2 * MR * sizeof(int16_t);
+        Real qMax = imin(32767, INT32_MAX / (kBlock * (B.type == INT8 ? 127 : 32767)));
         Real sB[KC];
         for (int p = 0; p < kBlock; p++)
             sB[p] = B.scales ? B.scale * B.scales[p0 + p] : B.scale;
@@ -162,8 +167,8 @@ static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int
                     vals[p] = f;
                     m = f < -m ? -f : f > m ? f : m;
                 }
-                Real inv = m > 0 ? 32767 / m : 0;
-                rowScale[mr] = (A.scales ? A.scale * A.scales[i0 + row] : A.scale) * m / 32767;
+                Real inv = m > 0 ? qMax / m : 0;
+                rowScale[mr] = (A.scales ? A.scale * A.scales[i0 + row] : A.scale) * m / qMax;
 
                 for (int p2 = 0; p2 < kPairs; p2++)
                     for (int i = 0; i < 2; i++) {
@@ -384,7 +389,7 @@ static void packedGemm(Matrix A, Matrix B, Matrix C)
     int M = C.rows;
     int N = C.cols;
     int K = A.cols;
-    int integer = B.type == INT8 && sizeof(Real) == 4;
+    int integer = (B.type == INT8 || B.type == INT16) && sizeof(Real) == 4;
 
     union { Real r[MC * KC]; int16_t i[MC * (KC + 2)]; } bufA;
     union { Real r[NC * KC]; int16_t i[NC * KC]; } bufB;
@@ -425,7 +430,7 @@ static void packedGemm(Matrix A, Matrix B, Matrix C)
 
 void MatrixMultiply(Matrix A, Matrix B, Matrix C)
 {
-    int integer = B.type == INT8 && sizeof(Real) == 4;
+    int integer = (B.type == INT8 || B.type == INT16) && sizeof(Real) == 4;
     if (!integer && A.type == REAL && !A.scales && A.cols <= SMALL_K && C.cols >= NR && C.cols <= SMALL_N && C.sCol == 1)
         smallGemm(A, B, C);
     else
