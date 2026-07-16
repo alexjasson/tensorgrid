@@ -135,7 +135,7 @@ Real VectorHsum(Vector v)
 #define NR  (NRV * VECTOR_DIMS)
 #define MR  ((VECTOR_CARD - NRV - 1) / NRV)
 
-void VectorDot(void *A, void *B, Real *C, int n, int k)
+void VectorDot(void *A, void *B, Real *C, Real *q, int n, int k)
 {
     int32_t acc[MR][NRV] __attribute__((__vector_size__(VECTOR_DIMS * 4))) = {0};
     int kPairs = (k + 1) / 2;
@@ -178,6 +178,8 @@ void VectorDot(void *A, void *B, Real *C, int n, int k)
             Vector sum = VectorZero();
             for (int i = 0; i < VECTOR_DIMS; i++)
                 sum[i] = (Real)acc[mr][v][i];
+            if (q)
+                sum = VectorMul(sum, VectorLoad(q + v * VECTOR_DIMS, REAL));
             VectorStore(Crow + v * VECTOR_DIMS, VectorFma(s, sum, VectorLoad(Crow + v * VECTOR_DIMS, REAL)));
         }
     }

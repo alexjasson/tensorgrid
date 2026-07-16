@@ -44,7 +44,7 @@ Vector VectorLog2i(Vector x);
 Vector VectorMantissa(Vector x);
 Vector VectorGt0(Vector v);
 Real   VectorHsum(Vector v);
-void VectorDot(void *A, void *B, Real *C, int n, int k); // C[i * n + j] += A[i] . B[j] for A[i], B[j] in R^k
+void VectorDot(void *A, void *B, Real *C, Real *q, int n, int k); // C[i * n + j] += q[j] * A[i] . B[j] for A[i], B[j] in R^k
 
 // Unary activation functions and their derivatives
 Vector reluv(Vector a);
