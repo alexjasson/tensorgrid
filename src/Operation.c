@@ -52,26 +52,28 @@ static void operationArrayPush(Operation op)
     int size = DynamicArraySize(arr);
     if (size > 0) {
         Operation *last = DynamicArrayGet(arr, size - 1);
-        if (last->out.refcount && *last->out.refcount == 1)
+        if (TensorReference(TensorOwner(last->out)) == 1)
             operationArrayClear(arr);
     }
 
-    if (op.out.refcount) (*op.out.refcount)++;
-    if (op.A.refcount)   (*op.A.refcount)++;
-    if (op.B.refcount)   (*op.B.refcount)++;
+    op.out = TensorView(op.out, TensorDimensions(op.out), TensorShape(op.out), TensorStride(op.out));
+    if (op.A) op.A = TensorView(op.A, TensorDimensions(op.A), TensorShape(op.A), TensorStride(op.A));
+    if (op.B) op.B = TensorView(op.B, TensorDimensions(op.B), TensorShape(op.B), TensorStride(op.B));
     DynamicArrayPush(arr, &op);
 }
 
 static void zeroGradients(Operation *op)
 {
-    Tensor *inputs[] = { &op->A, &op->B };
+    Tensor inputs[] = { op->A, op->B };
     for (int n = 0; n < 2; n++) {
-        Real *gradients = inputs[n]->gradients;
+        Tensor input = inputs[n];
+        if (!input) continue;
+        Real *gradients = TensorGradients(input);
         if (!gradients) continue;
         size_t footprint = 1;
-        for (int i = 0; i < inputs[n]->dimensions; i++)
-            if (inputs[n]->strides[i] > 0)
-                footprint += (size_t)(inputs[n]->shape[i] - 1) * inputs[n]->strides[i];
+        for (int i = 0; i < TensorDimensions(input); i++)
+            if (TensorStride(input)[i] > 0)
+                footprint += (size_t)(TensorShape(input)[i] - 1) * TensorStride(input)[i];
         memset(gradients, 0, footprint * sizeof(Real));
     }
 }
@@ -90,15 +92,21 @@ Tensor OperationExecute(Operation op)
     Tensor out = op.out, A = op.A, B = op.B;
 
     // Cast entries to Real
-    if (out.gradients) {
-        if (A.entries && (A.type != REAL || A.scale)) op.A = TensorToType(A, REAL);
-        if (B.entries && (B.type != REAL || B.scale)) op.B = TensorToType(B, REAL);
+    if (TensorGradients(out)) {
+        if (A && (TensorDataType(A) != REAL || TensorScale(A))) {
+            op.A = TensorCopy(A);
+            TensorToType(op.A, REAL);
+        }
+        if (B && (TensorDataType(B) != REAL || TensorScale(B))) {
+            op.B = TensorCopy(B);
+            TensorToType(op.B, REAL);
+        }
     }
     op.forward(&op);
-    if (op.out.gradients) operationArrayPush(op);
+    if (TensorGradients(op.out)) operationArrayPush(op);
     else free(op.context);
-    if (op.A.entries != A.entries) TensorFree(op.A);
-    if (op.B.entries != B.entries) TensorFree(op.B);
+    if (op.A != A) TensorFree(op.A);
+    if (op.B != B) TensorFree(op.B);
     return out;
 }
 
@@ -113,7 +121,7 @@ void OperationBackward(Tensor loss)
     // Take mean over all loss entries
     int lossSize = TensorSize(loss);
     for (int i = 0; i < lossSize; i++)
-        loss.gradients[i] = 1.0f / lossSize;
+        TensorGradients(loss)[i] = 1.0f / lossSize;
 
     // Accumulate gradients backwards
     for (int i = DynamicArraySize(arr) - 1; i >= 0; i--) {
@@ -122,4 +130,15 @@ void OperationBackward(Tensor loss)
     }
 
     operationArrayClear(arr);
+}
+
+void OperationFlush(void)
+{
+    DynamicArray arr = operationArrayGet();
+    int size = DynamicArraySize(arr);
+    if (size > 0) {
+        Operation *last = DynamicArrayGet(arr, size - 1);
+        if (TensorReference(TensorOwner(last->out)) == 1)
+            operationArrayClear(arr);
+    }
 }

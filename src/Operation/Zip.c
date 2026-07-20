@@ -16,30 +16,13 @@ static void zipBackward(void *arg, int start, int end);
 
 Tensor OperationZip(Binary fn, Tensor A, Tensor B)
 {
-    Tensor zipA = A;
-    Tensor zipB = B;
-
-    // Right-align shapes
-    int outDims = A.dimensions >= B.dimensions ? A.dimensions : B.dimensions;
-    Tensor *inputs[2] = { &zipA, &zipB };
-    for (int n = 0; n < 2; n++) {
-        Tensor *t = inputs[n];
-        int pad = outDims - t->dimensions;
-        for (int i = outDims - 1; i >= pad; i--) {
-            t->shape[i]   = t->shape[i - pad];
-            t->strides[i] = t->strides[i - pad];
-        }
-        for (int i = pad - 1; i >= 0; i--) {
-            t->shape[i]   = 1;
-            t->strides[i] = t->strides[i + 1] * t->shape[i + 1];
-        }
-        t->dimensions = outDims;
-    }
-
+    int outDims = TensorDimensions(A) >= TensorDimensions(B) ? TensorDimensions(A) : TensorDimensions(B);
     int outShape[MAX_DIMENSIONS];
     for (int axis = 0; axis < outDims; axis++) {
-        int aSize = zipA.shape[axis];
-        int bSize = zipB.shape[axis];
+        int aAxis = axis - (outDims - TensorDimensions(A));
+        int bAxis = axis - (outDims - TensorDimensions(B));
+        int aSize = aAxis >= 0 ? TensorShape(A)[aAxis] : 1;
+        int bSize = bAxis >= 0 ? TensorShape(B)[bAxis] : 1;
         if (aSize != bSize && aSize != 1 && bSize != 1) {
             fprintf(stderr, "TensorZip shapes are not compatible!\n");
             exit(EXIT_FAILURE);
@@ -47,12 +30,29 @@ Tensor OperationZip(Binary fn, Tensor A, Tensor B)
         outShape[axis] = aSize >= bSize ? aSize : bSize;
     }
 
-    for (int axis = 0; axis < outDims; axis++) {
-        if (zipA.shape[axis] != outShape[axis]) { zipA.strides[axis] = 0; zipA.shape[axis] = outShape[axis]; }
-        if (zipB.shape[axis] != outShape[axis]) { zipB.strides[axis] = 0; zipB.shape[axis] = outShape[axis]; }
+    Tensor inputs[2] = { A, B };
+    int strides[2][MAX_DIMENSIONS];
+    for (int n = 0; n < 2; n++) {
+        Tensor input = inputs[n];
+        int pad = outDims - TensorDimensions(input);
+        for (int axis = outDims - 1; axis >= 0; axis--) {
+            int source = axis - pad;
+            if (source >= 0) {
+                strides[n][axis] = TensorShape(input)[source] == outShape[axis]
+                                 ? TensorStride(input)[source]
+                                 : 0;
+            } else {
+                strides[n][axis] = outShape[axis] == 1 && axis + 1 < outDims
+                                 ? strides[n][axis + 1] * outShape[axis + 1]
+                                 : 0;
+            }
+        }
     }
 
-    int autograd = zipA.gradients != NULL || zipB.gradients != NULL;
+    Tensor zipA = TensorView(A, outDims, outShape, strides[0]);
+    Tensor zipB = TensorView(B, outDims, outShape, strides[1]);
+
+    int autograd = TensorGradients(zipA) != NULL || TensorGradients(zipB) != NULL;
     Tensor out = TensorNew(outDims, outShape, REAL, autograd);
 
     ZipContext *ctx = malloc(sizeof(*ctx));
@@ -61,7 +61,10 @@ Tensor OperationZip(Binary fn, Tensor A, Tensor B)
         exit(EXIT_FAILURE);
     }
     ctx->b = fn;
-    return OperationExecute(OperationNew(out, zipA, zipB, OperationZipForward, OperationZipBackward, ctx));
+    Tensor result = OperationExecute(OperationNew(out, zipA, zipB, OperationZipForward, OperationZipBackward, ctx));
+    TensorFree(zipA);
+    TensorFree(zipB);
+    return result;
 }
 
 static void OperationZipForward(Operation *op)
@@ -71,7 +74,7 @@ static void OperationZipForward(Operation *op)
 
 static void OperationZipBackward(Operation *op)
 {
-    if (!op->A.gradients && !op->B.gradients) return;
+    if (!TensorGradients(op->A) && !TensorGradients(op->B)) return;
     OperationDispatch(zipBackward, op, TensorSize(op->out), TensorSize(op->out));
 }
 
@@ -80,18 +83,18 @@ static void zipForward(void *arg, int start, int end)
 {
     Operation *op  = arg;
     ZipContext *ctx = op->context;
-    Real     *out = op->out.entries;
-    Real     *A   = op->A.entries;
-    Real     *B   = op->B.entries;
+    Real     *out = TensorEntries(op->out);
+    Real     *A   = TensorEntries(op->A);
+    Real     *B   = TensorEntries(op->B);
     VectorBinary fn = (VectorBinary)ctx->b.fv;
-    int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
-    int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
+    int aC = isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
+    int bC = isContiguous(TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
 
-    if (op->A.type != REAL || op->A.scale || op->B.type != REAL || op->B.scale) {
+    if (TensorDataType(op->A) != REAL || TensorScale(op->A) || TensorDataType(op->B) != REAL || TensorScale(op->B)) {
         ScalarBinary sfn = (ScalarBinary)ctx->b.f;
         for (int i = start; i < end; i++) {
-            int aOff = aC ? i : unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
-            int bOff = bC ? i : unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
+            int aOff = aC ? i : unravel(i, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
+            int bOff = bC ? i : unravel(i, TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
             out[i] = sfn(TensorGet(op->A, aOff), TensorGet(op->B, bOff));
         }
         return;
@@ -116,9 +119,9 @@ static void zipForward(void *arg, int start, int end)
         return;
     }
     // Broadcast aware path
-    int dims = op->out.dimensions;
-    const int *shape = op->out.shape;
-    const int *sA = op->A.strides, *sB = op->B.strides;
+    int dims = TensorDimensions(op->out);
+    const int *shape = TensorShape(op->out);
+    const int *sA = TensorStride(op->A), *sB = TensorStride(op->B);
     int clsA = -1, clsB = -1, runAxes = 0, R = 1;
     for (int ax = dims - 1; ax >= 0; ax--) {
         if (shape[ax] == 1) { runAxes++; continue; }
@@ -203,8 +206,8 @@ static void zipForward(void *arg, int start, int end)
         int tail = end - i < VECTOR_DIMS ? end - i : VECTOR_DIMS;
         for (int t = 0; t < VECTOR_DIMS; t++) {
             int j = i + t;
-            x[t] = t < tail ? A[aC ? j : unravel(j, op->A.shape, op->A.strides, op->A.dimensions)] : 1.0f;
-            y[t] = t < tail ? B[bC ? j : unravel(j, op->B.shape, op->B.strides, op->B.dimensions)] : 1.0f;
+            x[t] = t < tail ? A[aC ? j : unravel(j, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A))] : 1.0f;
+            y[t] = t < tail ? B[bC ? j : unravel(j, TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B))] : 1.0f;
         }
         VectorStore(z, fn(VectorLoad(x, REAL), VectorLoad(y, REAL)));
         for (int t = 0; t < tail; t++)
@@ -221,14 +224,14 @@ static void zipBackward(void *arg, int start, int end)
     int total = TensorSize(op->out);
     if (start != 0 || end != total) {
         int G = 1;
-        Tensor *in[2] = { &op->A, &op->B };
+        Tensor in[2] = { op->A, op->B };
         for (int n = 0; n < 2; n++) {
-            if (!in[n]->gradients) continue;
-            for (int ax = 0; ax < op->out.dimensions; ax++)
-                if (in[n]->strides[ax] == 0 && in[n]->shape[ax] > 1) {
+            if (!TensorGradients(in[n])) continue;
+            for (int ax = 0; ax < TensorDimensions(op->out); ax++)
+                if (TensorStride(in[n])[ax] == 0 && TensorShape(in[n])[ax] > 1) {
                     int g = 1;
-                    for (int d = ax; d < op->out.dimensions; d++)
-                        g *= op->out.shape[d];
+                    for (int d = ax; d < TensorDimensions(op->out); d++)
+                        g *= TensorShape(op->out)[d];
                     if (g > G) G = g;
                     break;
                 }
@@ -241,15 +244,15 @@ static void zipBackward(void *arg, int start, int end)
     }
 
     ZipContext *ctx = op->context;
-    Real       *A = op->A.entries;
-    Real       *B = op->B.entries;
-    Real      *dA = op->A.gradients;
-    Real      *dB = op->B.gradients;
-    Real    *dout = op->out.gradients;
+    Real       *A = TensorEntries(op->A);
+    Real       *B = TensorEntries(op->B);
+    Real      *dA = TensorGradients(op->A);
+    Real      *dB = TensorGradients(op->B);
+    Real    *dout = TensorGradients(op->out);
     VectorBinary dafn = (VectorBinary)ctx->b.dav;
     VectorBinary dbfn = (VectorBinary)ctx->b.dbv;
-    int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
-    int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
+    int aC = isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
+    int bC = isContiguous(TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
 
     // Contiguous fast path
     if (aC && bC) {
@@ -288,9 +291,9 @@ static void zipBackward(void *arg, int start, int end)
     }
 
     // Broadcast aware path
-    int dims = op->out.dimensions;
-    const int *shape = op->out.shape;
-    const int *sA = op->A.strides, *sB = op->B.strides;
+    int dims = TensorDimensions(op->out);
+    const int *shape = TensorShape(op->out);
+    const int *sA = TensorStride(op->A), *sB = TensorStride(op->B);
     int clsA = -1, clsB = -1, runAxes = 0, R = 1;
     for (int ax = dims - 1; ax >= 0; ax--) {
         if (shape[ax] == 1) { runAxes++; continue; }
@@ -400,8 +403,8 @@ static void zipBackward(void *arg, int start, int end)
             y[t] = 1.0f;
             g[t] = 0.0f;
             if (t < tail) {
-                aOffs[t] = aC ? i : unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
-                bOffs[t] = bC ? i : unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
+                aOffs[t] = aC ? i : unravel(i, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
+                bOffs[t] = bC ? i : unravel(i, TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
                 x[t] = A[aOffs[t]];
                 y[t] = B[bOffs[t]];
                 g[t] = dout[i];

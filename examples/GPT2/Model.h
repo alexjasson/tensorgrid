@@ -85,8 +85,9 @@ static inline Block BlockNew(TensorArray parameters)
 
 static inline Tensor BlockForward(Tensor H, Block *b)
 {
-    Tensor causalMask = TensorCausalMask(SEQ_LENGTH);                      // [T, T]
-    causalMask = TensorReshape(causalMask, 3, (int[]){1, SEQ_LENGTH, SEQ_LENGTH});
+    Tensor mask = TensorCausalMask(SEQ_LENGTH);                            // [T, T]
+    Tensor causalMask = TensorReshape(mask, 3, (int[]){1, SEQ_LENGTH, SEQ_LENGTH});
+    TensorFree(mask);
 
     Tensor LN_H = TensorLayerNorm(H, b->g_LN1, b->b_LN1, LN_EPSILON);      // [N, T, D]
     Tensor Q    = TensorLinearLayer(LN_H, b->W_q, b->b_q, IDENTITY);       // [N, T, D]

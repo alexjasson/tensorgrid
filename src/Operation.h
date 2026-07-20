@@ -52,5 +52,12 @@ Tensor OperationMSE(Tensor y, Tensor y_hat);
  */
 void OperationBackward(Tensor loss);
 
+/*
+ * Clears the autograd tape if its last operation is only referenced by the tape
+ * itself - meaning the user finished a forward pass without calling backward.
+ * This function is a temporary fix and should be removed later.
+ */
+void OperationFlush(void);
+
 
 #endif

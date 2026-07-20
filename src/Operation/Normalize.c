@@ -21,20 +21,20 @@ static void normBackward(void *arg, int start, int end);
 
 Tensor OperationNormalize(Tensor in, Real eps)
 {
-    int D    = in.shape[in.dimensions - 1];
+    int D    = TensorShape(in)[TensorDimensions(in) - 1];
     int rows = TensorSize(in) / D;
 
     NormContext *ctx = malloc(sizeof(NormContext) + (size_t)2 * rows * sizeof(Real));
     if (!ctx) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
     ctx->rows       = rows;
     ctx->D          = D;
-    ctx->contiguous = isContiguous(in.shape, in.strides, in.dimensions);
+    ctx->contiguous = isContiguous(TensorShape(in), TensorStride(in), TensorDimensions(in));
     ctx->eps        = eps;
     ctx->mean       = (Real *)(ctx + 1);
     ctx->rstd       = ctx->mean + rows;
 
-    Tensor out = TensorNew(in.dimensions, in.shape, REAL, in.gradients != NULL);
-    return OperationExecute(OperationNew(out, in, (Tensor){0}, OperationNormalizeForward, OperationNormalizeBackward, ctx));
+    Tensor out = TensorNew(TensorDimensions(in), TensorShape(in), REAL, TensorGradients(in) != NULL);
+    return OperationExecute(OperationNew(out, in, NULL, OperationNormalizeForward, OperationNormalizeBackward, ctx));
 }
 
 static void OperationNormalizeForward(Operation *op)
@@ -45,7 +45,7 @@ static void OperationNormalizeForward(Operation *op)
 
 static void OperationNormalizeBackward(Operation *op)
 {
-    if (!op->A.gradients) return;
+    if (!TensorGradients(op->A)) return;
     NormContext *ctx = op->context;
     OperationDispatch(normBackward, op, ctx->rows, (long)ctx->rows * ctx->D);
 }
@@ -56,13 +56,13 @@ static void normForward(void *arg, int start, int end)
     NormContext *ctx = op->context;
     int          D   = ctx->D;
     Tensor       A   = op->A;
-    Real        *in  = A.entries;
-    Real        *out = op->out.entries;
-    int          sD  = A.strides[A.dimensions - 1];
+    Real        *in  = TensorEntries(A);
+    Real        *out = TensorEntries(op->out);
+    int          sD  = TensorStride(A)[TensorDimensions(A) - 1];
 
-    if (A.type != REAL || A.scale) {
+    if (TensorDataType(A) != REAL || TensorScale(A)) {
         for (int r = start; r < end; r++) {
-            int xBase = ctx->contiguous ? r * D : unravel(r, A.shape, A.strides, A.dimensions - 1);
+            int xBase = ctx->contiguous ? r * D : unravel(r, TensorShape(A), TensorStride(A), TensorDimensions(A) - 1);
             Real *o = out + (size_t)r * D;
 
             Real sum = 0.0f;
@@ -86,7 +86,7 @@ static void normForward(void *arg, int start, int end)
     }
 
     for (int r = start; r < end; r++) {
-        int xBase = ctx->contiguous ? r * D : unravel(r, A.shape, A.strides, A.dimensions - 1);
+        int xBase = ctx->contiguous ? r * D : unravel(r, TensorShape(A), TensorStride(A), TensorDimensions(A) - 1);
         const Real *x = in + xBase;
         Real       *o = out + (size_t)r * D;
 
@@ -139,13 +139,13 @@ static void normBackward(void *arg, int start, int end)
     NormContext *ctx  = op->context;
     int          D    = ctx->D;
     Tensor       A    = op->A;
-    Real        *in   = A.entries;
-    Real        *dx   = A.gradients;
-    Real        *dout = op->out.gradients;
-    int          sD   = A.strides[A.dimensions - 1];
+    Real        *in   = TensorEntries(A);
+    Real        *dx   = TensorGradients(A);
+    Real        *dout = TensorGradients(op->out);
+    int          sD   = TensorStride(A)[TensorDimensions(A) - 1];
 
     for (int r = start; r < end; r++) {
-        int xBase = ctx->contiguous ? r * D : unravel(r, A.shape, A.strides, A.dimensions - 1);
+        int xBase = ctx->contiguous ? r * D : unravel(r, TensorShape(A), TensorStride(A), TensorDimensions(A) - 1);
         const Real *x  = in + xBase;
         const Real *dy = dout + (size_t)r * D;
         Real       *gx = dx + xBase;

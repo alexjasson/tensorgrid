@@ -29,12 +29,12 @@ int main(void)
     TensorFree(corpus);
 
     // Split 90/10 into train/test
-    Tensor train = TensorSlice(data, 0, TensorShape(data, 0) * 9 / 10);
-    Tensor test  = TensorSlice(data, TensorShape(train, 0), TensorShape(data, 0) - TensorShape(train, 0));
+    Tensor train = TensorSlice(data, 0, TensorShape(data)[0] * 9 / 10);
+    Tensor test  = TensorSlice(data, TensorShape(train)[0], TensorShape(data)[0] - TensorShape(train)[0]);
 
     // Compute number of training/test samples and number of batches
-    int trainSamples = TensorShape(train, 0) - SEQ_LENGTH;
-    int testSamples  = TensorShape(test,  0) - SEQ_LENGTH;
+    int trainSamples = TensorShape(train)[0] - SEQ_LENGTH;
+    int testSamples  = TensorShape(test)[0] - SEQ_LENGTH;
     int trainBatches = (trainSamples + BATCH_SIZE - 1) / BATCH_SIZE;
     int testBatches  = (testSamples  + BATCH_SIZE - 1) / BATCH_SIZE;
 
@@ -68,6 +68,7 @@ int main(void)
                 TensorPrint(loss);
             }
 
+            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
@@ -85,6 +86,7 @@ int main(void)
             totalErrors  += TensorHammingDistance(predictions, Y);
             totalSamples += TensorSize(predictions);
 
+            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(predictions);
         }
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
@@ -93,7 +95,8 @@ int main(void)
     }
 
     TensorArrayFree(parameters);
-    TensorFree(xTrain); TensorFree(xTest);
+    TensorFree(xTrain); TensorFree(yTrain);
+    TensorFree(xTest);  TensorFree(yTest);
     TensorFree(train);  TensorFree(test); TensorFree(data);
     return 0;
 }

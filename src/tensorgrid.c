@@ -32,35 +32,75 @@ Binary MAX      = { (f)max,      (f)maxDa,    (f)maxDb,     (f)maxv,      (f)max
 Binary MIN      = { (f)min,      (f)minDa,    (f)minDb,     (f)minv,      (f)minDav,    (f)minDbv     };
 
 typedef struct optimizer {
-    Real *m;     // SGD momentum or Adam first moment
-    Real *v;     // Adam second moment
-    int   t;     // Adam timestep
-} optimizer;
+    Real *m; // SGD momentum or Adam first moment
+    Real *v; // Adam second moment
+    int t;   // Adam timestep
+} Optimizer;
+
+struct tensor {
+    int dimensions;
+    int shape[MAX_DIMENSIONS];
+    int strides[MAX_DIMENSIONS];
+    void *entries;
+    DataType type;        // Storage format of entries
+    Real *gradients;      // Gradients for each entry, NULL if no autograd
+    Optimizer *optimizer; // Optimizer state, NULL if no autograd
+    Real *scale;          // Maps stored entries to Real, one scale for each axis 0, NULL if unscaled
+    Tensor owner;         // Owner tensor if this is a view, NULL if not a view
+    int references;       // Number of references
+};
 
 struct tensorArray {
     DynamicArray tensors;
 };
 
+// Tensor accessor functions
+int TensorDimensions(Tensor A)    { return A->dimensions; }
+int *TensorShape(Tensor A)        { return A->shape;      }
+int *TensorStride(Tensor A)       { return A->strides;    }
+void *TensorEntries(Tensor A)     { return A->entries;    }
+DataType TensorDataType(Tensor A) { return A->type;       }
+Real *TensorGradients(Tensor A)   { return A->gradients;  }
+Real *TensorScale(Tensor A)       { return A->scale;      }
+int TensorReference(Tensor A)     { return A->references; }
+Tensor TensorOwner(Tensor A)      { return A->owner;      }
+
 // Pointer to the entry at given index
-static void *entry(Tensor A, size_t index) { return (unsigned char *)A.entries + index * ScalarSize(A.type); }
+static void *entry(Tensor A, size_t index) { return (unsigned char *)A->entries + index * ScalarSize(A->type); }
+
+Tensor TensorView(Tensor A, int dimensions, const int *shape, const int *strides)
+{
+    Tensor view = malloc(sizeof(*view));
+    if (!view) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+    *view = *A;
+    view->dimensions = dimensions;
+    for (int axis = 0; axis < dimensions; axis++) {
+        view->shape[axis] = shape[axis];
+        view->strides[axis] = strides[axis];
+    }
+    view->owner = A;
+    view->references = 1;
+    A->references++;
+    return view;
+}
 
 Real TensorGet(Tensor A, int index)
 {
-    Real scale = A.scale ? A.scale[A.dimensions >= 2 ? index / A.strides[0] : 0] : 1.0;
-    return scale * ScalarLoad(entry(A, (size_t)index), A.type);
+    Real scale = A->scale ? A->scale[A->dimensions >= 2 ? index / A->strides[0] : 0] : 1.0;
+    return scale * ScalarLoad(entry(A, (size_t)index), A->type);
 }
 
 void TensorSet(Tensor A, int index, Real value)
 {
-    Real scale = A.scale ? A.scale[A.dimensions >= 2 ? index / A.strides[0] : 0] : 1.0;
-    ScalarStore(entry(A, (size_t)index), A.type, value / scale);
+    Real scale = A->scale ? A->scale[A->dimensions >= 2 ? index / A->strides[0] : 0] : 1.0;
+    ScalarStore(entry(A, (size_t)index), A->type, value / scale);
 }
 
 int TensorSize(Tensor A)
 {
     int size = 1;
-    for (int i = 0; i < A.dimensions; i++)
-        size *= A.shape[i];
+    for (int i = 0; i < A->dimensions; i++)
+        size *= A->shape[i];
     return size;
 }
 
@@ -70,11 +110,6 @@ int TensorArraySize(TensorArray ta)
     for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
         total += TensorSize(*(Tensor *)DynamicArrayGet(ta->tensors, i));
     return total;
-}
-
-int TensorShape(Tensor A, int axis)
-{
-    return A.shape[axis];
 }
 
 Tensor TensorNew(int dimensions, int *shape, DataType d, int autograd)
@@ -89,28 +124,28 @@ Tensor TensorNew(int dimensions, int *shape, DataType d, int autograd)
         fprintf(stderr, "TensorNew autograd requires REAL entries!\n");
         exit(EXIT_FAILURE);
     }
-    Tensor t = {0};
-    t.dimensions = dimensions;
-    t.type = d;
-    for (int i = 0; i < dimensions; i++) t.shape[i] = shape[i];
+    Tensor t = calloc(1, sizeof(*t));
+    if (!t) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+    t->dimensions = dimensions;
+    t->type = d;
+    t->references = 1;
+    for (int i = 0; i < dimensions; i++) t->shape[i] = shape[i];
     if (dimensions > 0) {
-        t.strides[dimensions - 1] = 1;
+        t->strides[dimensions - 1] = 1;
         for (int i = dimensions - 2; i >= 0; i--)
-            t.strides[i] = t.strides[i + 1] * t.shape[i + 1];
+            t->strides[i] = t->strides[i + 1] * t->shape[i + 1];
     }
     int size = TensorSize(t);
     size_t footprint = (size_t)size * ScalarSize(d);
     MemoryPool pool = MemoryPoolGet();
-    t.entries   = MemoryPoolAlloc(pool, footprint);
-    memset(t.entries, 0, footprint);
-    t.gradients = autograd ? MemoryPoolAlloc(pool, (size_t)size * sizeof(Real)) : NULL;
-    t.optimizer = autograd ? calloc(1, sizeof(optimizer)) : NULL;
-    t.refcount  = malloc(sizeof(int));
-    if (!t.entries || (autograd && (!t.gradients || !t.optimizer)) || !t.refcount) {
+    t->entries   = MemoryPoolAlloc(pool, footprint);
+    t->gradients = autograd ? MemoryPoolAlloc(pool, (size_t)size * sizeof(Real)) : NULL;
+    t->optimizer = autograd ? calloc(1, sizeof(Optimizer)) : NULL;
+    if (!t->entries || (autograd && (!t->gradients || !t->optimizer))) {
         fprintf(stderr, "Insufficient memory!\n");
         exit(EXIT_FAILURE);
     }
-    *t.refcount = 1;
+    memset(t->entries, 0, footprint);
     return t;
 }
 
@@ -124,27 +159,31 @@ TensorArray TensorArrayNew(void)
 Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape, int autograd)
 {
     Tensor t = TensorNew(dimensions, shape, REAL, autograd);
-    if (autograd) memset(t.gradients, 0, (size_t)TensorSize(t) * sizeof(Real));
+    if (autograd) memset(t->gradients, 0, (size_t)TensorSize(t) * sizeof(Real));
     DynamicArrayPush(ta->tensors, &t);
     return t;
 }
 
 void TensorFree(Tensor A)
 {
-    if (!A.refcount || --(*A.refcount) > 0) return;
-    size_t footprint = 1;
-    for (int i = 0; i < A.dimensions; i++)
-        if (A.strides[i] > 0) footprint += (size_t)(A.shape[i] - 1) * A.strides[i];
-    MemoryPool pool = MemoryPoolGet();
-    MemoryPoolFree(pool, A.entries, footprint * ScalarSize(A.type));
-    MemoryPoolFree(pool, A.gradients, footprint * sizeof(Real));
-    if (A.optimizer) {
-        free(A.optimizer->m);
-        free(A.optimizer->v);
-        free(A.optimizer);
+    if (!A || --A->references > 0) return;
+    Tensor owner = A->owner;
+    if (!owner) {
+        size_t footprint = 1;
+        for (int i = 0; i < A->dimensions; i++)
+            if (A->strides[i] > 0) footprint += (size_t)(A->shape[i] - 1) * A->strides[i];
+        MemoryPool pool = MemoryPoolGet();
+        MemoryPoolFree(pool, A->entries, footprint * ScalarSize(A->type));
+        MemoryPoolFree(pool, A->gradients, footprint * sizeof(Real));
+        if (A->optimizer) {
+            free(A->optimizer->m);
+            free(A->optimizer->v);
+            free(A->optimizer);
+        }
+        free(A->scale);
     }
-    free(A.scale);
-    free(A.refcount);
+    free(A);
+    TensorFree(owner);
 }
 
 void TensorArrayFree(TensorArray ta)
@@ -157,104 +196,95 @@ void TensorArrayFree(TensorArray ta)
 
 Tensor TensorSlice(Tensor A, int index, int length)
 {
-    Tensor t    = A;
-    t.shape[0]  = length;
-    int offset  = index * A.strides[0];
-    t.entries   = entry(A, (size_t)offset);
-    t.gradients = A.gradients ? A.gradients + offset : NULL;
-    if (A.scale && A.dimensions >= 2) t.scale = A.scale + index;
-    t.refcount  = NULL;
+    int shape[MAX_DIMENSIONS];
+    for (int axis = 0; axis < A->dimensions; axis++) shape[axis] = A->shape[axis];
+    shape[0] = length;
+    Tensor t = TensorView(A, A->dimensions, shape, A->strides);
+    int offset   = index * A->strides[0];
+    t->entries   = entry(A, (size_t)offset);
+    t->gradients = A->gradients ? A->gradients + offset : NULL;
+    if (A->scale && A->dimensions >= 2) t->scale = A->scale + index;
     return t;
 }
 
 Tensor TensorIndex(Tensor A, int index)
 {
-    Tensor t     = A;
-    t.dimensions = A.dimensions - 1;
-    for (int i = 0; i < t.dimensions; i++) {
-        t.shape[i]   = A.shape[i + 1];
-        t.strides[i] = A.strides[i + 1];
-    }
-    int offset  = index * A.strides[0];
-    t.entries   = entry(A, (size_t)offset);
-    t.gradients = A.gradients ? A.gradients + offset : NULL;
-    if (A.scale) {
-        if (A.dimensions > 2) {
+    int dimensions = A->dimensions - 1;
+    Tensor t = TensorView(A, dimensions, A->shape + 1, A->strides + 1);
+    int offset   = index * A->strides[0];
+    t->entries   = entry(A, (size_t)offset);
+    t->gradients = A->gradients ? A->gradients + offset : NULL;
+    if (A->scale) {
+        if (A->dimensions > 2) {
             fprintf(stderr, "TensorIndex requires an unscaled input!\n");
             exit(EXIT_FAILURE);
         }
-        t.scale = A.dimensions == 2 ? A.scale + index : A.scale;
+        t->scale = A->dimensions == 2 ? A->scale + index : A->scale;
     }
-    t.refcount  = NULL;
     return t;
 }
 
 Tensor TensorReshape(Tensor A, int dimensions, int *shape)
 {
-    if (!isContiguous(A.shape, A.strides, A.dimensions)) {
+    if (!isContiguous(A->shape, A->strides, A->dimensions)) {
         fprintf(stderr, "TensorReshape requires a contiguous input!\n");
         exit(EXIT_FAILURE);
     }
-    if (A.scale) {
+    if (A->scale) {
         fprintf(stderr, "TensorReshape requires an unscaled input!\n");
         exit(EXIT_FAILURE);
     }
-    A.dimensions = dimensions;
-    for (int i = 0; i < dimensions; i++) A.shape[i] = shape[i];
+    int strides[MAX_DIMENSIONS] = {0};
     if (dimensions > 0) {
-        A.strides[dimensions - 1] = 1;
+        strides[dimensions - 1] = 1;
         for (int i = dimensions - 2; i >= 0; i--)
-            A.strides[i] = A.strides[i + 1] * A.shape[i + 1];
+            strides[i] = strides[i + 1] * shape[i + 1];
     }
-    return A;
+    return TensorView(A, dimensions, shape, strides);
 }
 
 Tensor TensorDetach(Tensor A)
 {
-    Tensor t    = A;
-    t.gradients = NULL;
-    t.optimizer = NULL;
-    t.refcount  = NULL;
+    Tensor t = TensorView(A, A->dimensions, A->shape, A->strides);
+    t->gradients = NULL;
+    t->optimizer = NULL;
     return t;
 }
 
 Tensor TensorTranspose(Tensor A)
 {
-    if (A.scale && A.dimensions == 2) {
+    if (A->scale && A->dimensions == 2) {
         fprintf(stderr, "TensorTranspose requires an unscaled input!\n");
         exit(EXIT_FAILURE);
     }
-    int dims = A.dimensions;
-    Tensor t = A;
-    t.shape[dims - 2]   = A.shape[dims - 1];
-    t.shape[dims - 1]   = A.shape[dims - 2];
-    t.strides[dims - 2] = A.strides[dims - 1];
-    t.strides[dims - 1] = A.strides[dims - 2];
-    t.refcount = NULL;
-    return t;
+    int dims = A->dimensions;
+    int shape[MAX_DIMENSIONS], strides[MAX_DIMENSIONS];
+    for (int axis = 0; axis < dims; axis++) {
+        shape[axis] = A->shape[axis];
+        strides[axis] = A->strides[axis];
+    }
+    shape[dims - 2]   = A->shape[dims - 1];
+    shape[dims - 1]   = A->shape[dims - 2];
+    strides[dims - 2] = A->strides[dims - 1];
+    strides[dims - 1] = A->strides[dims - 2];
+    return TensorView(A, dims, shape, strides);
 }
 
 Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides, int offset)
 {
-    if (A.scale) {
+    if (A->scale) {
         fprintf(stderr, "TensorRestride requires an unscaled input!\n");
         exit(EXIT_FAILURE);
     }
-    Tensor t = A;
-    t.dimensions = dimensions;
-    for (int i = 0; i < dimensions; i++) {
-        t.shape[i]   = shape[i];
-        t.strides[i] = strides[i];
-    }
-    t.entries   = entry(A, (size_t)offset);
-    t.gradients = A.gradients ? A.gradients + offset : NULL;
-    t.refcount  = NULL;
+    Tensor t = TensorView(A, dimensions, shape, strides);
+    t->entries   = entry(A, (size_t)offset);
+    t->gradients = A->gradients ? A->gradients + offset : NULL;
     return t;
 }
 
 Tensor TensorReduce(Binary fn, Real initial, Tensor A, int axis)
 {
-    Tensor indices = TensorNew(1, (int[]){A.shape[axis]}, REAL, FALSE);
+    Tensor indices = TensorNew(1, (int[]){A->shape[axis]}, REAL, FALSE);
     Tensor out     = TensorScatter(fn, A, indices, initial, axis, 1);
     TensorFree(indices);
     return out;
@@ -291,31 +321,38 @@ Tensor TensorLinearLayer(Tensor in, Tensor weight, Tensor bias, Unary fn)
 Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride, int padding, Unary fn)
 {
     Tensor conv  = TensorConvolution(in, filter, stride, padding);
-    int inner    = conv.shape[2] * conv.shape[3];
+    int inner    = conv->shape[2] * conv->shape[3];
     Tensor out   = TensorAffine(fn, conv, bias, inner);
     TensorFree(conv);
     return out;
 }
 
-Tensor TensorScale(Tensor A, Real scalar)
+Tensor TensorScalarMultiply(Tensor A, Real scalar)
 {
-    if (!A.gradients && A.type != REAL) {
-        int channels = A.dimensions >= 2 ? A.shape[0] : 1;
-        if (!A.scale) {
-            A.scale = malloc((size_t)channels * sizeof(Real));
-            if (!A.scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
-            for (int c = 0; c < channels; c++) A.scale[c] = scalar;
+    if (!A->gradients && A->type != REAL) {
+        if (A->owner) {
+            DataType type = A->type;
+            Tensor detached = TensorCopy(A);
+            TensorToType(detached, type);
+            TensorFree(A);
+            A = detached;
+        }
+        int channels = A->dimensions >= 2 ? A->shape[0] : 1;
+        if (!A->scale) {
+            A->scale = malloc((size_t)channels * sizeof(Real));
+            if (!A->scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+            for (int c = 0; c < channels; c++) A->scale[c] = scalar;
         } else {
-            for (int c = 0; c < channels; c++) A.scale[c] *= scalar;
+            for (int c = 0; c < channels; c++) A->scale[c] *= scalar;
         }
         return A;
     }
-    if (!A.gradients) {
-        Real *e = A.entries;
+    if (!A->gradients) {
+        Real *e = A->entries;
         int size = TensorSize(A);
-        int contiguous = isContiguous(A.shape, A.strides, A.dimensions);
+        int contiguous = isContiguous(A->shape, A->strides, A->dimensions);
         for (int i = 0; i < size; i++) {
-            int off = contiguous ? i : unravel(i, A.shape, A.strides, A.dimensions);
+            int off = contiguous ? i : unravel(i, A->shape, A->strides, A->dimensions);
             e[off] *= scalar;
         }
         return A;
@@ -330,11 +367,11 @@ Tensor TensorScale(Tensor A, Real scalar)
 
 void TensorFill(Tensor A, Real value)
 {
-    if (A.type != REAL || A.scale) {
+    if (A->type != REAL || A->scale) {
         fprintf(stderr, "TensorFill requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
-    Real *e = A.entries;
+    Real *e = A->entries;
     int size = TensorSize(A);
     for (int i = 0; i < size; i++)
         e[i] = value;
@@ -342,11 +379,11 @@ void TensorFill(Tensor A, Real value)
 
 Tensor TensorBroadcast(Tensor A, int axis, int n)
 {
-    if (axis < 0 || axis >= A.dimensions) {
+    if (axis < 0 || axis >= A->dimensions) {
         fprintf(stderr, "TensorBroadcast axis out of range!\n");
         exit(EXIT_FAILURE);
     }
-    if (A.shape[axis] != 1) {
+    if (A->shape[axis] != 1) {
         fprintf(stderr, "TensorBroadcast axis must have size 1!\n");
         exit(EXIT_FAILURE);
     }
@@ -368,7 +405,7 @@ Tensor TensorLayerNorm(Tensor in, Tensor weight, Tensor bias, Real eps)
 Tensor TensorCausalMask(int n)
 {
     Tensor mask = TensorNew(2, (int[]){n, n}, REAL, FALSE);
-    Real *e = mask.entries;
+    Real *e = mask->entries;
     for (int i = 0; i < n; i++)
         for (int j = 0; j < n; j++)
             e[i * n + j] = (j <= i) ? 0.0f : -INFINITE;
@@ -379,20 +416,21 @@ Tensor TensorLogSoftmax(Tensor in, Real temperature)
 {
     // Numerical stability trick
     Tensor inView       = TensorDetach(in);
-    Tensor temp1        = TensorReduce(MAX, -INFINITE, inView, in.dimensions - 1);
+    Tensor temp1        = TensorReduce(MAX, -INFINITE, inView, in->dimensions - 1);
     Tensor stableLogits = TensorZip(SUBTRACT, in, temp1);
     TensorFree(temp1);
 
     // Temperature scaling
     if (temperature != 1.0f)
-        stableLogits = TensorScale(stableLogits, 1.0f / temperature);
+        stableLogits = TensorScalarMultiply(stableLogits, 1.0f / temperature);
 
     // out = stableLogits - log(sum(exp(stableLogits)))
     Tensor A = TensorMap(EXP, stableLogits);
-    Tensor B = TensorReduce(ADD, 0.0f, A, in.dimensions - 1);
+    Tensor B = TensorReduce(ADD, 0.0f, A, in->dimensions - 1);
     Tensor C = TensorMap(LOG, B);
     Tensor result = TensorZip(SUBTRACT, stableLogits, C);
 
+    TensorFree(inView);
     TensorFree(stableLogits);
     TensorFree(A); TensorFree(B); TensorFree(C);
     return result;
@@ -400,20 +438,22 @@ Tensor TensorLogSoftmax(Tensor in, Real temperature)
 
 Tensor TensorNLL(Tensor y, Tensor logP)
 {
-    int N = TensorSize(y) / y.shape[y.dimensions - 1];
+    int N = TensorSize(y) / y->shape[y->dimensions - 1];
 
     Tensor A   = TensorZip(MULTIPLY, y, logP);
-    Tensor B   = TensorReduce(ADD, 0.0f, A, y.dimensions - 1);
+    Tensor B   = TensorReduce(ADD, 0.0f, A, y->dimensions - 1);
     Tensor sum = TensorMap(NEGATE, B);
 
     while (TensorSize(sum) > 1) {
         int axis = 0;
-        while (sum.shape[axis] == 1) axis++;
+        while (sum->shape[axis] == 1) axis++;
         Tensor next = TensorReduce(ADD, 0.0f, sum, axis);
         TensorFree(sum);
         sum = next;
     }
-    sum = TensorReshape(sum, 0, NULL);
+    Tensor scalar = TensorReshape(sum, 0, NULL);
+    TensorFree(sum);
+    sum = scalar;
 
     Tensor n = TensorNew(0, NULL, REAL, FALSE);
     TensorFill(n, (Real)N);
@@ -425,19 +465,19 @@ Tensor TensorNLL(Tensor y, Tensor logP)
 
 Tensor TensorSample(Tensor logits, Real temperature)
 {
-    if (logits.type != REAL || logits.scale) {
+    if (logits->type != REAL || logits->scale) {
         fprintf(stderr, "TensorSample requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
-    Real *le       = logits.entries;
-    int numClasses = logits.shape[logits.dimensions - 1];
+    Real *le       = logits->entries;
+    int numClasses = logits->shape[logits->dimensions - 1];
     int n          = TensorSize(logits) / numClasses;
 
-    int outDims = logits.dimensions - 1;
+    int outDims = logits->dimensions - 1;
     int outShape[MAX_DIMENSIONS];
-    for (int i = 0; i < outDims; i++) outShape[i] = logits.shape[i];
+    for (int i = 0; i < outDims; i++) outShape[i] = logits->shape[i];
     Tensor out = TensorNew(outDims, outShape, REAL, 0);
-    Real *oe   = out.entries;
+    Real *oe   = out->entries;
 
     if (temperature == 0.0f) {
         for (int i = 0; i < n; i++) {
@@ -448,7 +488,7 @@ Tensor TensorSample(Tensor logits, Real temperature)
         }
     } else {
         Tensor P = TensorSoftmax(logits, temperature);
-        Real *pe = P.entries;
+        Real *pe = P->entries;
         for (int i = 0; i < n; i++) {
             Real r   = randomNumber(0.0, 1.0);
             Real cdf = 0.0;
@@ -467,11 +507,11 @@ int TensorHammingDistance(Tensor A, Tensor B)
 {
     int n = TensorSize(A);
     int count = 0;
-    int aC = isContiguous(A.shape, A.strides, A.dimensions);
-    int bC = isContiguous(B.shape, B.strides, B.dimensions);
+    int aC = isContiguous(A->shape, A->strides, A->dimensions);
+    int bC = isContiguous(B->shape, B->strides, B->dimensions);
     for (int i = 0; i < n; i++) {
-        int aOff = aC ? i : unravel(i, A.shape, A.strides, A.dimensions);
-        int bOff = bC ? i : unravel(i, B.shape, B.strides, B.dimensions);
+        int aOff = aC ? i : unravel(i, A->shape, A->strides, A->dimensions);
+        int bOff = bC ? i : unravel(i, B->shape, B->strides, B->dimensions);
         if (TensorGet(A, aOff) != TensorGet(B, bOff)) count++;
     }
     return count;
@@ -479,7 +519,7 @@ int TensorHammingDistance(Tensor A, Tensor B)
 
 Tensor TensorShuffle(Tensor A, unsigned int seed)
 {
-    int n = A.shape[0];
+    int n = A->shape[0];
     int *perm = malloc(n * sizeof(int));
     if (!perm) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
     for (int i = 0; i < n; i++) perm[i] = i;
@@ -494,29 +534,29 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
         perm[j]   = tmp;
     }
 
-    Tensor out = TensorNew(A.dimensions, A.shape, A.type, 0);
-    if (A.scale) {
-        int channels = A.dimensions >= 2 ? n : 1;
-        out.scale = malloc((size_t)channels * sizeof(Real));
-        if (!out.scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+    Tensor out = TensorNew(A->dimensions, A->shape, A->type, 0);
+    if (A->scale) {
+        int channels = A->dimensions >= 2 ? n : 1;
+        out->scale = malloc((size_t)channels * sizeof(Real));
+        if (!out->scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
         for (int i = 0; i < channels; i++)
-            out.scale[i] = A.scale[A.dimensions >= 2 ? perm[i] : i];
+            out->scale[i] = A->scale[A->dimensions >= 2 ? perm[i] : i];
     }
     int rowSize = TensorSize(A) / n;
-    if (isContiguous(A.shape, A.strides, A.dimensions)) {
+    if (isContiguous(A->shape, A->strides, A->dimensions)) {
         // Each row is contiguous, so permute rows with a single copy each
         for (int i = 0; i < n; i++)
             memcpy(entry(out, (size_t)i * rowSize),
                    entry(A, (size_t)perm[i] * rowSize),
-                   (size_t)rowSize * ScalarSize(A.type));
+                   (size_t)rowSize * ScalarSize(A->type));
     } else {
-        int innerDims = A.dimensions - 1;
+        int innerDims = A->dimensions - 1;
         for (int i = 0; i < n; i++) {
-            int srcRowOff = perm[i] * A.strides[0];
+            int srcRowOff = perm[i] * A->strides[0];
             for (int j = 0; j < rowSize; j++) {
-                int innerOff = unravel(j, A.shape + 1, A.strides + 1, innerDims);
-                Real v = ScalarLoad(entry(A, (size_t)(srcRowOff + innerOff)), A.type);
-                ScalarStore(entry(out, (size_t)i * rowSize + j), out.type, v);
+                int innerOff = unravel(j, A->shape + 1, A->strides + 1, innerDims);
+                Real v = ScalarLoad(entry(A, (size_t)(srcRowOff + innerOff)), A->type);
+                ScalarStore(entry(out, (size_t)i * rowSize + j), out->type, v);
             }
         }
     }
@@ -526,14 +566,14 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
 
 void TensorXavier(Tensor A)
 {
-    if (A.type != REAL || A.scale) {
+    if (A->type != REAL || A->scale) {
         fprintf(stderr, "TensorXavier requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
-    Real *e = A.entries;
+    Real *e = A->entries;
     int receptive = 1;
-    for (int i = 2; i < A.dimensions; i++) receptive *= A.shape[i];
-    int fanSum = (A.shape[0] + (A.dimensions > 1 ? A.shape[1] : 0)) * receptive;
+    for (int i = 2; i < A->dimensions; i++) receptive *= A->shape[i];
+    int fanSum = (A->shape[0] + (A->dimensions > 1 ? A->shape[1] : 0)) * receptive;
     Real bound = sqrte((Real)6.0 / fanSum);
     int size = TensorSize(A);
     for (int i = 0; i < size; i++)
@@ -543,15 +583,15 @@ void TensorXavier(Tensor A)
 Tensor TensorOneHot(Tensor labels, int numClasses)
 {
     int outShape[MAX_DIMENSIONS];
-    for (int i = 0; i < labels.dimensions; i++) outShape[i] = labels.shape[i];
-    outShape[labels.dimensions] = numClasses;
+    for (int i = 0; i < labels->dimensions; i++) outShape[i] = labels->shape[i];
+    outShape[labels->dimensions] = numClasses;
 
-    Tensor out = TensorNew(labels.dimensions + 1, outShape, REAL, 0);
-    Real *oe = out.entries;
+    Tensor out = TensorNew(labels->dimensions + 1, outShape, REAL, 0);
+    Real *oe = out->entries;
     int numLabels = TensorSize(labels);
 
     for (int i = 0; i < numLabels; i++) {
-        int off = unravel(i, labels.shape, labels.strides, labels.dimensions);
+        int off = unravel(i, labels->shape, labels->strides, labels->dimensions);
         oe[i * numClasses + (int)TensorGet(labels, off)] = 1.0f;
     }
 
@@ -571,19 +611,19 @@ void TensorPrint(Tensor A)
     int prevClose = 0;
     for (int i = 0; i < size; i++) {
         int temp = i;
-        for (int d = A.dimensions - 1; d >= 0; d--) {
-            indices[d] = temp % A.shape[d];
-            temp /= A.shape[d];
+        for (int d = A->dimensions - 1; d >= 0; d--) {
+            indices[d] = temp % A->shape[d];
+            temp /= A->shape[d];
         }
 
         int open = 0;
-        for (int d = A.dimensions - 1; d >= 0; d--) {
+        for (int d = A->dimensions - 1; d >= 0; d--) {
             if (indices[d] == 0) open++; else break;
         }
 
         int close = 0;
-        for (int d = A.dimensions - 1; d >= 0; d--) {
-            if (indices[d] == A.shape[d] - 1) close++; else break;
+        for (int d = A->dimensions - 1; d >= 0; d--) {
+            if (indices[d] == A->shape[d] - 1) close++; else break;
         }
 
         if (i > 0) {
@@ -591,7 +631,7 @@ void TensorPrint(Tensor A)
             printf(",");
         }
         for (int b = 0; b < open; b++) printf("[");
-        printf("%g", TensorGet(A, unravel(i, A.shape, A.strides, A.dimensions)));
+        printf("%g", TensorGet(A, unravel(i, A->shape, A->strides, A->dimensions)));
         prevClose = close;
     }
     for (int b = 0; b < prevClose; b++) printf("]");
@@ -626,7 +666,7 @@ Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataT
 
     Tensor t = TensorNew(dimensions, shape, d, FALSE);
     size_t data = (size_t)TensorSize(t) * ScalarSize(d);
-    if (fread(t.entries, 1, data, f) != data) {
+    if (fread(t->entries, 1, data, f) != data) {
         fprintf(stderr, "Cannot read file: %s\n", path);
         TensorFree(t);
         fclose(f);
@@ -640,70 +680,91 @@ Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataT
 static void toReal(void *arg, int start, int end)
 {
     Operation *op = arg;
-    const unsigned char *src = op->A.entries;
-    Real *dst = op->out.entries;
-    size_t esz = ScalarSize(op->A.type);
+    const unsigned char *src = op->A->entries;
+    Real *dst = op->out->entries;
+    size_t esz = ScalarSize(op->A->type);
     int i = start;
     while (i < end) {
         int stop = end;
         Real s = 1.0;
-        if (op->A.scale && op->A.dimensions >= 2) {
-            int c = i / op->A.strides[0];
-            s = op->A.scale[c];
-            if ((c + 1) * op->A.strides[0] < stop) stop = (c + 1) * op->A.strides[0];
-        } else if (op->A.scale) {
-            s = *op->A.scale;
+        if (op->A->scale && op->A->dimensions >= 2) {
+            int c = i / op->A->strides[0];
+            s = op->A->scale[c];
+            if ((c + 1) * op->A->strides[0] < stop) stop = (c + 1) * op->A->strides[0];
+        } else if (op->A->scale) {
+            s = *op->A->scale;
         }
         Vector scale = VectorBcast(s);
         for (; i + VECTOR_DIMS <= stop; i += VECTOR_DIMS)
-            VectorStore(dst + i, VectorMul(VectorLoad(src + (size_t)i * esz, op->A.type), scale));
+            VectorStore(dst + i, VectorMul(VectorLoad(src + (size_t)i * esz, op->A->type), scale));
         for (; i < stop; i++)
-            dst[i] = s * ScalarLoad(src + (size_t)i * esz, op->A.type);
+            dst[i] = s * ScalarLoad(src + (size_t)i * esz, op->A->type);
     }
 }
 
-Tensor TensorToType(Tensor A, DataType d)
+void TensorToType(Tensor A, DataType d)
 {
-    Tensor out = TensorNew(A.dimensions, A.shape, d, FALSE);
-    int size = TensorSize(A);
-    int contiguous = isContiguous(A.shape, A.strides, A.dimensions);
+    OperationFlush();
+    if (A->owner) {
+        fprintf(stderr, "TensorToType does not support views!\n");
+        exit(EXIT_FAILURE);
+    }
+    if (A->references != 1) {
+        fprintf(stderr, "TensorToType requires a Tensor that is not referenced by other Tensors!\n");
+        exit(EXIT_FAILURE);
+    }
+    if ((d == FLOAT32 || d == FLOAT64) && ScalarSize(d) == sizeof(Real)) d = REAL;
+    if (!A->gradients && A->type == d && !A->scale &&
+        isContiguous(A->shape, A->strides, A->dimensions)) return;
 
-    if (out.type == REAL && contiguous) {
+    Tensor out = TensorNew(A->dimensions, A->shape, d, FALSE);
+    int size = TensorSize(A);
+    int contiguous = isContiguous(A->shape, A->strides, A->dimensions);
+
+    if (out->type == REAL && contiguous) {
         Operation op = { .A = A, .out = out };
         OperationDispatch(toReal, &op, size, size);
-        return out;
-    }
-
-    if (out.type <= INT32) { // For integer types, scale maps the largest value to the type's max
-        Real typeMax  = out.type == UINT8 ? UINT8_MAX : out.type == INT8 ? INT8_MAX : out.type == INT16 ? INT16_MAX : INT32_MAX;
-        int channels  = out.dimensions >= 2 ? out.shape[0] : 1;
-        int inner     = size / channels;
-        out.scale = malloc((size_t)channels * sizeof(Real));
-        if (!out.scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
-        for (int c = 0; c < channels; c++) {
-            Real absmax = 0.0;
-            for (int j = 0; j < inner; j++) {
-                int i   = c * inner + j;
-                int off = contiguous ? i : unravel(i, A.shape, A.strides, A.dimensions);
-                Real x  = TensorGet(A, off);
-                if (x < 0.0) {
-                    if (out.type == UINT8) {
-                        fprintf(stderr, "Negative values can't be mapped to UINT8!\n");
-                        exit(EXIT_FAILURE);
+    } else {
+        if (out->type <= INT32) { // For integer types, scale maps the largest value to the type's max
+            Real typeMax  = out->type == UINT8 ? UINT8_MAX : out->type == INT8 ? INT8_MAX : out->type == INT16 ? INT16_MAX : INT32_MAX;
+            int channels  = out->dimensions >= 2 ? out->shape[0] : 1;
+            int inner     = size / channels;
+            out->scale = malloc((size_t)channels * sizeof(Real));
+            if (!out->scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+            for (int c = 0; c < channels; c++) {
+                Real absmax = 0.0;
+                for (int j = 0; j < inner; j++) {
+                    int i   = c * inner + j;
+                    int off = contiguous ? i : unravel(i, A->shape, A->strides, A->dimensions);
+                    Real x  = TensorGet(A, off);
+                    if (x < 0.0) {
+                        if (out->type == UINT8) {
+                            fprintf(stderr, "Negative values can't be mapped to UINT8!\n");
+                            exit(EXIT_FAILURE);
+                        }
+                        x = -x;
                     }
-                    x = -x;
+                    if (x > absmax) absmax = x;
                 }
-                if (x > absmax) absmax = x;
+                out->scale[c] = absmax > 0.0 ? absmax / typeMax : 1.0;
             }
-            out.scale[c] = absmax > 0.0 ? absmax / typeMax : 1.0;
+        }
+        for (int i = 0; i < size; i++) {
+            int off   = contiguous ? i : unravel(i, A->shape, A->strides, A->dimensions);
+            Real s    = out->scale ? out->scale[out->dimensions >= 2 ? i / out->strides[0] : 0] : 1.0;
+            ScalarStore(entry(out, (size_t)i), out->type, TensorGet(A, off) / s);
         }
     }
-    for (int i = 0; i < size; i++) {
-        int off   = contiguous ? i : unravel(i, A.shape, A.strides, A.dimensions);
-        Real s    = out.scale ? out.scale[out.dimensions >= 2 ? i / out.strides[0] : 0] : 1.0;
-        ScalarStore(entry(out, (size_t)i), out.type, TensorGet(A, off) / s);
-    }
-    return out;
+    struct tensor tmp = *A;
+    *A = *out;
+    *out = tmp;
+    TensorFree(out);
+}
+
+void TensorArrayToType(TensorArray ta, DataType d)
+{
+    for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
+        TensorToType(*(Tensor *)DynamicArrayGet(ta->tensors, i), d);
 }
 
 void TensorWrite(Tensor A, char *path)
@@ -734,7 +795,7 @@ void TensorArrayWrite(TensorArray ta, char *path)
 
     // Write each tensor
     for (int i = 0; i < n; i++) {
-        Tensor *t = DynamicArrayGet(ta->tensors, i);
+        Tensor t = *(Tensor *)DynamicArrayGet(ta->tensors, i);
         if (!isContiguous(t->shape, t->strides, t->dimensions)) {
             fprintf(stderr, "Cannot write non-contiguous tensor: %s\n", path);
             fclose(f);
@@ -783,7 +844,7 @@ void TensorArrayWrite(TensorArray ta, char *path)
         }
 
         // Write tensor entries
-        size_t data = (size_t)TensorSize(*t) * ScalarSize(t->type);
+        size_t data = (size_t)TensorSize(t) * ScalarSize(t->type);
         if (fwrite(t->entries, 1, data, f) != data) {
             fprintf(stderr, "Cannot write file: %s\n", path);
             fclose(f);
@@ -850,9 +911,9 @@ int TensorArrayRead(TensorArray ta, char *path)
             goto error;
 
         // Check if tensor already exists, otherwise create a new one
-        Tensor *t;
+        Tensor t;
         if (existing) {
-            t = DynamicArrayGet(ta->tensors, i);
+            t = *(Tensor *)DynamicArrayGet(ta->tensors, i);
             int mismatch = dimensions != t->dimensions || type != (int32_t)t->type;
             for (int d = 0; !mismatch && d < dimensions; d++)
                 mismatch = shape[d] != t->shape[d];
@@ -864,7 +925,7 @@ int TensorArrayRead(TensorArray ta, char *path)
         } else {
             Tensor created = TensorNew(dimensions, shape, type, FALSE);
             DynamicArrayPush(ta->tensors, &created);
-            t = DynamicArrayGet(ta->tensors, i);
+            t = created;
         }
         free(t->scale);
         t->scale = NULL;
@@ -880,7 +941,7 @@ int TensorArrayRead(TensorArray ta, char *path)
         }
 
         // Read entries into the tensor
-        size_t data = (size_t)TensorSize(*t) * ScalarSize(t->type);
+        size_t data = (size_t)TensorSize(t) * ScalarSize(t->type);
         if (fread(t->entries, 1, data, f) != data)
             goto error;
     }
@@ -896,26 +957,27 @@ error:
 
 void TensorSGD(Tensor A, Real lr, Real momentum)
 {
-    if (!A.optimizer) return; // skip tensors without autograd
-    Real *e = A.entries;
+    Optimizer *optimizer = A->optimizer;
+    if (!optimizer) return; // skip tensors without autograd
+    Real *e = A->entries;
     int size = TensorSize(A);
 
     if (momentum == 0.0f) {
         for (int i = 0; i < size; i++)
-            e[i] -= lr * A.gradients[i];
+            e[i] -= lr * A->gradients[i];
         return;
     }
 
-    if (!A.optimizer->m) {
-        A.optimizer->m = calloc(size, sizeof(Real));
-        if (!A.optimizer->m) {
+    if (!optimizer->m) {
+        optimizer->m = calloc(size, sizeof(Real));
+        if (!optimizer->m) {
             fprintf(stderr, "Insufficient memory!\n");
             exit(EXIT_FAILURE);
         }
     }
-    Real *m = A.optimizer->m;
+    Real *m = optimizer->m;
     for (int i = 0; i < size; i++) {
-        m[i] = momentum * m[i] + A.gradients[i];
+        m[i] = momentum * m[i] + A->gradients[i];
         e[i] -= lr * m[i];
     }
 }
@@ -928,25 +990,26 @@ void TensorArraySGD(TensorArray ta, Real lr, Real momentum)
 
 void TensorAdam(Tensor A, Real lr, Real beta1, Real beta2, Real epsilon, Real weightDecay)
 {
-    if (!A.optimizer) return; // skip tensors without autograd
-    Real *e = A.entries;
+    Optimizer *optimizer = A->optimizer;
+    if (!optimizer) return; // skip tensors without autograd
+    Real *e = A->entries;
     int size = TensorSize(A);
 
-    if (!A.optimizer->m) {
-        A.optimizer->m = calloc(size, sizeof(Real));
-        A.optimizer->v = calloc(size, sizeof(Real));
-        if (!A.optimizer->m || !A.optimizer->v) {
+    if (!optimizer->m) {
+        optimizer->m = calloc(size, sizeof(Real));
+        optimizer->v = calloc(size, sizeof(Real));
+        if (!optimizer->m || !optimizer->v) {
             fprintf(stderr, "Insufficient memory!\n");
             exit(EXIT_FAILURE);
         }
     }
-    A.optimizer->t++;
-    Real *m = A.optimizer->m;
-    Real *v = A.optimizer->v;
-    Real biasM = 1.0 - powi(beta1, A.optimizer->t);
-    Real biasV = 1.0 - powi(beta2, A.optimizer->t);
+    optimizer->t++;
+    Real *m = optimizer->m;
+    Real *v = optimizer->v;
+    Real biasM = 1.0 - powi(beta1, optimizer->t);
+    Real biasV = 1.0 - powi(beta2, optimizer->t);
     for (int i = 0; i < size; i++) {
-        Real g = A.gradients[i];
+        Real g = A->gradients[i];
         m[i] = beta1 * m[i] + (1.0f - beta1) * g;
         v[i] = beta2 * v[i] + (1.0f - beta2) * g * g;
         Real mHat = m[i] / biasM;
@@ -963,7 +1026,7 @@ void TensorArrayAdam(TensorArray ta, Real lr, Real beta1, Real beta2, Real epsil
 
 void TensorBPETrain(Tensor corpus, Tensor merges)
 {
-    int targetMerges = TensorShape(merges, 0);
+    int targetMerges = TensorShape(merges)[0];
     int n = TensorSize(corpus);
     int *ids = malloc((size_t)n * sizeof *ids);
     for (int i = 0; i < n; i++) ids[i] = (int)TensorGet(corpus, i);
@@ -999,7 +1062,7 @@ void TensorBPETrain(Tensor corpus, Tensor merges)
 
 Tensor TensorBPEEncode(Tensor corpus, Tensor merges)
 {
-    int targetMerges = TensorShape(merges, 0);
+    int targetMerges = TensorShape(merges)[0];
     int n = TensorSize(corpus);
     int *ids = malloc((size_t)n * sizeof *ids);
     for (int i = 0; i < n; i++) ids[i] = (int)TensorGet(corpus, i);
@@ -1036,7 +1099,7 @@ Tensor TensorBPEEncode(Tensor corpus, Tensor merges)
 Tensor TensorBPEDecode(Tensor tokens, Tensor merges)
 {
     int n = TensorSize(tokens);
-    int vocabSize = 256 + TensorShape(merges, 0);
+    int vocabSize = 256 + TensorShape(merges)[0];
 
     // Decode each token by walking the merge tree with a stack
     Stack stack = StackNew(sizeof(int));

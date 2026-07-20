@@ -18,21 +18,7 @@ typedef struct { f f, da, db; f fv, dav, dbv; } Binary;
 extern Unary RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
 extern Binary ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
 typedef enum { UINT8, INT8, INT16, INT32, FLOAT16, FLOAT32, FLOAT64, REAL } DataType;
-typedef struct optimizer Optimizer;
-
-// Tensor representation
-typedef struct {
-    int dimensions;
-    int shape[MAX_DIMENSIONS];
-    int strides[MAX_DIMENSIONS];
-    void *entries;
-    DataType type;        // Storage format of entries
-    Real *gradients;      // Gradients for each entry, NULL if no autograd
-    Optimizer *optimizer; // Optimizer state, NULL if no autograd
-    int *refcount;        // Number of references, NULL for views
-    Real *scale;          // Maps stored entries to Real, one scale for each axis 0, NULL if unscaled
-} Tensor;
-
+typedef struct tensor *Tensor;
 typedef struct tensorArray *TensorArray; // Array of tensors intended to be used for model parameters
 
 
@@ -80,11 +66,17 @@ Tensor TensorRead(char *path);
 Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataType d);
 
 /*
- * Returns a copy of A with each entry stored using the given data type, preserving
- * the values as accurately as the type allows. The result has no autograd. Negative
- * floating point values can't be mapped to unsigned integer types.
+ * Converts A so each entry is stored using the given data type, preserving
+ * the values as accurately as the type allows. A must not be a view and have no
+ * references. The converted tensor has no autograd. Negative floating point 
+ * values can't be mapped to unsigned integer types.
  */
-Tensor TensorToType(Tensor A, DataType d);
+void TensorToType(Tensor A, DataType d);
+
+/*
+ * Converts every tensor in the array to the given data type, see TensorToType.
+ */
+void TensorArrayToType(TensorArray ta, DataType d);
 
 /*
  * Writes a tensor to a .tgd file.
@@ -119,41 +111,47 @@ int TensorSize(Tensor A);
 int TensorArraySize(TensorArray ta);
 
 /*
- * Returns the size of the tensor along the given axis.
+ * Returns a view of A with the given shape and strides. The view shares A's
+ * entries and retains A for its lifetime. The caller owns the returned view
+ * and must free it with TensorFree.
  */
-int TensorShape(Tensor A, int axis);
+Tensor TensorView(Tensor A, int dimensions, const int *shape, const int *strides);
 
 /*
  * Returns a view of A with autograd removed. Shares memory with A.
- * Operations on the returned tensor are no longer recorded.
+ * Operations on the returned tensor are no longer recorded. The returned view
+ * must be freed with TensorFree.
  */
 Tensor TensorDetach(Tensor A);
 
 /*
  * Returns a view of length entries starting along axis 0. Shares memory with A.
+ * The returned view must be freed with TensorFree.
  */
 Tensor TensorSlice(Tensor A, int index, int length);
 
 /*
  * Returns a view of A at the given index along axis 0, with axis 0 removed.
- * Result has one fewer dimension than A. Shares memory with A.
+ * Result has one fewer dimension than A. Shares memory with A. The returned
+ * view must be freed with TensorFree.
  */
 Tensor TensorIndex(Tensor A, int index);
 
 /*
  * Returns a view of A with a new shape. Total size must be unchanged and A must
- * be contiguous. Shares memory with A.
+ * be contiguous. Shares memory with A. The returned view must be freed with TensorFree.
  */
 Tensor TensorReshape(Tensor A, int dimensions, int *shape);
 
 /*
  * Returns a view of A with the given shape and strides, starting at the given
- * element offset. Shares memory with A.
+ * element offset. Shares memory with A. The returned view must be freed with TensorFree.
  */
 Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides, int offset);
 
 /*
  * Returns a view of A with the last two dimensions transposed. Shares memory with A.
+ * The returned view must be freed with TensorFree.
  */
 Tensor TensorTranspose(Tensor A);
 
@@ -384,7 +382,7 @@ Tensor TensorShuffle(Tensor A, unsigned int seed);
 /*
  * Scales all entries of A by scalar, returning the scaled tensor.
  */
-Tensor TensorScale(Tensor A, Real scalar);
+Tensor TensorScalarMultiply(Tensor A, Real scalar);
 
 /*
  * Sets all entries of A to the given value.
@@ -471,5 +469,18 @@ void TensorArrayAdam(TensorArray ta, Real lr, Real beta1, Real beta2, Real epsil
 void TensorBPETrain(Tensor corpus, Tensor merges);
 Tensor TensorBPEEncode(Tensor corpus, Tensor merges);
 Tensor TensorBPEDecode(Tensor tokens, Tensor merges);
+
+/*
+ * Tensor accessor functions. Only needed for development/debugging, not for normal use.
+ */
+int TensorDimensions(Tensor A);
+int *TensorShape(Tensor A);
+int *TensorStride(Tensor A);
+void *TensorEntries(Tensor A);
+DataType TensorDataType(Tensor A);
+Real *TensorGradients(Tensor A);
+Real *TensorScale(Tensor A);
+int TensorReference(Tensor A);
+Tensor TensorOwner(Tensor A);
 
 #endif

@@ -34,22 +34,20 @@ static Tensor forward(Tensor X, Model *m)
 int main(void)
 {
     // Read data into Tensors
-    Tensor xTrain = TensorReadData("examples/data/mnist/train-images-idx3-ubyte", 3, (int[]){60000, 28, 28}, 16, UINT8); // [60000, 28, 28]
-    Tensor yTrain = TensorReadData("examples/data/mnist/train-labels-idx1-ubyte", 1, (int[]){60000}, 8, UINT8);          // [60000]
-    Tensor xTest  = TensorReadData("examples/data/mnist/t10k-images-idx3-ubyte", 3, (int[]){10000, 28, 28}, 16, UINT8);  // [10000, 28, 28]
-    Tensor yTest  = TensorReadData("examples/data/mnist/t10k-labels-idx1-ubyte", 1, (int[]){10000}, 8, UINT8);           // [10000]
+    Tensor xTrain = TensorReadData("examples/data/mnist/train-images-idx3-ubyte", 2, (int[]){60000, IMAGE_SIZE}, 16, UINT8); // [60000, 784]
+    Tensor yTrain = TensorReadData("examples/data/mnist/train-labels-idx1-ubyte", 1, (int[]){60000}, 8, UINT8);              // [60000]
+    Tensor xTest  = TensorReadData("examples/data/mnist/t10k-images-idx3-ubyte", 2, (int[]){10000, IMAGE_SIZE}, 16, UINT8);  // [10000, 784]
+    Tensor yTest  = TensorReadData("examples/data/mnist/t10k-labels-idx1-ubyte", 1, (int[]){10000}, 8, UINT8);               // [10000]
 
     // Compute number of training/test samples and number of batches
-    int trainSamples = TensorShape(xTrain, 0);
-    int testSamples  = TensorShape(xTest, 0);
+    int trainSamples = TensorShape(xTrain)[0];
+    int testSamples  = TensorShape(xTest)[0];
     int trainBatches = (trainSamples + BATCH_SIZE - 1) / BATCH_SIZE;
     int testBatches  = (testSamples  + BATCH_SIZE - 1) / BATCH_SIZE;
 
-    // Reshape data Tensors from [..., 28, 28] to [..., 784] and scale entries from [0, 255] to [0, 1]
-    xTrain = TensorReshape(xTrain, 2, (int[]){trainSamples, IMAGE_SIZE}); // [60000, 784]
-    xTest  = TensorReshape(xTest,  2, (int[]){testSamples,  IMAGE_SIZE}); // [10000, 784]
-    xTrain = TensorScale(xTrain, 1.0f / 255);
-    xTest  = TensorScale(xTest,  1.0f / 255);
+    // Scale entries from [0, 255] to [0, 1]
+    xTrain = TensorScalarMultiply(xTrain, 1.0f / 255);
+    xTest  = TensorScalarMultiply(xTest,  1.0f / 255);
 
     // Create and initialize hidden and output layer weights/biases
     TensorArray parameters = TensorArrayNew();
@@ -87,6 +85,7 @@ int main(void)
                 TensorPrint(loss);
             }
 
+            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
@@ -104,6 +103,7 @@ int main(void)
             totalErrors  += TensorHammingDistance(predictions, Y);
             totalSamples += TensorSize(predictions);
 
+            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(predictions);
         }
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);

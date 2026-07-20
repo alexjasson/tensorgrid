@@ -19,17 +19,17 @@ static void poolBackward(void *arg, int start, int end);
 
 Tensor OperationPool(Binary fn, Real initial, Tensor in, int size, int stride, int padding)
 {
-    int N    = in.shape[0];
-    int C    = in.shape[1];
-    int H    = in.shape[2];
-    int W    = in.shape[3];
+    int N    = TensorShape(in)[0];
+    int C    = TensorShape(in)[1];
+    int H    = TensorShape(in)[2];
+    int W    = TensorShape(in)[3];
     int Hout = (H + 2 * padding - size) / stride + 1;
     int Wout = (W + 2 * padding - size) / stride + 1;
-    int autograd = in.gradients != NULL;
+    int autograd = TensorGradients(in) != NULL;
     int cacheArg = autograd && (fn.f == MAX.f || fn.f == MIN.f);
 
     Tensor out     = TensorNew(4, (int[]){N, C, Hout, Wout}, REAL, autograd);
-    Tensor indices = cacheArg ? TensorNew(4, (int[]){N, C, Hout, Wout}, REAL, FALSE) : (Tensor){0};
+    Tensor indices = cacheArg ? TensorNew(4, (int[]){N, C, Hout, Wout}, REAL, FALSE) : NULL;
 
     PoolContext *ctx = malloc(sizeof(*ctx));
     if (!ctx) {
@@ -44,21 +44,21 @@ Tensor OperationPool(Binary fn, Real initial, Tensor in, int size, int stride, i
 
     Tensor result = OperationExecute(OperationNew(out, in, indices,
                     OperationPoolForward, OperationPoolBackward, ctx));
-    if (indices.refcount) TensorFree(indices);
+    if (indices) TensorFree(indices);
     return result;
 }
 
 static void OperationPoolForward(Operation *op)
 {
     PoolContext *ctx = op->context;
-    OperationDispatch(poolForward, op, op->out.shape[0] * op->out.shape[1], (long)TensorSize(op->out) * ctx->fH * ctx->fH);
+    OperationDispatch(poolForward, op, TensorShape(op->out)[0] * TensorShape(op->out)[1], (long)TensorSize(op->out) * ctx->fH * ctx->fH);
 }
 
 static void OperationPoolBackward(Operation *op)
 {
-    if (!op->A.gradients) return;
+    if (!TensorGradients(op->A)) return;
     PoolContext *ctx = op->context;
-    int planes = op->A.shape[0] * op->A.shape[1];
+    int planes = TensorShape(op->A)[0] * TensorShape(op->A)[1];
     OperationDispatch(poolBackward, op, planes, (long)TensorSize(op->A) * ctx->fH * ctx->fH);
 }
 
@@ -68,16 +68,16 @@ static void poolForward(void *arg, int start, int end)
     Operation *op = arg;
     PoolContext *ctx = op->context;
     Tensor A = op->A;
-    int C    = A.shape[1];
-    int H    = A.shape[2];
-    int W    = A.shape[3];
+    int C    = TensorShape(A)[1];
+    int H    = TensorShape(A)[2];
+    int W    = TensorShape(A)[3];
     int size = ctx->fH;
     int stride = ctx->stride, padding = ctx->padding;
-    int Hout = op->out.shape[2];
-    int Wout = op->out.shape[3];
-    int sN = A.strides[0], sC = A.strides[1], sH = A.strides[2], sW = A.strides[3];
-    Real *out    = op->out.entries;
-    Real *argIdx = op->B.entries;
+    int Hout = TensorShape(op->out)[2];
+    int Wout = TensorShape(op->out)[3];
+    int sN = TensorStride(A)[0], sC = TensorStride(A)[1], sH = TensorStride(A)[2], sW = TensorStride(A)[3];
+    Real *out    = TensorEntries(op->out);
+    Real *argIdx = op->B ? TensorEntries(op->B) : NULL;
     Real fill    = ctx->fill;
     f reducer = ctx->b.f;
 
@@ -117,18 +117,18 @@ static void poolBackward(void *arg, int start, int end)
     Operation *op = arg;
     PoolContext *ctx = op->context;
     Tensor A      = op->A;
-    int C    = A.shape[1];
-    int H    = A.shape[2];
-    int W    = A.shape[3];
+    int C    = TensorShape(A)[1];
+    int H    = TensorShape(A)[2];
+    int W    = TensorShape(A)[3];
     int size = ctx->fH;
     int stride = ctx->stride, padding = ctx->padding;
-    int Hout = op->out.shape[2];
-    int Wout = op->out.shape[3];
-    int sN = A.strides[0], sC = A.strides[1], sH = A.strides[2], sW = A.strides[3];
-    Real *input  = A.entries;
-    Real *dInput = A.gradients;
-    Real *dOut   = op->out.gradients;
-    Real *argIdx = op->B.entries;
+    int Hout = TensorShape(op->out)[2];
+    int Wout = TensorShape(op->out)[3];
+    int sN = TensorStride(A)[0], sC = TensorStride(A)[1], sH = TensorStride(A)[2], sW = TensorStride(A)[3];
+    Real *input  = TensorEntries(A);
+    Real *dInput = TensorGradients(A);
+    Real *dOut   = TensorGradients(op->out);
+    Real *argIdx = TensorEntries(op->B);
     Real fill    = ctx->fill;
     f reducer = ctx->b.f;
     ScalarBinary da = (ScalarBinary)ctx->b.da, db = (ScalarBinary)ctx->b.db;

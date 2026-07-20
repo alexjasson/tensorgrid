@@ -24,8 +24,8 @@ Tensor OperationAffine(Unary fn, Tensor A, Tensor bias, int inner)
     }
     ctx->u = fn;
     ctx->inner = inner;
-    int autograd = A.gradients != NULL || bias.gradients != NULL;
-    Tensor out = TensorNew(A.dimensions, A.shape, REAL, autograd);
+    int autograd = TensorGradients(A) != NULL || TensorGradients(bias) != NULL;
+    Tensor out = TensorNew(TensorDimensions(A), TensorShape(A), REAL, autograd);
     return OperationExecute(OperationNew(out, A, bias, OperationAffineForward, OperationAffineBackward, ctx));
 }
 
@@ -41,9 +41,9 @@ static void OperationAffineBackward(Operation *op)
     AffineContext *ctx = op->context;
     int biasSize = TensorSize(op->B);
     int outer    = TensorSize(op->out) / (biasSize * ctx->inner);
-    if (op->A.gradients)
+    if (TensorGradients(op->A))
         OperationDispatch(affineBackwardDa, op, outer, TensorSize(op->out));
-    if (op->B.gradients)
+    if (TensorGradients(op->B))
         OperationDispatch(affineBackwardDb, op, biasSize, TensorSize(op->out));
 }
 
@@ -53,11 +53,11 @@ static void affineForward(void *arg, int start, int end)
 {
     Operation *op = arg;
     AffineContext *ctx = op->context;
-    Real *out = op->out.entries, *A = op->A.entries, *bias = op->B.entries;
+    Real *out = TensorEntries(op->out), *A = TensorEntries(op->A), *bias = TensorEntries(op->B);
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     VectorUnary fn = (VectorUnary)ctx->u.fv;
 
-    if (op->A.type != REAL || op->A.scale || op->B.type != REAL || op->B.scale) {
+    if (TensorDataType(op->A) != REAL || TensorScale(op->A) || TensorDataType(op->B) != REAL || TensorScale(op->B)) {
         ScalarUnary sfn = (ScalarUnary)ctx->u.f;
         for (int o = start; o < end; o++)
             for (int c = 0; c < biasSize; c++) {
@@ -112,7 +112,7 @@ static void affineBackwardDa(void *arg, int start, int end)
 {
     Operation *op = arg;
     AffineContext *ctx = op->context;
-    Real *A = op->A.entries, *bias = op->B.entries, *dA = op->A.gradients, *dout = op->out.gradients;
+    Real *A = TensorEntries(op->A), *bias = TensorEntries(op->B), *dA = TensorGradients(op->A), *dout = TensorGradients(op->out);
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     VectorUnary dafn = (VectorUnary)ctx->u.dav;
     
@@ -180,7 +180,7 @@ static void affineBackwardDb(void *arg, int start, int end)
 {
     Operation *op = arg;
     AffineContext *ctx = op->context;
-    Real *A = op->A.entries, *bias = op->B.entries, *dout = op->out.gradients, *dB = op->B.gradients;
+    Real *A = TensorEntries(op->A), *bias = TensorEntries(op->B), *dout = TensorGradients(op->out), *dB = TensorGradients(op->B);
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     int outer = TensorSize(op->out) / (biasSize * inner);
     VectorUnary dafn = (VectorUnary)ctx->u.dav;

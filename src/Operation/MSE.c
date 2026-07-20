@@ -17,12 +17,12 @@ static void mseBackward(void *arg, int start, int end);
 
 Tensor OperationMSE(Tensor y, Tensor y_hat)
 {
-    if (y.dimensions != y_hat.dimensions) {
+    if (TensorDimensions(y) != TensorDimensions(y_hat)) {
         fprintf(stderr, "OperationMSE shapes are incompatible!\n");
         exit(EXIT_FAILURE);
     }
-    for (int i = 0; i < y.dimensions; i++) {
-        if (y.shape[i] != y_hat.shape[i]) {
+    for (int i = 0; i < TensorDimensions(y); i++) {
+        if (TensorShape(y)[i] != TensorShape(y_hat)[i]) {
             fprintf(stderr, "OperationMSE shapes are incompatible!\n");
             exit(EXIT_FAILURE);
         }
@@ -34,10 +34,10 @@ Tensor OperationMSE(Tensor y, Tensor y_hat)
         exit(EXIT_FAILURE);
     }
     ctx->size = TensorSize(y);
-    ctx->aContiguous = isContiguous(y.shape, y.strides, y.dimensions);
-    ctx->bContiguous = isContiguous(y_hat.shape, y_hat.strides, y_hat.dimensions);
+    ctx->aContiguous = isContiguous(TensorShape(y), TensorStride(y), TensorDimensions(y));
+    ctx->bContiguous = isContiguous(TensorShape(y_hat), TensorStride(y_hat), TensorDimensions(y_hat));
 
-    Tensor out = TensorNew(0, NULL, REAL, y.gradients != NULL || y_hat.gradients != NULL);
+    Tensor out = TensorNew(0, NULL, REAL, TensorGradients(y) != NULL || TensorGradients(y_hat) != NULL);
     return OperationExecute(OperationNew(out, y, y_hat, OperationMSEForward, OperationMSEBackward, ctx));
 }
 
@@ -48,19 +48,19 @@ static void OperationMSEForward(Operation *op)
     Real sum = 0.0f;
 
     for (int i = 0; i < ctx->size; i++) {
-        int aOff = ctx->aContiguous ? i : unravel(i, Y.shape, Y.strides, Y.dimensions);
-        int bOff = ctx->bContiguous ? i : unravel(i, Y2.shape, Y2.strides, Y2.dimensions);
+        int aOff = ctx->aContiguous ? i : unravel(i, TensorShape(Y), TensorStride(Y), TensorDimensions(Y));
+        int bOff = ctx->bContiguous ? i : unravel(i, TensorShape(Y2), TensorStride(Y2), TensorDimensions(Y2));
         Real d = TensorGet(Y, aOff) - TensorGet(Y2, bOff);
         sum += d * d;
     }
 
-    *(Real *)op->out.entries = sum / ctx->size;
+    *(Real *)TensorEntries(op->out) = sum / ctx->size;
 }
 
 static void OperationMSEBackward(Operation *op)
 {
     MSEContext *ctx = op->context;
-    if (!op->A.gradients && !op->B.gradients) return;
+    if (!TensorGradients(op->A) && !TensorGradients(op->B)) return;
     OperationDispatch(mseBackward, op, ctx->size, ctx->size);
 }
 
@@ -68,14 +68,14 @@ static void mseBackward(void *arg, int start, int end)
 {
     Operation *op = arg;
     MSEContext *ctx = op->context;
-    Real *ye = op->A.entries, *ye2 = op->B.entries;
-    Real scale = 2.0f * op->out.gradients[0] / ctx->size;
+    Real *ye = TensorEntries(op->A), *ye2 = TensorEntries(op->B);
+    Real scale = 2.0f * TensorGradients(op->out)[0] / ctx->size;
 
     for (int i = start; i < end; i++) {
-        int aOff = ctx->aContiguous ? i : unravel(i, op->A.shape, op->A.strides, op->A.dimensions);
-        int bOff = ctx->bContiguous ? i : unravel(i, op->B.shape, op->B.strides, op->B.dimensions);
+        int aOff = ctx->aContiguous ? i : unravel(i, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
+        int bOff = ctx->bContiguous ? i : unravel(i, TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
         Real d = ye[aOff] - ye2[bOff];
-        if (op->A.gradients) op->A.gradients[aOff] += scale * d;
-        if (op->B.gradients) op->B.gradients[bOff] -= scale * d;
+        if (TensorGradients(op->A)) TensorGradients(op->A)[aOff] += scale * d;
+        if (TensorGradients(op->B)) TensorGradients(op->B)[bOff] -= scale * d;
     }
 }
