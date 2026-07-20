@@ -48,6 +48,7 @@ struct tensor {
     Real *scale;          // Maps stored entries to Real, one scale for each axis 0, NULL if unscaled
     Tensor owner;         // Owner tensor if this is a view, NULL if not a view
     int references;       // Number of references
+    Operation *op;        // Operation that produced this tensor, NULL if none
 };
 
 struct tensorArray {
@@ -55,15 +56,17 @@ struct tensorArray {
 };
 
 // Tensor accessor functions
-int TensorDimensions(Tensor A)    { return A->dimensions; }
-int *TensorShape(Tensor A)        { return A->shape;      }
-int *TensorStride(Tensor A)       { return A->strides;    }
-void *TensorEntries(Tensor A)     { return A->entries;    }
-DataType TensorDataType(Tensor A) { return A->type;       }
-Real *TensorGradients(Tensor A)   { return A->gradients;  }
-Real *TensorScale(Tensor A)       { return A->scale;      }
-int TensorReference(Tensor A)     { return A->references; }
-Tensor TensorOwner(Tensor A)      { return A->owner;      }
+int TensorDimensions(Tensor A)       { return A->dimensions; }
+int *TensorShape(Tensor A)           { return A->shape;      }
+int *TensorStride(Tensor A)          { return A->strides;    }
+void *TensorEntries(Tensor A)        { return A->entries;    }
+DataType TensorDataType(Tensor A)    { return A->type;       }
+Real *TensorGradients(Tensor A)      { return A->gradients;  }
+Real *TensorScale(Tensor A)          { return A->scale;      }
+int TensorReference(Tensor A)        { return A->references; }
+Tensor TensorOwner(Tensor A)         { return A->owner;      }
+Operation *OperationGet(Tensor A)          { return A->op; }
+void OperationSet(Tensor A, Operation *op) { A->op = op;   }
 
 // Pointer to the entry at given index
 static void *entry(Tensor A, size_t index) { return (unsigned char *)A->entries + index * ScalarSize(A->type); }
@@ -181,6 +184,12 @@ void TensorFree(Tensor A)
             free(A->optimizer);
         }
         free(A->scale);
+        if (A->op) {
+            TensorFree(A->op->A);
+            TensorFree(A->op->B);
+            free(A->op->context);
+            free(A->op);
+        }
     }
     free(A);
     TensorFree(owner);
@@ -248,6 +257,7 @@ Tensor TensorDetach(Tensor A)
     Tensor t = TensorView(A, A->dimensions, A->shape, A->strides);
     t->gradients = NULL;
     t->optimizer = NULL;
+    t->op = NULL;
     return t;
 }
 
@@ -704,7 +714,6 @@ static void toReal(void *arg, int start, int end)
 
 void TensorToType(Tensor A, DataType d)
 {
-    OperationFlush();
     if (A->owner) {
         fprintf(stderr, "TensorToType does not support views!\n");
         exit(EXIT_FAILURE);
