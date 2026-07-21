@@ -89,13 +89,13 @@ Tensor TensorView(Tensor A, int dimensions, const int *shape, const int *strides
 
 Real TensorGet(Tensor A, int index)
 {
-    Real scale = A->scale ? A->scale[A->dimensions >= 2 ? index / A->strides[0] : 0] : 1.0;
+    Real scale = A->scale ? A->scale[A->dimensions >= 2 && A->strides[0] ? index / A->strides[0] : 0] : 1.0;
     return scale * ScalarLoad(entry(A, (size_t)index), A->type);
 }
 
 void TensorSet(Tensor A, int index, Real value)
 {
-    Real scale = A->scale ? A->scale[A->dimensions >= 2 ? index / A->strides[0] : 0] : 1.0;
+    Real scale = A->scale ? A->scale[A->dimensions >= 2 && A->strides[0] ? index / A->strides[0] : 0] : 1.0;
     ScalarStore(entry(A, (size_t)index), A->type, value / scale);
 }
 
