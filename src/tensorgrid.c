@@ -37,6 +37,13 @@ typedef struct optimizer {
     int t;   // Adam timestep
 } Optimizer;
 
+// Quantization scale for each group, the stored entry at offset i decodes as values[i / stride] * entry.
+typedef struct {
+    Real *values; // group scales, NULL if unscaled
+    int   groups; // number of scale entries
+    int   stride; // Stride between groups, 0 for a single group
+} Scale;
+
 struct tensor {
     int dimensions;
     int shape[MAX_DIMENSIONS];
@@ -45,7 +52,7 @@ struct tensor {
     DataType type;        // Storage format of entries
     Real *gradients;      // Gradients for each entry, NULL if no autograd
     Optimizer *optimizer; // Optimizer state, NULL if no autograd
-    Real *scale;          // Maps stored entries to Real, one scale for each axis 0, NULL if unscaled
+    Scale scale;          // Maps stored entries to Real, NULL if unscaled
     Tensor owner;         // Owner tensor if this is a view, NULL if not a view
     int references;       // Number of references
     Operation *op;        // Operation that produced this tensor, NULL if none
@@ -55,6 +62,11 @@ struct tensorArray {
     DynamicArray tensors;
 };
 
+// Helper functions
+static void *entry(Tensor A, size_t index) { return (unsigned char *)A->entries + index * ScalarSize(A->type); }
+static void scaleNew(Scale *s, int groups, int stride);
+static void scaleFree(Scale *s);
+
 // Tensor accessor functions
 int TensorDimensions(Tensor A)       { return A->dimensions; }
 int *TensorShape(Tensor A)           { return A->shape;      }
@@ -62,14 +74,28 @@ int *TensorStride(Tensor A)          { return A->strides;    }
 void *TensorEntries(Tensor A)        { return A->entries;    }
 DataType TensorDataType(Tensor A)    { return A->type;       }
 Real *TensorGradients(Tensor A)      { return A->gradients;  }
-Real *TensorScale(Tensor A)          { return A->scale;      }
+Real *TensorScale(Tensor A)          { return A->scale.values;  }
 int TensorReference(Tensor A)        { return A->references; }
 Tensor TensorOwner(Tensor A)         { return A->owner;      }
 Operation *OperationGet(Tensor A)          { return A->op; }
 void OperationSet(Tensor A, Operation *op) { A->op = op;   }
 
-// Pointer to the entry at given index
-static void *entry(Tensor A, size_t index) { return (unsigned char *)A->entries + index * ScalarSize(A->type); }
+
+static void scaleNew(Scale *s, int groups, int stride)
+{
+    s->values = malloc((size_t)groups * sizeof(Real));
+    if (!s->values) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+    s->groups = groups;
+    s->stride = stride;
+}
+
+static void scaleFree(Scale *s)
+{
+    free(s->values);
+    s->values = NULL;
+    s->groups = 0;
+    s->stride = 0;
+}
 
 Tensor TensorView(Tensor A, int dimensions, const int *shape, const int *strides)
 {
@@ -89,13 +115,13 @@ Tensor TensorView(Tensor A, int dimensions, const int *shape, const int *strides
 
 Real TensorGet(Tensor A, int index)
 {
-    Real scale = A->scale ? A->scale[A->dimensions >= 2 && A->strides[0] ? index / A->strides[0] : 0] : 1.0;
+    Real scale = A->scale.values ? A->scale.values[A->scale.stride ? index / A->scale.stride : 0] : 1.0;
     return scale * ScalarLoad(entry(A, (size_t)index), A->type);
 }
 
 void TensorSet(Tensor A, int index, Real value)
 {
-    Real scale = A->scale ? A->scale[A->dimensions >= 2 && A->strides[0] ? index / A->strides[0] : 0] : 1.0;
+    Real scale = A->scale.values ? A->scale.values[A->scale.stride ? index / A->scale.stride : 0] : 1.0;
     ScalarStore(entry(A, (size_t)index), A->type, value / scale);
 }
 
@@ -178,12 +204,12 @@ void TensorFree(Tensor A)
         MemoryPool pool = MemoryPoolGet();
         MemoryPoolFree(pool, A->entries, footprint * ScalarSize(A->type));
         MemoryPoolFree(pool, A->gradients, footprint * sizeof(Real));
+        scaleFree(&A->scale);
         if (A->optimizer) {
             free(A->optimizer->m);
             free(A->optimizer->v);
             free(A->optimizer);
         }
-        free(A->scale);
         if (A->op) {
             TensorFree(A->op->A);
             TensorFree(A->op->B);
@@ -212,7 +238,10 @@ Tensor TensorSlice(Tensor A, int index, int length)
     int offset   = index * A->strides[0];
     t->entries   = entry(A, (size_t)offset);
     t->gradients = A->gradients ? A->gradients + offset : NULL;
-    if (A->scale && A->dimensions >= 2) t->scale = A->scale + index;
+    if (A->scale.values && A->dimensions >= 2) {
+        t->scale.values += index;
+        t->scale.groups = length;
+    }
     return t;
 }
 
@@ -223,12 +252,10 @@ Tensor TensorIndex(Tensor A, int index)
     int offset   = index * A->strides[0];
     t->entries   = entry(A, (size_t)offset);
     t->gradients = A->gradients ? A->gradients + offset : NULL;
-    if (A->scale) {
-        if (A->dimensions > 2) {
-            fprintf(stderr, "TensorIndex requires an unscaled input!\n");
-            exit(EXIT_FAILURE);
-        }
-        t->scale = A->dimensions == 2 ? A->scale + index : A->scale;
+    if (A->scale.values && A->dimensions >= 2) {
+        t->scale.values += A->scale.stride ? index : 0;
+        t->scale.groups = 1;
+        t->scale.stride = 0;
     }
     return t;
 }
@@ -239,7 +266,7 @@ Tensor TensorReshape(Tensor A, int dimensions, int *shape)
         fprintf(stderr, "TensorReshape requires a contiguous input!\n");
         exit(EXIT_FAILURE);
     }
-    if (A->scale) {
+    if (A->scale.values) {
         fprintf(stderr, "TensorReshape requires an unscaled input!\n");
         exit(EXIT_FAILURE);
     }
@@ -263,10 +290,6 @@ Tensor TensorDetach(Tensor A)
 
 Tensor TensorTranspose(Tensor A)
 {
-    if (A->scale && A->dimensions == 2) {
-        fprintf(stderr, "TensorTranspose requires an unscaled input!\n");
-        exit(EXIT_FAILURE);
-    }
     int dims = A->dimensions;
     int shape[MAX_DIMENSIONS], strides[MAX_DIMENSIONS];
     for (int axis = 0; axis < dims; axis++) {
@@ -282,7 +305,7 @@ Tensor TensorTranspose(Tensor A)
 
 Tensor TensorRestride(Tensor A, int dimensions, int *shape, int *strides, int offset)
 {
-    if (A->scale) {
+    if (A->scale.values) {
         fprintf(stderr, "TensorRestride requires an unscaled input!\n");
         exit(EXIT_FAILURE);
     }
@@ -347,13 +370,12 @@ Tensor TensorScalarMultiply(Tensor A, Real scalar)
             TensorFree(A);
             A = detached;
         }
-        int channels = A->dimensions >= 2 ? A->shape[0] : 1;
-        if (!A->scale) {
-            A->scale = malloc((size_t)channels * sizeof(Real));
-            if (!A->scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
-            for (int c = 0; c < channels; c++) A->scale[c] = scalar;
+        int groups = A->dimensions >= 2 ? A->shape[0] : 1;
+        if (!A->scale.values) {
+            scaleNew(&A->scale, groups, groups >= 2 ? A->strides[0] : 0);
+            for (int c = 0; c < groups; c++) A->scale.values[c] = scalar;
         } else {
-            for (int c = 0; c < channels; c++) A->scale[c] *= scalar;
+            for (int c = 0; c < A->scale.groups; c++) A->scale.values[c] *= scalar;
         }
         return A;
     }
@@ -377,7 +399,7 @@ Tensor TensorScalarMultiply(Tensor A, Real scalar)
 
 void TensorFill(Tensor A, Real value)
 {
-    if (A->type != REAL || A->scale) {
+    if (A->type != REAL || A->scale.values) {
         fprintf(stderr, "TensorFill requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
@@ -475,7 +497,7 @@ Tensor TensorNLL(Tensor y, Tensor logP)
 
 Tensor TensorSample(Tensor logits, Real temperature)
 {
-    if (logits->type != REAL || logits->scale) {
+    if (logits->type != REAL || logits->scale.values) {
         fprintf(stderr, "TensorSample requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
@@ -545,12 +567,11 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
     }
 
     Tensor out = TensorNew(A->dimensions, A->shape, A->type, 0);
-    if (A->scale) {
-        int channels = A->dimensions >= 2 ? n : 1;
-        out->scale = malloc((size_t)channels * sizeof(Real));
-        if (!out->scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
-        for (int i = 0; i < channels; i++)
-            out->scale[i] = A->scale[A->dimensions >= 2 ? perm[i] : i];
+    if (A->scale.values) {
+        int groups = A->dimensions >= 2 ? n : 1;
+        scaleNew(&out->scale, groups, groups >= 2 ? out->strides[0] : 0);
+        for (int i = 0; i < groups; i++)
+            out->scale.values[i] = A->scale.values[A->dimensions >= 2 ? perm[i] : i];
     }
     int rowSize = TensorSize(A) / n;
     if (isContiguous(A->shape, A->strides, A->dimensions)) {
@@ -576,7 +597,7 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
 
 void TensorXavier(Tensor A)
 {
-    if (A->type != REAL || A->scale) {
+    if (A->type != REAL || A->scale.values) {
         fprintf(stderr, "TensorXavier requires REAL entries, convert with TensorToType!\n");
         exit(EXIT_FAILURE);
     }
@@ -697,12 +718,12 @@ static void toReal(void *arg, int start, int end)
     while (i < end) {
         int stop = end;
         Real s = 1.0;
-        if (op->A->scale && op->A->dimensions >= 2) {
-            int c = i / op->A->strides[0];
-            s = op->A->scale[c];
-            if ((c + 1) * op->A->strides[0] < stop) stop = (c + 1) * op->A->strides[0];
-        } else if (op->A->scale) {
-            s = *op->A->scale;
+        if (op->A->scale.values && op->A->scale.stride) {
+            int c = i / op->A->scale.stride;
+            s = op->A->scale.values[c];
+            if ((c + 1) * op->A->scale.stride < stop) stop = (c + 1) * op->A->scale.stride;
+        } else if (op->A->scale.values) {
+            s = op->A->scale.values[0];
         }
         Vector scale = VectorBcast(s);
         for (; i + VECTOR_DIMS <= stop; i += VECTOR_DIMS)
@@ -723,7 +744,7 @@ void TensorToType(Tensor A, DataType d)
         exit(EXIT_FAILURE);
     }
     if ((d == FLOAT32 || d == FLOAT64) && ScalarSize(d) == sizeof(Real)) d = REAL;
-    if (!A->gradients && A->type == d && !A->scale &&
+    if (!A->gradients && A->type == d && !A->scale.values &&
         isContiguous(A->shape, A->strides, A->dimensions)) return;
 
     Tensor out = TensorNew(A->dimensions, A->shape, d, FALSE);
@@ -736,11 +757,10 @@ void TensorToType(Tensor A, DataType d)
     } else {
         if (out->type <= INT32) { // For integer types, scale maps the largest value to the type's max
             Real typeMax  = out->type == UINT8 ? UINT8_MAX : out->type == INT8 ? INT8_MAX : out->type == INT16 ? INT16_MAX : INT32_MAX;
-            int channels  = out->dimensions >= 2 ? out->shape[0] : 1;
-            int inner     = size / channels;
-            out->scale = malloc((size_t)channels * sizeof(Real));
-            if (!out->scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
-            for (int c = 0; c < channels; c++) {
+            int groups  = out->dimensions >= 2 ? out->shape[0] : 1;
+            int inner     = size / groups;
+            scaleNew(&out->scale, groups, groups >= 2 ? inner : 0);
+            for (int c = 0; c < groups; c++) {
                 Real absmax = 0.0;
                 for (int j = 0; j < inner; j++) {
                     int i   = c * inner + j;
@@ -755,12 +775,12 @@ void TensorToType(Tensor A, DataType d)
                     }
                     if (x > absmax) absmax = x;
                 }
-                out->scale[c] = absmax > 0.0 ? absmax / typeMax : 1.0;
+                out->scale.values[c] = absmax > 0.0 ? absmax / typeMax : 1.0;
             }
         }
         for (int i = 0; i < size; i++) {
             int off   = contiguous ? i : unravel(i, A->shape, A->strides, A->dimensions);
-            Real s    = out->scale ? out->scale[out->dimensions >= 2 ? i / out->strides[0] : 0] : 1.0;
+            Real s    = out->scale.values ? out->scale.values[out->scale.stride ? i / out->scale.stride : 0] : 1.0;
             ScalarStore(entry(out, (size_t)i), out->type, TensorGet(A, off) / s);
         }
     }
@@ -837,14 +857,14 @@ void TensorArrayWrite(TensorArray ta, char *path)
         }
 
         // Write tensor scale
-        uint32_t channels = t->scale ? (uint32_t)(t->dimensions >= 2 ? t->shape[0] : 1) : 0;
-        if (fwrite(&channels, sizeof(channels), 1, f) != 1) {
+        uint32_t groups = t->scale.values ? (uint32_t)t->scale.groups : 0;
+        if (fwrite(&groups, sizeof(groups), 1, f) != 1) {
             fprintf(stderr, "Cannot write file: %s\n", path);
             fclose(f);
             exit(EXIT_FAILURE);
         }
-        for (uint32_t c = 0; c < channels; c++) {
-            double perChannel = t->scale[c];
+        for (uint32_t c = 0; c < groups; c++) {
+            double perChannel = t->scale.values[c];
             if (fwrite(&perChannel, sizeof(perChannel), 1, f) != 1) {
                 fprintf(stderr, "Cannot write file: %s\n", path);
                 fclose(f);
@@ -914,9 +934,9 @@ int TensorArrayRead(TensorArray ta, char *path)
         }
 
         // Read scale count
-        uint32_t channels;
-        if (fread(&channels, sizeof(channels), 1, f) != 1 ||
-            (channels != 0 && channels != (uint32_t)(dimensions >= 2 ? shape[0] : 1)))
+        uint32_t groups;
+        if (fread(&groups, sizeof(groups), 1, f) != 1 ||
+            (groups != 0 && groups != (uint32_t)(dimensions >= 2 ? shape[0] : 1)))
             goto error;
 
         // Check if tensor already exists, otherwise create a new one
@@ -936,16 +956,14 @@ int TensorArrayRead(TensorArray ta, char *path)
             DynamicArrayPush(ta->tensors, &created);
             t = created;
         }
-        free(t->scale);
-        t->scale = NULL;
-        if (channels) {
-            t->scale = malloc(channels * sizeof(Real));
-            if (!t->scale) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
-            for (uint32_t c = 0; c < channels; c++) {
+        scaleFree(&t->scale);
+        if (groups) {
+            scaleNew(&t->scale, (int)groups, groups >= 2 ? t->strides[0] : 0);
+            for (uint32_t c = 0; c < groups; c++) {
                 double perChannel;
                 if (fread(&perChannel, sizeof(perChannel), 1, f) != 1)
                     goto error;
-                t->scale[c] = (Real)perChannel;
+                t->scale.values[c] = (Real)perChannel;
             }
         }
 

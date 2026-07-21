@@ -33,7 +33,9 @@ static void OperationMultiplyForward(Operation *op)
         op->A = TensorCopy(A);
         TensorToType(op->A, REAL);
     }
-    if (dimsB >= 3 && (TensorDataType(B) != REAL || TensorScale(B))) {
+    int scaledIncompatible = TensorScale(B) && !(dimsB == 2 && TensorStride(B)[dimsB - 1] == 1);
+    int integerBatched     = dimsB >= 3 && TensorDataType(B) != REAL;
+    if (scaledIncompatible || integerBatched) {
         op->B = TensorCopy(B);
         TensorToType(op->B, REAL);
     }
