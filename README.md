@@ -12,8 +12,10 @@ New here? The best place to start is the [`examples/`](examples) directory. Ther
 - N-dimensional tensors
 - Basic tensor operations
 - Automatic differentiation
-- Multithreading/SIMD instructions for CPU performance
+- Multithreading
+- SIMD instructions (supports AVX2 and AVX-512 instruction sets)
 - Load and save tensors as `.tgd` files
+- Weight quantization for faster inference
 
 ## Prerequisites
 - Linux or mac
