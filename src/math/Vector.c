@@ -151,7 +151,19 @@ void VectorDot(void *A, void *B, Real *C, Real *q, int n, int k)
         for (int mr = 0; mr < MR; mr++)
             for (int v = 0; v < NRV; v++) {
                 int32_t c __attribute__((__vector_size__(VECTOR_DIMS * 4))) = acc[mr][v];
-#if defined(__AVX2__) && !defined(__AVX512F__)
+#if defined(__AVX512BW__)
+                if (sizeof(Real) == 4) {
+                    int32_t pair;
+                    memcpy(&pair, aRow + 2 * mr, sizeof(pair));
+                    __m512i bv, cv;
+                    memcpy(&bv, &b[v], sizeof(b[v]));
+                    memcpy(&cv, &c, sizeof(c));
+                    cv = _mm512_add_epi32(cv, _mm512_madd_epi16(_mm512_set1_epi32(pair), bv));
+                    memcpy(&c, &cv, sizeof(c));
+                    acc[mr][v] = c;
+                    continue;
+                }
+#elif defined(__AVX2__) && !defined(__AVX512F__)
                 if (sizeof(Real) == 4) {
                     int32_t pair;
                     memcpy(&pair, aRow + 2 * mr, sizeof(pair));
