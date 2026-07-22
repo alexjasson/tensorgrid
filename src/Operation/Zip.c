@@ -16,6 +16,13 @@ static void zipBackward(void *arg, int start, int end);
 
 Tensor OperationZip(Binary fn, Tensor A, Tensor B)
 {
+    // Dequantize the inputs so they run on the vectorized fast path if autograd is not needed
+    Tensor Aorig = A, Borig = B;
+    if (!TensorGradients(A) && !TensorGradients(B)) {
+        if (TensorDataType(A) != REAL || TensorScale(A)) A = TensorCopy(A);
+        if (TensorDataType(B) != REAL || TensorScale(B)) B = TensorCopy(B);
+    }
+
     int outDims = TensorDimensions(A) >= TensorDimensions(B) ? TensorDimensions(A) : TensorDimensions(B);
     int outShape[MAX_DIMENSIONS];
     for (int axis = 0; axis < outDims; axis++) {
@@ -64,6 +71,8 @@ Tensor OperationZip(Binary fn, Tensor A, Tensor B)
     Tensor result = OperationExecute(OperationNew(out, zipA, zipB, OperationZipForward, OperationZipBackward, ctx));
     TensorFree(zipA);
     TensorFree(zipB);
+    if (A != Aorig) TensorFree(A);
+    if (B != Borig) TensorFree(B);
     return result;
 }
 

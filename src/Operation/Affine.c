@@ -24,9 +24,18 @@ Tensor OperationAffine(Unary fn, Tensor A, Tensor bias, int inner)
     }
     ctx->u = fn;
     ctx->inner = inner;
+    
+    // Dequantize the bias so it runs on the vectorized fast path if autograd is not needed
+    Tensor biasOrig = bias;
+    if (!TensorGradients(A) && !TensorGradients(bias) &&
+        (TensorDataType(bias) != REAL || TensorScale(bias)))
+        bias = TensorCopy(bias);
+
     int autograd = TensorGradients(A) != NULL || TensorGradients(bias) != NULL;
     Tensor out = TensorNew(TensorDimensions(A), TensorShape(A), REAL, autograd);
-    return OperationExecute(OperationNew(out, A, bias, OperationAffineForward, OperationAffineBackward, ctx));
+    Tensor result = OperationExecute(OperationNew(out, A, bias, OperationAffineForward, OperationAffineBackward, ctx));
+    if (bias != biasOrig) TensorFree(bias);
+    return result;
 }
 
 static void OperationAffineForward(Operation *op)
