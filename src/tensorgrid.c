@@ -529,7 +529,7 @@ Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataT
 
     Tensor t = TensorNew(dimensions, shape, FALSE);
     int size = TensorSize(t);
-    int elemSize = d == DataUint8 || d == DataInt8 ? 1 : d == DataInt16 ? 2 : d == DataFloat64 ? 8 : 4;
+    int elemSize = d == UINT8 || d == INT8 ? 1 : d == INT16 ? 2 : d == FLOAT64 ? 8 : 4;
     unsigned char buf[32768];
     for (int i = 0; i < size; ) {
         int chunk = (int)(sizeof(buf) / elemSize);
@@ -537,12 +537,12 @@ Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataT
         if (fread(buf, elemSize, chunk, f) != (size_t)chunk) goto error;
         for (int k = 0; k < chunk; k++) {
             switch (d) {
-                case DataUint8:   { uint8_t  x; memcpy(&x, buf + k,     1); t.entries[i + k] = (Real)x; break; }
-                case DataInt8:    { int8_t   x; memcpy(&x, buf + k,     1); t.entries[i + k] = (Real)x; break; }
-                case DataInt16:   { int16_t  x; memcpy(&x, buf + 2 * k, 2); t.entries[i + k] = (Real)x; break; }
-                case DataInt32:   { int32_t  x; memcpy(&x, buf + 4 * k, 4); t.entries[i + k] = (Real)x; break; }
-                case DataFloat32: { float    x; memcpy(&x, buf + 4 * k, 4); t.entries[i + k] = (Real)x; break; }
-                case DataFloat64: { double   x; memcpy(&x, buf + 8 * k, 8); t.entries[i + k] = (Real)x; break; }
+                case UINT8:   { uint8_t  x; memcpy(&x, buf + k,     1); t.entries[i + k] = (Real)x; break; }
+                case INT8:    { int8_t   x; memcpy(&x, buf + k,     1); t.entries[i + k] = (Real)x; break; }
+                case INT16:   { int16_t  x; memcpy(&x, buf + 2 * k, 2); t.entries[i + k] = (Real)x; break; }
+                case INT32:   { int32_t  x; memcpy(&x, buf + 4 * k, 4); t.entries[i + k] = (Real)x; break; }
+                case FLOAT32: { float    x; memcpy(&x, buf + 4 * k, 4); t.entries[i + k] = (Real)x; break; }
+                case FLOAT64: { double   x; memcpy(&x, buf + 8 * k, 8); t.entries[i + k] = (Real)x; break; }
             }
         }
         i += chunk;

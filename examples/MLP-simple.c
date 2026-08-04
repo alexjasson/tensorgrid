@@ -17,8 +17,8 @@
 int main(void)
 {
     // Read training data, flatten [N, 28, 28] -> [N, 784] and scale [0, 255] -> [0, 1]
-    Tensor xTrain = TensorReadData("examples/data/mnist/train-images-idx3-ubyte", 3, (int[]){60000, 28, 28}, 16, DataUint8); // [60000, 28, 28]
-    Tensor yTrain = TensorReadData("examples/data/mnist/train-labels-idx1-ubyte", 1, (int[]){60000}, 8, DataUint8);          // [60000]
+    Tensor xTrain = TensorReadData("examples/data/mnist/train-images-idx3-ubyte", 3, (int[]){60000, 28, 28}, 16, UINT8); // [60000, 28, 28]
+    Tensor yTrain = TensorReadData("examples/data/mnist/train-labels-idx1-ubyte", 1, (int[]){60000}, 8, UINT8);          // [60000]
     int samples = TensorShape(xTrain, 0);
     xTrain = TensorReshape(xTrain, 2, (int[]){samples, IMAGE_SIZE}); // [60000, 784]
     TensorScale(xTrain, 1.0f / 255.0f);

@@ -12,7 +12,7 @@
 int main(void)
 {
     // Read the corpus as a 1D tensor of bytes and create a new model with uninitialized parameters
-    Tensor corpus = TensorReadData("examples/data/tinyShakespeare/input.txt", 1, (int[]){1115394}, 0, DataUint8); // [1115394]
+    Tensor corpus = TensorReadData("examples/data/tinyShakespeare/input.txt", 1, (int[]){1115394}, 0, UINT8); // [1115394]
     TensorArray parameters = TensorArrayNew();
     Model m = ModelNew(parameters);
 

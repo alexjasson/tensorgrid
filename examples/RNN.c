@@ -54,7 +54,7 @@ static Tensor forward(Tensor X, Model *m)
 int main(void)
 {
     // Read data into Tensors
-    Tensor data = TensorReadData("examples/data/tinyShakespeare/input.txt", 1, (int[]){1115394}, 0, DataUint8); // [1115394]
+    Tensor data = TensorReadData("examples/data/tinyShakespeare/input.txt", 1, (int[]){1115394}, 0, UINT8); // [1115394]
     Tensor train = TensorSlice(data, 0, TensorShape(data, 0) * 9 / 10);                                         // [1003854]
     Tensor test  = TensorSlice(data, TensorShape(train, 0), TensorShape(data, 0) - TensorShape(train, 0));      // [111540]
 

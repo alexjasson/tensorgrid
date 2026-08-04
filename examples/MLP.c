@@ -34,10 +34,10 @@ static Tensor forward(Tensor X, Model *m)
 int main(void)
 {
     // Read data into Tensors
-    Tensor xTrain = TensorReadData("examples/data/mnist/train-images-idx3-ubyte", 3, (int[]){60000, 28, 28}, 16, DataUint8); // [60000, 28, 28]
-    Tensor yTrain = TensorReadData("examples/data/mnist/train-labels-idx1-ubyte", 1, (int[]){60000}, 8, DataUint8);          // [60000]
-    Tensor xTest  = TensorReadData("examples/data/mnist/t10k-images-idx3-ubyte", 3, (int[]){10000, 28, 28}, 16, DataUint8);  // [10000, 28, 28]
-    Tensor yTest  = TensorReadData("examples/data/mnist/t10k-labels-idx1-ubyte", 1, (int[]){10000}, 8, DataUint8);           // [10000]
+    Tensor xTrain = TensorReadData("examples/data/mnist/train-images-idx3-ubyte", 3, (int[]){60000, 28, 28}, 16, UINT8); // [60000, 28, 28]
+    Tensor yTrain = TensorReadData("examples/data/mnist/train-labels-idx1-ubyte", 1, (int[]){60000}, 8, UINT8);          // [60000]
+    Tensor xTest  = TensorReadData("examples/data/mnist/t10k-images-idx3-ubyte", 3, (int[]){10000, 28, 28}, 16, UINT8);  // [10000, 28, 28]
+    Tensor yTest  = TensorReadData("examples/data/mnist/t10k-labels-idx1-ubyte", 1, (int[]){10000}, 8, UINT8);           // [10000]
 
     // Compute number of training/test samples and number of batches
     int trainSamples = TensorShape(xTrain, 0);

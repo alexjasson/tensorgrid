@@ -19,7 +19,7 @@ extern Binary ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
 
 typedef float Real; // Floating point representation of a Real number, may be float or double
 typedef struct optimizer Optimizer;
-typedef enum { DataUint8, DataInt8, DataInt16, DataInt32, DataFloat32, DataFloat64 } DataType;
+typedef enum { UINT8, INT8, INT16, INT32, FLOAT32, FLOAT64 } DataType;
 
 // Tensor representation
 typedef struct {
