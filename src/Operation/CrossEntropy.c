@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../Operation.h"
-#include "../math/Scalar.h"
+#include "../math/Vector.h"
 #include "../utility.h"
 
 typedef struct {
@@ -74,9 +74,11 @@ static void OperationCrossEntropyForward(Operation *op)
         }
 
         Real sum = 0.0f;
-        for (int c = 0; c < ctx->classes; c++)
-            sum += expe(op->A.entries[zBase + c * zStride] * ctx->invTemperature - max);
-        Real logDenom = max + loge(sum);
+        for (int c = 0; c < ctx->classes; c++) {
+            Real z = op->A.entries[zBase + c * zStride] * ctx->invTemperature - max;
+            sum += VectorFirst(expe(VectorBcast(z)));
+        }
+        Real logDenom = max + VectorFirst(loge(VectorBcast(sum)));
 
         if (ctx->distribution) {
             int yBase = ctx->targetContiguous
@@ -129,10 +131,12 @@ static void crossEntropyBackward(void *arg, int start, int end)
         }
 
         Real sum = 0.0f;
-        for (int c = 0; c < ctx->classes; c++)
-            sum += expe(op->A.entries[zBase + c * zStride] * ctx->invTemperature - max);
+        for (int c = 0; c < ctx->classes; c++) {
+            Real z = op->A.entries[zBase + c * zStride] * ctx->invTemperature - max;
+            sum += VectorFirst(expe(VectorBcast(z)));
+        }
         Real inv = 1.0f / sum;
-        Real logDenom = max + loge(sum);
+        Real logDenom = max + VectorFirst(loge(VectorBcast(sum)));
 
         Real targetSum = 1.0f;
         int target = -1;
@@ -151,7 +155,7 @@ static void crossEntropyBackward(void *arg, int start, int end)
         }
         for (int c = 0; c < ctx->classes; c++) {
             Real z = op->A.entries[zBase + c * zStride];
-            Real p = expe(z * ctx->invTemperature - max) * inv;
+            Real p = VectorFirst(expe(VectorBcast(z * ctx->invTemperature - max))) * inv;
             Real y = c == target ? 1.0f : 0.0f;
             if (ctx->distribution) {
                 y = op->B.entries[yBase + c * yStride];

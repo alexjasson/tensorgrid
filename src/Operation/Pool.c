@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "../Operation.h"
-#include "../math/Scalar.h"
+#include "../math/Vector.h"
 
 typedef struct {
     Binary b;
@@ -102,7 +102,7 @@ static void poolForward(void *arg, int start, int end)
                         if      (reducer == MAX.f) { if (v > acc) { acc = v; bl = local; } }
                         else if (reducer == MIN.f) { if (v < acc) { acc = v; bl = local; } }
                         else if (reducer == ADD.f) { acc += v; }
-                        else                       { acc = ((ScalarBinary)reducer)(acc, v); }
+                        else                       { acc = VectorApply((VectorBinary)reducer, acc, v); }
                     }
                 }
                 out[outIdx] = acc;
@@ -131,7 +131,7 @@ static void poolBackward(void *arg, int start, int end)
     Real *argIdx = op->B.entries;
     Real fill    = ctx->fill;
     f reducer = ctx->b.f;
-    ScalarBinary da = (ScalarBinary)ctx->b.da, db = (ScalarBinary)ctx->b.db;
+    VectorBinary da = (VectorBinary)ctx->b.da, db = (VectorBinary)ctx->b.db;
 
     // Fast paths for max, min and sum
     if (reducer == MAX.f || reducer == MIN.f) {
@@ -220,7 +220,7 @@ static void poolBackward(void *arg, int start, int end)
                             if (iw < 0 || iw >= W) continue;
                             size_t off = (size_t)ih * sH + (size_t)iw * sW;
                             Real v = inPlane[off];
-                            chain[cnt + 1] = ((ScalarBinary)reducer)(chain[cnt], v);
+                            chain[cnt + 1] = VectorApply((VectorBinary)reducer, chain[cnt], v);
                             vals[cnt] = v;
                             offs[cnt] = off;
                             cnt++;
@@ -228,8 +228,8 @@ static void poolBackward(void *arg, int start, int end)
                     }
                     Real dres = dOut[outBase + (size_t)oh * Wout + ow];
                     for (int j = cnt - 1; j >= 0; j--) {
-                        dPlane[offs[j]] += dres * db(chain[j], vals[j]);
-                        dres *= da(chain[j], vals[j]);
+                        dPlane[offs[j]] += dres * VectorApply(db, chain[j], vals[j]);
+                        dres *= VectorApply(da, chain[j], vals[j]);
                     }
                 }
         }

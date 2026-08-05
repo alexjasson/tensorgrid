@@ -6,30 +6,28 @@
 #include <stdint.h>
 #include "tensorgrid.h"
 #include "Operation.h"
-#include "math/Scalar.h"
 #include "adt/DynamicArray.h"
 #include "adt/HashMap.h"
 #include "adt/Stack.h"
 #include "utility.h"
 #include "adt/MemoryPool.h"
 #include "math/Vector.h"
-#include "math/Scalar.h"
 
-Unary  RELU     = { (f)relu,     (f)drelu,    (f)reluv,     (f)dreluv     };
-Unary  SIGMOID  = { (f)sigmoid,  (f)dsigmoid, (f)sigmoidv,  (f)dsigmoidv  };
-Unary  TANH     = { (f)tanhe,    (f)dtanhe,   (f)tanhv,     (f)dtanhv     };
-Unary  LOG      = { (f)loge,     (f)dloge,    (f)logv,      (f)dlogv      };
-Unary  EXP      = { (f)expe,     (f)expe,     (f)expv,      (f)expv       };
-Unary  NEGATE   = { (f)negate,   (f)minusOne, (f)negatev,   (f)dnegatev   };
-Unary  IDENTITY = { (f)identity, (f)one,      (f)identityv, (f)didentityv };
-Unary  SQRT     = { (f)sqrte,    (f)dsqrte,   (f)sqrtv,     (f)dsqrtv     };
-Unary  GELU     = { (f)gelu,     (f)dgelu,    (f)geluv,     (f)dgeluv     };
-Binary ADD      = { (f)add,      (f)ones,     (f)ones,      (f)addv,      (f)onesv,     (f)onesv      };
-Binary SUBTRACT = { (f)subtract, (f)ones,     (f)minusOnes, (f)subtractv, (f)onesv,     (f)minusOnesv };
-Binary MULTIPLY = { (f)multiply, (f)second,   (f)first,     (f)multiplyv, (f)secondv,   (f)firstv     };
-Binary DIVIDE   = { (f)divide,   (f)divideDa, (f)divideDb,  (f)dividev,   (f)divideDav, (f)divideDbv  };
-Binary MAX      = { (f)max,      (f)maxDa,    (f)maxDb,     (f)maxv,      (f)maxDav,    (f)maxDbv     };
-Binary MIN      = { (f)min,      (f)minDa,    (f)minDb,     (f)minv,      (f)minDav,    (f)minDbv     };
+Unary  RELU     = { (f)relu,     (f)drelu     };
+Unary  SIGMOID  = { (f)sigmoid,  (f)dsigmoid  };
+Unary  TANH     = { (f)tanhe,    (f)dtanhe    };
+Unary  LOG      = { (f)loge,     (f)dloge     };
+Unary  EXP      = { (f)expe,     (f)expe      };
+Unary  NEGATE   = { (f)negate,   (f)minusOne  };
+Unary  IDENTITY = { (f)identity, (f)one       };
+Unary  SQRT     = { (f)sqrte,    (f)dsqrte    };
+Unary  GELU     = { (f)gelu,     (f)dgelu     };
+Binary ADD      = { (f)add,      (f)ones,     (f)ones      };
+Binary SUBTRACT = { (f)subtract, (f)ones,     (f)minusOnes };
+Binary MULTIPLY = { (f)multiply, (f)second,   (f)first     };
+Binary DIVIDE   = { (f)divide,   (f)divideDa, (f)divideDb  };
+Binary MAX      = { (f)max,      (f)maxDa,    (f)maxDb     };
+Binary MIN      = { (f)min,      (f)minDa,    (f)minDb     };
 
 typedef struct optimizer {
     Real *m;     // SGD momentum or Adam first moment
@@ -438,7 +436,7 @@ void TensorXavier(Tensor A)
     int receptive = 1;
     for (int i = 2; i < A.dimensions; i++) receptive *= A.shape[i];
     int fanSum = (A.shape[0] + (A.dimensions > 1 ? A.shape[1] : 0)) * receptive;
-    Real bound = sqrte((Real)6.0 / fanSum);
+    Real bound = VectorFirst(sqrte(VectorBcast((Real)6.0 / fanSum)));
     int size = TensorSize(A);
     for (int i = 0; i < size; i++)
         A.entries[i] = randomNumber(-bound, bound);
@@ -763,13 +761,45 @@ void TensorAdam(Tensor A, Real lr, Real beta1, Real beta2, Real epsilon, Real we
     Real *v = A.optimizer->v;
     Real biasM = 1.0 - powi(beta1, A.optimizer->t);
     Real biasV = 1.0 - powi(beta2, A.optimizer->t);
-    for (int i = 0; i < size; i++) {
-        Real g = A.gradients[i];
-        m[i] = beta1 * m[i] + (1.0f - beta1) * g;
-        v[i] = beta2 * v[i] + (1.0f - beta2) * g * g;
-        Real mHat = m[i] / biasM;
-        Real vHat = v[i] / biasV;
-        A.entries[i] -= lr * (mHat / (sqrte(vHat) + epsilon) + weightDecay * A.entries[i]);
+
+    Vector b1 = VectorBcast(beta1), b2 = VectorBcast(beta2);
+    Vector c1 = VectorBcast(1.0f - beta1), c2 = VectorBcast(1.0f - beta2);
+    Vector bM = VectorBcast(biasM), bV = VectorBcast(biasV);
+    Vector eps = VectorBcast(epsilon), wd = VectorBcast(weightDecay), lrv = VectorBcast(lr);
+
+    Real pw[VECTOR_DIMS] = {0}, pg[VECTOR_DIMS] = {0};
+    Real pm[VECTOR_DIMS] = {0}, pv[VECTOR_DIMS] = {0};
+    for (int i = 0; i < size; i += VECTOR_DIMS) {
+        int tail = size - i < VECTOR_DIMS ? size - i : 0;
+        Real *w = A.entries + i, *g = A.gradients + i, *mi = m + i, *vi = v + i;
+        if (tail) {
+            for (int t = 0; t < tail; t++) {
+                pw[t] = w[t];
+                pg[t] = g[t];
+                pm[t] = mi[t];
+                pv[t] = vi[t];
+            }
+            w = pw, g = pg, mi = pm, vi = pv;
+        }
+
+        Vector gv = VectorLoad(g);
+        Vector mv = VectorFma(b1, VectorLoad(mi), VectorMul(c1, gv));
+        Vector vv = VectorFma(b2, VectorLoad(vi), VectorMul(c2, VectorMul(gv, gv)));
+        VectorStore(mi, mv);
+        VectorStore(vi, vv);
+
+        Vector wv    = VectorLoad(w);
+        Vector mHat  = VectorDiv(mv, bM);
+        Vector vHat  = VectorDiv(vv, bV);
+        Vector denom = VectorAdd(VectorSqrt(vHat), eps);
+        Vector step  = VectorFma(wd, wv, VectorDiv(mHat, denom));
+        VectorStore(w, VectorFnmadd(lrv, step, wv));
+
+        for (int t = 0; t < tail; t++) {
+            A.entries[i + t] = pw[t];
+            m[i + t] = pm[t];
+            v[i + t] = pv[t];
+        }
     }
 }
 

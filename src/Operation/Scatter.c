@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "../Operation.h"
-#include "../math/Scalar.h"
 #include "../utility.h"
 #include "../math/Vector.h"
 
@@ -111,7 +110,7 @@ static void scatterForward(void *arg, int start, int end)
             Real acc = ctx->fill;
             for (int ix = 0; ix < idxSize; ix++) {
                 if ((int)I.entries[ix] == kTarget)
-                    acc = ((ScalarBinary)ctx->b.f)(acc, A.entries[(outer * idxSize + ix) * innerSize + inner]);
+                    acc = VectorApply((VectorBinary)ctx->b.f, acc, A.entries[(outer * idxSize + ix) * innerSize + inner]);
             }
             op->out.entries[i] = acc;
         }
@@ -134,7 +133,7 @@ static void scatterForward(void *arg, int start, int end)
                 if ((int)I.entries[idxOff] == kTarget) {
                     int aIxOff = aC ? ix * innerSize
                                     : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
-                    acc = ((ScalarBinary)ctx->b.f)(acc, A.entries[outerOff + aIxOff + innerOff]);
+                    acc = VectorApply((VectorBinary)ctx->b.f, acc, A.entries[outerOff + aIxOff + innerOff]);
                 }
             }
             op->out.entries[i] = acc;
@@ -196,7 +195,7 @@ static void scatterBackward(void *arg, int start, int end)
                 int aIxOff = aC ? ix * innerSize
                                 : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
                 Real Av = A.entries[outerOff + aIxOff + innerOff];
-                chain[count + 1] = ((ScalarBinary)ctx->b.f)(chain[count], Av);
+                chain[count + 1] = VectorApply((VectorBinary)ctx->b.f, chain[count], Av);
                 count++;
             }
         }
@@ -210,8 +209,8 @@ static void scatterBackward(void *arg, int start, int end)
                                  : unravel(ix, A.shape + axis, A.strides + axis, I.dimensions);
                 int aOffset = outerOff + aIxOff + innerOff;
                 Real Av     = A.entries[aOffset];
-                A.gradients[aOffset] += dresult * ((ScalarBinary)ctx->b.db)(chain[c], Av);
-                dresult *= ((ScalarBinary)ctx->b.da)(chain[c], Av);
+                A.gradients[aOffset] += dresult * VectorApply((VectorBinary)ctx->b.db, chain[c], Av);
+                dresult *= VectorApply((VectorBinary)ctx->b.da, chain[c], Av);
                 c--;
             }
         }

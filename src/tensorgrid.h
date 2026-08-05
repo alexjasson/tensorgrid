@@ -6,14 +6,14 @@
 #define FALSE 0
 #define INFINITE 1e+38
 
-typedef void (*f)(void); // A function applied to scalars or vectors
+typedef void (*f)(void); // A function applied to a vector of Reals
 
 /*
- * Unary/Binary functions y = f(a) and y = f(a, b), with scalar derivatives
- * dy/da (da) and dy/db (db). Vectorized equivalents are denoted with a v.
+ * Vectorized Unary/Binary functions y = f(a) and y = f(a, b), with derivatives dy/da (da)
+ * and dy/db (db).
  */
-typedef struct { f f, da;     f fv, dav;      } Unary;
-typedef struct { f f, da, db; f fv, dav, dbv; } Binary;
+typedef struct { f f, da;     } Unary;
+typedef struct { f f, da, db; } Binary;
 extern Unary RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
 extern Binary ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
 
@@ -227,7 +227,7 @@ Tensor TensorLogSoftmax(Tensor in, Real temperature);
  * 
  * y:      Target probability distribution [..., numClasses] or integer class labels [..., 1]
  * logits: Predicted logits                [..., numClasses]
- * out:    Mean cross-entropy loss         [] (Scalar)
+ * out:    Mean cross-entropy loss         [] (scalar)
  */
 Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, Real temperature);
 
@@ -239,7 +239,7 @@ Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, Real temperature);
  *
  * y:     Target probability distribution        [..., numClasses]
  * y_hat: Predicted log-probability distribution [..., numClasses]
- * out:   Mean NLL loss                          [] (Scalar)
+ * out:   Mean NLL loss                          [] (scalar)
  */
 Tensor TensorNLL(Tensor y, Tensor y_hat);
 
@@ -249,7 +249,7 @@ Tensor TensorNLL(Tensor y, Tensor y_hat);
  *
  * y:     Target values    [..., numClasses]
  * y_hat: Predicted values [..., numClasses]
- * out:   Mean MSE loss    [] (Scalar)
+ * out:   Mean MSE loss    [] (scalar)
  */
 Tensor TensorMSE(Tensor y, Tensor y_hat);
 

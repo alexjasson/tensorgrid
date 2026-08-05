@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include "../Operation.h"
 #include "../utility.h"
-#include "../math/Scalar.h"
 #include "../math/Vector.h"
 
 typedef struct {
@@ -92,7 +91,7 @@ static void normForward(void *arg, int start, int end)
         }
         var /= D;
 
-        Real rstd = 1.0f / sqrte(var + ctx->eps);
+        Real rstd = 1.0f / VectorFirst(sqrte(VectorBcast(var + ctx->eps)));
         ctx->mean[r] = mu;
         ctx->rstd[r] = rstd;
 

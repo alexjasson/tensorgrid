@@ -82,7 +82,7 @@ static void zipForward(void *arg, int start, int end)
     Real     *out = op->out.entries;
     Real     *A   = op->A.entries;
     Real     *B   = op->B.entries;
-    VectorBinary fn = (VectorBinary)ctx->b.fv;
+    VectorBinary fn = (VectorBinary)ctx->b.f;
     int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
     int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
 
@@ -235,8 +235,8 @@ static void zipBackward(void *arg, int start, int end)
     Real      *dA = op->A.gradients;
     Real      *dB = op->B.gradients;
     Real    *dout = op->out.gradients;
-    VectorBinary dafn = (VectorBinary)ctx->b.dav;
-    VectorBinary dbfn = (VectorBinary)ctx->b.dbv;
+    VectorBinary dafn = (VectorBinary)ctx->b.da;
+    VectorBinary dbfn = (VectorBinary)ctx->b.db;
     int aC = isContiguous(op->A.shape, op->A.strides, op->A.dimensions);
     int bC = isContiguous(op->B.shape, op->B.strides, op->B.dimensions);
 

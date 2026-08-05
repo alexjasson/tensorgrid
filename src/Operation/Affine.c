@@ -54,7 +54,7 @@ static void affineForward(void *arg, int start, int end)
     AffineContext *ctx = op->context;
     Real *out = op->out.entries, *A = op->A.entries, *bias = op->B.entries;
     int biasSize = TensorSize(op->B), inner = ctx->inner;
-    VectorUnary fn = (VectorUnary)ctx->u.fv;
+    VectorUnary fn = (VectorUnary)ctx->u.f;
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
@@ -100,7 +100,7 @@ static void affineBackwardDa(void *arg, int start, int end)
     AffineContext *ctx = op->context;
     Real *A = op->A.entries, *bias = op->B.entries, *dA = op->A.gradients, *dout = op->out.gradients;
     int biasSize = TensorSize(op->B), inner = ctx->inner;
-    VectorUnary dafn = (VectorUnary)ctx->u.dav;
+    VectorUnary dafn = (VectorUnary)ctx->u.da;
     
     // Identity case since it's derivative is 1 regardless of A
     if (ctx->u.f == IDENTITY.f) {
@@ -169,7 +169,7 @@ static void affineBackwardDb(void *arg, int start, int end)
     Real *A = op->A.entries, *bias = op->B.entries, *dout = op->out.gradients, *dB = op->B.gradients;
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     int outer = TensorSize(op->out) / (biasSize * inner);
-    VectorUnary dafn = (VectorUnary)ctx->u.dav;
+    VectorUnary dafn = (VectorUnary)ctx->u.da;
 
     // Identity case since it's derivative is 1 regardless of A
     if (ctx->u.f == IDENTITY.f && inner == 1) {

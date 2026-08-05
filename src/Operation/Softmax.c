@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../Operation.h"
-#include "../math/Scalar.h"
+#include "../math/Vector.h"
 #include "../utility.h"
 
 typedef struct {
@@ -73,7 +73,8 @@ static void softmaxForward(void *arg, int start, int end)
 
         Real sum = 0.0f;
         for (int c = 0; c < classes; c++) {
-            Real e = expe(logits[xBase + c * xStride] * ctx->invTemperature - max);
+            Real z = logits[xBase + c * xStride] * ctx->invTemperature - max;
+            Real e = VectorFirst(expe(VectorBcast(z)));
             p[c] = e;
             sum += e;
         }

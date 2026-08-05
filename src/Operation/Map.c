@@ -43,7 +43,7 @@ static void mapForward(void *arg, int start, int end)
     MapContext *ctx = op->context;
     Real      *out = op->out.entries;
     Real      *A   = op->A.entries;
-    VectorUnary fn = (VectorUnary)ctx->u.fv;
+    VectorUnary fn = (VectorUnary)ctx->u.f;
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
         int i = start;
         for (; i + VECTOR_DIMS <= end; i += VECTOR_DIMS)
@@ -79,7 +79,7 @@ static void mapBackward(void *arg, int start, int end)
     Real       *A   = op->A.entries;
     Real       *dA  = op->A.gradients;
     Real     *dout  = op->out.gradients;
-    VectorUnary dafn = (VectorUnary)ctx->u.dav;
+    VectorUnary dafn = (VectorUnary)ctx->u.da;
     if (isContiguous(op->A.shape, op->A.strides, op->A.dimensions)) {
         int j = start;
         for (; j + VECTOR_DIMS <= end; j += VECTOR_DIMS)
