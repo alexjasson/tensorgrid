@@ -16,12 +16,11 @@
  */
 int main(void)
 {
-    // Read training data, flatten [N, 28, 28] -> [N, 784] and scale [0, 255] -> [0, 1]
-    Tensor xTrain = TensorReadData("examples/data/mnist/train-images-idx3-ubyte", 3, (int[]){60000, 28, 28}, 16, UINT8); // [60000, 28, 28]
-    Tensor yTrain = TensorReadData("examples/data/mnist/train-labels-idx1-ubyte", 1, (int[]){60000}, 8, UINT8);          // [60000]
-    int samples = TensorShape(xTrain, 0);
-    xTrain = TensorReshape(xTrain, 2, (int[]){samples, IMAGE_SIZE}); // [60000, 784]
-    TensorScale(xTrain, 1.0f / 255.0f);
+    // Read training data and scale entries from [0, 255] to [0, 1]
+    Tensor xTrain = TensorReadData("examples/data/mnist/train-images-idx3-ubyte", 2, (int[]){60000, IMAGE_SIZE}, 16, UINT8); // [60000, 784]
+    Tensor yTrain = TensorReadData("examples/data/mnist/train-labels-idx1-ubyte", 1, (int[]){60000}, 8, UINT8);              // [60000]
+    int samples = TensorShape(xTrain)[0];
+    xTrain = TensorScalarMultiply(xTrain, 1.0f / 255);
 
     // Create and initialize hidden and output layer weights/biases
     TensorArray parameters = TensorArrayNew();
@@ -48,6 +47,7 @@ int main(void)
             TensorPrint(loss);
         }
 
+        TensorFree(X); TensorFree(Y);
         TensorFree(h); TensorFree(Z); TensorFree(loss);
     }
 

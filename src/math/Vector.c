@@ -2,9 +2,34 @@
 #include <string.h>
 #include <immintrin.h>
 #include "Vector.h"
+#include "Scalar.h"
 
 
-Vector VectorLoad(const Real *p)                  { Vector x; memcpy(&x, p, sizeof(x)); return x; }
+Vector VectorLoad(const void *p, DataType d)
+{
+    Vector x = VectorZero();
+    switch (d) {
+        case UINT8:   { const uint8_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case INT8:    { const int8_t  *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case INT16:   { const int16_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case INT32:   { const int32_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case FLOAT32: { const float   *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case FLOAT64: { const double  *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case FLOAT16:
+#if defined(__AVX2__) && defined(__F16C__) && !defined(__AVX512F__)
+            if (sizeof(Real) == 4) {
+                __m256 v = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)p));
+                memcpy(&x, &v, sizeof(x));
+                break;
+            }
+#endif
+            for (int i = 0; i < VECTOR_DIMS; i++)
+                x[i] = ScalarLoad((const uint16_t *)p + i, FLOAT16);
+            break;
+        case REAL: memcpy(&x, p, sizeof(x)); break;
+    }
+    return x;
+}
 void   VectorStore(Real *p, Vector x)             { memcpy(p, &x, sizeof(x)); }
 void   VectorFetch(const Real *p)                 { _mm_prefetch((const char *)p, _MM_HINT_ET0); }
 Vector VectorZero(void)                           { return (Vector){0}; }
@@ -105,11 +130,75 @@ Real VectorHsum(Vector v)
     return s;
 }
 
-Real VectorFirst(Vector v)                      { return v[0]; }
-Real VectorApply(VectorBinary f, Real a, Real b) { return VectorFirst(f(VectorBcast(a), VectorBcast(b))); }
+// MR x NRV block of vector registers, matching the register block in Matrix.c
+#define NRV 2
+#define NR  (NRV * VECTOR_DIMS)
+#define MR  ((VECTOR_CARD - NRV - 1) / NRV)
+
+void VectorDot(void *A, void *B, Real *C, Real *q, int n, int k)
+{
+    int32_t acc[MR][NRV] __attribute__((__vector_size__(VECTOR_DIMS * 4))) = {0};
+    int kPairs = (k + 1) / 2;
+
+    const Real *scale = A;
+    const int16_t *aRow = (const int16_t *)(scale + MR);
+    const int16_t *bRow = B;
+    for (int p2 = 0; p2 < kPairs; p2++, aRow += 2 * MR, bRow += 2 * NR) {
+        int32_t b[NRV] __attribute__((__vector_size__(VECTOR_DIMS * 4)));
+        for (int v = 0; v < NRV; v++)
+            memcpy(&b[v], bRow + v * 2 * VECTOR_DIMS, sizeof(b[v]));
+
+        for (int mr = 0; mr < MR; mr++)
+            for (int v = 0; v < NRV; v++) {
+                int32_t c __attribute__((__vector_size__(VECTOR_DIMS * 4))) = acc[mr][v];
+#if defined(__AVX512BW__)
+                if (sizeof(Real) == 4) {
+                    int32_t pair;
+                    memcpy(&pair, aRow + 2 * mr, sizeof(pair));
+                    __m512i bv, cv;
+                    memcpy(&bv, &b[v], sizeof(b[v]));
+                    memcpy(&cv, &c, sizeof(c));
+                    cv = _mm512_add_epi32(cv, _mm512_madd_epi16(_mm512_set1_epi32(pair), bv));
+                    memcpy(&c, &cv, sizeof(c));
+                    acc[mr][v] = c;
+                    continue;
+                }
+#elif defined(__AVX2__) && !defined(__AVX512F__)
+                if (sizeof(Real) == 4) {
+                    int32_t pair;
+                    memcpy(&pair, aRow + 2 * mr, sizeof(pair));
+                    __m256i bv, cv;
+                    memcpy(&bv, &b[v], sizeof(b[v]));
+                    memcpy(&cv, &c, sizeof(c));
+                    cv = _mm256_add_epi32(cv, _mm256_madd_epi16(_mm256_set1_epi32(pair), bv));
+                    memcpy(&c, &cv, sizeof(c));
+                    acc[mr][v] = c;
+                    continue;
+                }
+#endif
+                for (int i = 0; i < VECTOR_DIMS; i++)
+                    c[i] += (int32_t)aRow[2 * mr] * bRow[v * 2 * VECTOR_DIMS + 2 * i]
+                          + (int32_t)aRow[2 * mr + 1] * bRow[v * 2 * VECTOR_DIMS + 2 * i + 1];
+                acc[mr][v] = c;
+            }
+    }
+
+    for (int mr = 0; mr < MR; mr++) {
+        Real *Crow = C + (size_t)mr * n;
+        Vector s = VectorBcast(scale[mr]);
+        for (int v = 0; v < NRV; v++) {
+            Vector sum = VectorZero();
+            for (int i = 0; i < VECTOR_DIMS; i++)
+                sum[i] = (Real)acc[mr][v][i];
+            if (q)
+                sum = VectorMul(sum, VectorLoad(q + v * VECTOR_DIMS, REAL));
+            VectorStore(Crow + v * VECTOR_DIMS, VectorFma(s, sum, VectorLoad(Crow + v * VECTOR_DIMS, REAL)));
+        }
+    }
+}
 
 // exp(a) with ~1e-6 (float) or ~1e-13 (double) relative error
-Vector expe(Vector a)
+Vector expv(Vector a)
 {
     Real expMax = sizeof(Real) == 8 ?  709.0 :  88.0;
     Real expMin = sizeof(Real) == 8 ? -708.0 : -87.3;
@@ -137,7 +226,7 @@ Vector expe(Vector a)
 }
 
 // log(a) with ~1e-5 (float) or ~1e-11 (double) relative error
-Vector loge(Vector a)
+Vector logv(Vector a)
 {
     Vector e = VectorLog2i(a);
     Vector m = VectorMantissa(a);
@@ -160,46 +249,46 @@ Vector loge(Vector a)
     return VectorFma(e, VectorBcast(0.6931471805599453), l);  // l + e*ln2
 }
 
-// Unary functions and derivatives
-Vector relu(Vector a)     { return VectorMax(a, VectorZero()); }
-Vector drelu(Vector a)    { return VectorGt0(a); }
-Vector identity(Vector a) { return a; }
-Vector one(Vector a)      { (void)a; return VectorBcast(1.0); }
-Vector negate(Vector a)   { return VectorSub(VectorZero(), a); }
-Vector minusOne(Vector a) { (void)a; return VectorBcast(-1.0); }
-Vector sigmoid(Vector a)  { return VectorDiv(VectorBcast(1.0), VectorAdd(VectorBcast(1.0), expe(VectorSub(VectorZero(), a)))); }
-Vector dsigmoid(Vector a) { Vector s = sigmoid(a); return VectorMul(s, VectorSub(VectorBcast(1.0), s)); }
-Vector tanhe(Vector a)    { return VectorSub(VectorDiv(VectorBcast(2.0), VectorAdd(VectorBcast(1.0), expe(VectorMul(VectorBcast(-2.0), a)))), VectorBcast(1.0)); }
-Vector dtanhe(Vector a)   { Vector t = tanhe(a); return VectorSub(VectorBcast(1.0), VectorMul(t, t)); }
-Vector dloge(Vector a)    { return VectorDiv(VectorBcast(1.0), a); }
-Vector sqrte(Vector a)    { return VectorSqrt(a); }
-Vector dsqrte(Vector a)   { return VectorDiv(VectorBcast(0.5), VectorSqrt(a)); }
+// Unary functions and derivatives for vectors
+Vector reluv(Vector a)      { return VectorMax(a, VectorZero()); }
+Vector dreluv(Vector a)     { return VectorGt0(a); }
+Vector identityv(Vector a)  { return a; }
+Vector didentityv(Vector a) { (void)a; return VectorBcast(1.0); }
+Vector negatev(Vector a)    { return VectorSub(VectorZero(), a); }
+Vector dnegatev(Vector a)   { (void)a; return VectorBcast(-1.0); }
+Vector sigmoidv(Vector a)   { return VectorDiv(VectorBcast(1.0), VectorAdd(VectorBcast(1.0), expv(VectorSub(VectorZero(), a)))); }
+Vector dsigmoidv(Vector a)  { Vector s = sigmoidv(a); return VectorMul(s, VectorSub(VectorBcast(1.0), s)); }
+Vector tanhv(Vector a)      { return VectorSub(VectorDiv(VectorBcast(2.0), VectorAdd(VectorBcast(1.0), expv(VectorMul(VectorBcast(-2.0), a)))), VectorBcast(1.0)); }
+Vector dtanhv(Vector a)     { Vector t = tanhv(a); return VectorSub(VectorBcast(1.0), VectorMul(t, t)); }
+Vector dlogv(Vector a)      { return VectorDiv(VectorBcast(1.0), a); }
+Vector sqrtv(Vector a)      { return VectorSqrt(a); }
+Vector dsqrtv(Vector a)     { return VectorDiv(VectorBcast(0.5), VectorSqrt(a)); }
 static Vector geluArg(Vector a) { return VectorMul(VectorBcast(0.7978845608028654), VectorAdd(a, VectorMul(VectorBcast(0.044715), VectorMul(a, VectorMul(a, a))))); } // 0.797... = sqrt(2/pi)
-Vector gelu(Vector a)     { return VectorMul(VectorBcast(0.5), VectorMul(a, VectorAdd(VectorBcast(1.0), tanhe(geluArg(a))))); }
-Vector dgelu(Vector a)
+Vector geluv(Vector a)      { return VectorMul(VectorBcast(0.5), VectorMul(a, VectorAdd(VectorBcast(1.0), tanhv(geluArg(a))))); }
+Vector dgeluv(Vector a)
 {
     Vector c = VectorBcast(0.7978845608028654); // sqrt(2/pi)
-    Vector u = tanhe(geluArg(a));
+    Vector u = tanhv(geluArg(a));
     Vector t1 = VectorMul(VectorBcast(0.5), VectorAdd(VectorBcast(1.0), u));
     Vector t2 = VectorMul(VectorMul(VectorMul(VectorBcast(0.5), a), VectorSub(VectorBcast(1.0), VectorMul(u, u))),
                 VectorMul(c, VectorAdd(VectorBcast(1.0), VectorMul(VectorBcast(0.134145), VectorMul(a, a)))));
     return VectorAdd(t1, t2);
 }
 
-// Binary functions and partial derivatives
-Vector add(Vector a, Vector b)       { return VectorAdd(a, b); }
-Vector subtract(Vector a, Vector b)  { return VectorSub(a, b); }
-Vector multiply(Vector a, Vector b)  { return VectorMul(a, b); }
-Vector divide(Vector a, Vector b)    { return VectorDiv(a, b); }
-Vector max(Vector a, Vector b)       { return VectorMax(a, b); }
-Vector first(Vector a, Vector b)     { (void)b; return a; }
-Vector second(Vector a, Vector b)    { (void)a; return b; }
-Vector ones(Vector a, Vector b)      { (void)a; (void)b; return VectorBcast(1.0); }
-Vector minusOnes(Vector a, Vector b) { (void)a; (void)b; return VectorBcast(-1.0); }
-Vector divideDa(Vector a, Vector b)  { (void)a; return VectorDiv(VectorBcast(1.0), b); }
-Vector divideDb(Vector a, Vector b)  { return VectorSub(VectorZero(), VectorDiv(a, VectorMul(b, b))); }
-Vector maxDa(Vector a, Vector b)     { return VectorSub(VectorBcast(1.0), VectorGt0(VectorSub(b, a))); }
-Vector maxDb(Vector a, Vector b)     { return VectorGt0(VectorSub(b, a)); }
-Vector min(Vector a, Vector b)       { return VectorMin(a, b); }
-Vector minDa(Vector a, Vector b)     { return VectorSub(VectorBcast(1.0), VectorGt0(VectorSub(a, b))); }
-Vector minDb(Vector a, Vector b)     { return VectorGt0(VectorSub(a, b)); }
+// Binary functions and partial derivatives for vectors
+Vector addv(Vector a, Vector b)       { return VectorAdd(a, b); }
+Vector subtractv(Vector a, Vector b)  { return VectorSub(a, b); }
+Vector multiplyv(Vector a, Vector b)  { return VectorMul(a, b); }
+Vector dividev(Vector a, Vector b)    { return VectorDiv(a, b); }
+Vector maxv(Vector a, Vector b)       { return VectorMax(a, b); }
+Vector firstv(Vector a, Vector b)     { (void)b; return a; }
+Vector secondv(Vector a, Vector b)    { (void)a; return b; }
+Vector onesv(Vector a, Vector b)      { (void)a; (void)b; return VectorBcast(1.0); }
+Vector minusOnesv(Vector a, Vector b) { (void)a; (void)b; return VectorBcast(-1.0); }
+Vector divideDav(Vector a, Vector b)  { (void)a; return VectorDiv(VectorBcast(1.0), b); }
+Vector divideDbv(Vector a, Vector b)  { return VectorSub(VectorZero(), VectorDiv(a, VectorMul(b, b))); }
+Vector maxDav(Vector a, Vector b)     { return VectorSub(VectorBcast(1.0), VectorGt0(VectorSub(b, a))); }
+Vector maxDbv(Vector a, Vector b)     { return VectorGt0(VectorSub(b, a)); }
+Vector minv(Vector a, Vector b)       { return VectorMin(a, b); }
+Vector minDav(Vector a, Vector b)     { return VectorSub(VectorBcast(1.0), VectorGt0(VectorSub(a, b))); }
+Vector minDbv(Vector a, Vector b)     { return VectorGt0(VectorSub(a, b)); }

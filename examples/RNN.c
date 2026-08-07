@@ -28,11 +28,11 @@ typedef struct {
 // X: [N, SEQ_LENGTH]
 static Tensor forward(Tensor X, Model *m)
 {
-    int N = TensorShape(X, 0);
+    int N = TensorShape(X)[0];
 
-    Tensor X_T       = TensorTranspose(X);                           // [SEQ_LENGTH, N]
-    Tensor embedding = TensorEmbedding(m->E, X_T);                   // [SEQ_LENGTH, N, HIDDEN_SIZE]
-    Tensor h_prev    = TensorNew(2, (int[]){N, HIDDEN_SIZE}, FALSE); // [N, HIDDEN_SIZE]
+    Tensor X_T       = TensorTranspose(X);         // [SEQ_LENGTH, N]
+    Tensor embedding = TensorEmbedding(m->E, X_T); // [SEQ_LENGTH, N, HIDDEN_SIZE]
+    Tensor h_prev    = TensorNew(2, (int[]){N, HIDDEN_SIZE}, REAL, FALSE); // [N, HIDDEN_SIZE]
     TensorFree(X_T);
 
     for (int t = 0; t < SEQ_LENGTH; t++) {
@@ -40,8 +40,8 @@ static Tensor forward(Tensor X, Model *m)
         Tensor e_bias = TensorAdd(e_t, m->b_h);                          // [N, HIDDEN_SIZE]
         Tensor h_curr = TensorLinearLayer(h_prev, m->U_h, e_bias, TANH); // [N, HIDDEN_SIZE]
 
+        TensorFree(e_t); TensorFree(e_bias);
         TensorFree(h_prev);
-        TensorFree(e_bias);
         h_prev = h_curr;
     }
     TensorFree(embedding);
@@ -54,13 +54,13 @@ static Tensor forward(Tensor X, Model *m)
 int main(void)
 {
     // Read data into Tensors
-    Tensor data = TensorReadData("examples/data/tinyShakespeare/input.txt", 1, (int[]){1115394}, 0, UINT8); // [1115394]
-    Tensor train = TensorSlice(data, 0, TensorShape(data, 0) * 9 / 10);                                         // [1003854]
-    Tensor test  = TensorSlice(data, TensorShape(train, 0), TensorShape(data, 0) - TensorShape(train, 0));      // [111540]
+    Tensor data = TensorReadData("examples/data/tinyShakespeare/input.txt", 1, (int[]){1115394}, 0, UINT8);    // [1115394]
+    Tensor train = TensorSlice(data, 0, TensorShape(data)[0] * 9 / 10);                                    // [1003854]
+    Tensor test  = TensorSlice(data, TensorShape(train)[0], TensorShape(data)[0] - TensorShape(train)[0]); // [111540]
 
     // Compute number of training/test samples and number of batches
-    int trainSamples = TensorShape(train, 0) - SEQ_LENGTH;
-    int testSamples  = TensorShape(test,  0) - SEQ_LENGTH;
+    int trainSamples = TensorShape(train)[0] - SEQ_LENGTH;
+    int testSamples  = TensorShape(test)[0] - SEQ_LENGTH;
     int trainBatches = (trainSamples + BATCH_SIZE - 1) / BATCH_SIZE;
     int testBatches  = (testSamples  + BATCH_SIZE - 1) / BATCH_SIZE;
 
@@ -103,6 +103,7 @@ int main(void)
                 TensorPrint(loss);
             }
 
+            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(loss);
         }
         TensorFree(xShuffled); TensorFree(yShuffled);
@@ -120,13 +121,15 @@ int main(void)
             totalErrors  += TensorHammingDistance(predictions, Y);
             totalSamples += TensorSize(predictions);
 
+            TensorFree(X); TensorFree(Y);
             TensorFree(Z); TensorFree(predictions);
         }
         printf("Epoch %2d | Test Accuracy: %.2f%%\n", epoch, 100.0f * (totalSamples - totalErrors) / totalSamples);
     }
 
     TensorArrayFree(parameters);
-    TensorFree(xTrain); TensorFree(xTest);
+    TensorFree(xTrain); TensorFree(yTrain);
+    TensorFree(xTest);  TensorFree(yTest);
     TensorFree(train); TensorFree(test); TensorFree(data);
     return 0;
 }

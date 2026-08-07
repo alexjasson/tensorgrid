@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include "../Operation.h"
 #include "../utility.h"
+#include "../math/Scalar.h"
 #include "../math/Vector.h"
 
 typedef struct {
@@ -20,20 +21,20 @@ static void normBackward(void *arg, int start, int end);
 
 Tensor OperationNormalize(Tensor in, Real eps)
 {
-    int D    = in.shape[in.dimensions - 1];
+    int D    = TensorShape(in)[TensorDimensions(in) - 1];
     int rows = TensorSize(in) / D;
 
     NormContext *ctx = malloc(sizeof(NormContext) + (size_t)2 * rows * sizeof(Real));
     if (!ctx) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
     ctx->rows       = rows;
     ctx->D          = D;
-    ctx->contiguous = isContiguous(in.shape, in.strides, in.dimensions);
+    ctx->contiguous = isContiguous(TensorShape(in), TensorStride(in), TensorDimensions(in));
     ctx->eps        = eps;
     ctx->mean       = (Real *)(ctx + 1);
     ctx->rstd       = ctx->mean + rows;
 
-    Tensor out = TensorNew(in.dimensions, in.shape, in.gradients != NULL);
-    return OperationExecute(OperationNew(out, in, (Tensor){0}, OperationNormalizeForward, OperationNormalizeBackward, ctx));
+    Tensor out = TensorNew(TensorDimensions(in), TensorShape(in), REAL, TensorGradients(in) != NULL);
+    return OperationExecute(OperationNew(out, in, NULL, OperationNormalizeForward, OperationNormalizeBackward, ctx));
 }
 
 static void OperationNormalizeForward(Operation *op)
@@ -44,7 +45,7 @@ static void OperationNormalizeForward(Operation *op)
 
 static void OperationNormalizeBackward(Operation *op)
 {
-    if (!op->A.gradients) return;
+    if (!TensorGradients(op->A)) return;
     NormContext *ctx = op->context;
     OperationDispatch(normBackward, op, ctx->rows, (long)ctx->rows * ctx->D);
 }
@@ -55,12 +56,37 @@ static void normForward(void *arg, int start, int end)
     NormContext *ctx = op->context;
     int          D   = ctx->D;
     Tensor       A   = op->A;
-    Real        *in  = A.entries;
-    Real        *out = op->out.entries;
-    int          sD  = A.strides[A.dimensions - 1];
+    Real        *in  = TensorEntries(A);
+    Real        *out = TensorEntries(op->out);
+    int          sD  = TensorStride(A)[TensorDimensions(A) - 1];
+
+    if (TensorDataType(A) != REAL || TensorScale(A)) {
+        for (int r = start; r < end; r++) {
+            int xBase = ctx->contiguous ? r * D : unravel(r, TensorShape(A), TensorStride(A), TensorDimensions(A) - 1);
+            Real *o = out + (size_t)r * D;
+
+            Real sum = 0.0f;
+            for (int i = 0; i < D; i++)
+                sum += TensorGet(A, xBase + i * sD);
+            Real mu = sum / D;
+
+            Real var = 0.0f;
+            for (int i = 0; i < D; i++) {
+                Real d = TensorGet(A, xBase + i * sD) - mu;
+                var += d * d;
+            }
+            Real rstd = 1.0f / sqrte(var / D + ctx->eps);
+            ctx->mean[r] = mu;
+            ctx->rstd[r] = rstd;
+
+            for (int i = 0; i < D; i++)
+                o[i] = (TensorGet(A, xBase + i * sD) - mu) * rstd;
+        }
+        return;
+    }
 
     for (int r = start; r < end; r++) {
-        int xBase = ctx->contiguous ? r * D : unravel(r, A.shape, A.strides, A.dimensions - 1);
+        int xBase = ctx->contiguous ? r * D : unravel(r, TensorShape(A), TensorStride(A), TensorDimensions(A) - 1);
         const Real *x = in + xBase;
         Real       *o = out + (size_t)r * D;
 
@@ -68,7 +94,7 @@ static void normForward(void *arg, int start, int end)
         int i = 0;
         if (ctx->contiguous || sD == 1) {
             Vector vs = VectorZero();
-            for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) vs = VectorAdd(vs, VectorLoad(x + i));
+            for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) vs = VectorAdd(vs, VectorLoad(x + i, REAL));
             sum = VectorHsum(vs);
             for (; i < D; i++) sum += x[i];
         } else {
@@ -81,7 +107,7 @@ static void normForward(void *arg, int start, int end)
         if (ctx->contiguous || sD == 1) {
             Vector vmu = VectorBcast(mu), vv = VectorZero();
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) {
-                Vector d = VectorSub(VectorLoad(x + i), vmu);
+                Vector d = VectorSub(VectorLoad(x + i, REAL), vmu);
                 vv = VectorFma(d, d, vv);
             }
             var = VectorHsum(vv);
@@ -91,7 +117,7 @@ static void normForward(void *arg, int start, int end)
         }
         var /= D;
 
-        Real rstd = 1.0f / VectorFirst(sqrte(VectorBcast(var + ctx->eps)));
+        Real rstd = 1.0f / sqrte(var + ctx->eps);
         ctx->mean[r] = mu;
         ctx->rstd[r] = rstd;
 
@@ -99,7 +125,7 @@ static void normForward(void *arg, int start, int end)
         if (ctx->contiguous || sD == 1) {
             Vector vmu = VectorBcast(mu), vr = VectorBcast(rstd);
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS)
-                VectorStore(o + i, VectorMul(VectorSub(VectorLoad(x + i), vmu), vr));
+                VectorStore(o + i, VectorMul(VectorSub(VectorLoad(x + i, REAL), vmu), vr));
             for (; i < D; i++) o[i] = (x[i] - mu) * rstd;
         } else {
             for (; i < D; i++) o[i] = (x[i * sD] - mu) * rstd;
@@ -113,13 +139,13 @@ static void normBackward(void *arg, int start, int end)
     NormContext *ctx  = op->context;
     int          D    = ctx->D;
     Tensor       A    = op->A;
-    Real        *in   = A.entries;
-    Real        *dx   = A.gradients;
-    Real        *dout = op->out.gradients;
-    int          sD   = A.strides[A.dimensions - 1];
+    Real        *in   = TensorEntries(A);
+    Real        *dx   = TensorGradients(A);
+    Real        *dout = TensorGradients(op->out);
+    int          sD   = TensorStride(A)[TensorDimensions(A) - 1];
 
     for (int r = start; r < end; r++) {
-        int xBase = ctx->contiguous ? r * D : unravel(r, A.shape, A.strides, A.dimensions - 1);
+        int xBase = ctx->contiguous ? r * D : unravel(r, TensorShape(A), TensorStride(A), TensorDimensions(A) - 1);
         const Real *x  = in + xBase;
         const Real *dy = dout + (size_t)r * D;
         Real       *gx = dx + xBase;
@@ -132,8 +158,8 @@ static void normBackward(void *arg, int start, int end)
             Vector vmu = VectorBcast(mu), vr = VectorBcast(rstd);
             Vector vs1 = VectorZero(), vs2 = VectorZero();
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) {
-                Vector dyv = VectorLoad(dy + i);
-                Vector y   = VectorMul(VectorSub(VectorLoad(x + i), vmu), vr);
+                Vector dyv = VectorLoad(dy + i, REAL);
+                Vector y   = VectorMul(VectorSub(VectorLoad(x + i, REAL), vmu), vr);
                 vs1 = VectorAdd(vs1, dyv);
                 vs2 = VectorFma(dyv, y, vs2);
             }
@@ -150,10 +176,10 @@ static void normBackward(void *arg, int start, int end)
             Vector vmu = VectorBcast(mu), vr = VectorBcast(rstd);
             Vector vc1 = VectorBcast(c1), vc2 = VectorBcast(c2);
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) {
-                Vector y   = VectorMul(VectorSub(VectorLoad(x + i), vmu), vr);
-                Vector dyv = VectorLoad(dy + i);
+                Vector y   = VectorMul(VectorSub(VectorLoad(x + i, REAL), vmu), vr);
+                Vector dyv = VectorLoad(dy + i, REAL);
                 Vector res = VectorMul(vr, VectorSub(VectorSub(dyv, vc1), VectorMul(y, vc2)));
-                VectorStore(gx + i, VectorAdd(VectorLoad(gx + i), res));
+                VectorStore(gx + i, VectorAdd(VectorLoad(gx + i, REAL), res));
             }
             for (; i < D; i++) {
                 Real y = (x[i] - mu) * rstd;

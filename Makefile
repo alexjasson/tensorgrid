@@ -24,7 +24,7 @@ else
     $(error Unsupported OS! Only linux and mac are supported)
 endif
 
-CFLAGS = -Wall -Wextra -Werror -pedantic -Ofast -march=native -flto
+CFLAGS = -Wall -Wextra -Werror -pedantic -Ofast -march=native -flto=auto
 
 LIBDIR     = /usr/local/lib
 INCLUDEDIR = /usr/local/include
@@ -34,7 +34,7 @@ SRC = src/tensorgrid.c src/Operation.c src/utility.c                            
       src/Operation/Convolution.c src/Operation/Pool.c src/Operation/Gather.c src/Operation/Scatter.c    \
       src/Operation/Normalize.c src/Operation/Softmax.c src/Operation/CrossEntropy.c src/Operation/MSE.c \
       src/adt/ThreadPool.c src/adt/DynamicArray.c src/adt/MemoryPool.c src/adt/HashMap.c src/adt/Stack.c \
-      src/math/Vector.c src/math/Matrix.c
+      src/math/Scalar.c src/math/Vector.c src/math/Matrix.c
 OBJ = $(SRC:.c=.o)
 LIB = libtensorgrid.a
 

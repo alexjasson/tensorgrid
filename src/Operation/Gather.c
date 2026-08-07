@@ -5,6 +5,7 @@
 #include "../Operation.h"
 #include "../utility.h"
 #include "../math/Vector.h"
+#include "../math/Scalar.h"
 
 typedef struct { int axis; } GatherContext;
 
@@ -15,12 +16,12 @@ static void gatherBackward(void *arg, int start, int end);
 
 Tensor OperationGather(Tensor A, Tensor B, int axis)
 {
-    int outDims = A.dimensions - 1 + B.dimensions;
+    int outDims = TensorDimensions(A) - 1 + TensorDimensions(B);
     int outShape[MAX_DIMENSIONS];
     int p = 0;
-    for (int d = 0; d < axis; d++) outShape[p++] = A.shape[d];
-    for (int d = 0; d < B.dimensions; d++) outShape[p++] = B.shape[d];
-    for (int d = axis + 1; d < A.dimensions; d++) outShape[p++] = A.shape[d];
+    for (int d = 0; d < axis; d++) outShape[p++] = TensorShape(A)[d];
+    for (int d = 0; d < TensorDimensions(B); d++) outShape[p++] = TensorShape(B)[d];
+    for (int d = axis + 1; d < TensorDimensions(A); d++) outShape[p++] = TensorShape(A)[d];
 
     GatherContext *ctx = malloc(sizeof(*ctx));
     if (!ctx) {
@@ -28,7 +29,7 @@ Tensor OperationGather(Tensor A, Tensor B, int axis)
         exit(EXIT_FAILURE);
     }
     ctx->axis = axis;
-    Tensor out = TensorNew(outDims, outShape, A.gradients != NULL);
+    Tensor out = TensorNew(outDims, outShape, REAL, TensorGradients(A) != NULL);
     return OperationExecute(OperationNew(out, A, B, OperationGatherForward, OperationGatherBackward, ctx));
 }
 
@@ -39,13 +40,13 @@ static void OperationGatherForward(Operation *op)
 
 static void OperationGatherBackward(Operation *op)
 {
-    if (!op->A.gradients) return;
+    if (!TensorGradients(op->A)) return;
     GatherContext *ctx = op->context;
     Tensor A = op->A, I = op->B;
     int innerSize = 1;
-    for (int d = ctx->axis + 1; d < A.dimensions; d++) innerSize *= A.shape[d];
-    int aC = isContiguous(A.shape, A.strides, A.dimensions);
-    int iC = isContiguous(I.shape, I.strides, I.dimensions);
+    for (int d = ctx->axis + 1; d < TensorDimensions(A); d++) innerSize *= TensorShape(A)[d];
+    int aC = isContiguous(TensorShape(A), TensorStride(A), TensorDimensions(A));
+    int iC = isContiguous(TensorShape(I), TensorStride(I), TensorDimensions(I));
 
     if (aC && iC && innerSize >= VECTOR_DIMS)
         OperationDispatch(gatherBackward, op, innerSize, TensorSize(op->out));
@@ -60,13 +61,14 @@ static void gatherForward(void *arg, int start, int end)
     GatherContext *ctx = op->context;
     Tensor A      = op->A;
     Tensor I      = op->B;
+    Real *oute    = TensorEntries(op->out);
     int axis      = ctx->axis;
-    int axisSize  = A.shape[axis];
+    int axisSize  = TensorShape(A)[axis];
     int idxSize   = TensorSize(I);
     int innerSize = 1;
-    for (int d = axis + 1; d < A.dimensions; d++) innerSize *= A.shape[d];
-    int aC = isContiguous(A.shape, A.strides, A.dimensions);
-    int iC = isContiguous(I.shape, I.strides, I.dimensions);
+    for (int d = axis + 1; d < TensorDimensions(A); d++) innerSize *= TensorShape(A)[d];
+    int aC = isContiguous(TensorShape(A), TensorStride(A), TensorDimensions(A));
+    int iC = isContiguous(TensorShape(I), TensorStride(I), TensorDimensions(I));
 
     if (aC && iC) {
         for (int i = start; i < end; i++) {
@@ -74,8 +76,8 @@ static void gatherForward(void *arg, int start, int end)
             int rem   = i / innerSize;
             int ix    = rem % idxSize;
             int outer = rem / idxSize;
-            int k     = (int)I.entries[ix];
-            op->out.entries[i] = A.entries[(outer * axisSize + k) * innerSize + inner];
+            int k     = (int)(TensorGet(I, ix) + (Real)0.5);
+            oute[i] = TensorGet(A, (outer * axisSize + k) * innerSize + inner);
         }
     } else {
         for (int i = start; i < end; i++) {
@@ -85,14 +87,14 @@ static void gatherForward(void *arg, int start, int end)
             int outer = rem / idxSize;
 
             int outerOff = aC ? outer * axisSize * innerSize
-                              : unravel(outer, A.shape, A.strides, axis);
+                              : unravel(outer, TensorShape(A), TensorStride(A), axis);
             int innerOff = aC ? inner
-                              : unravel(inner, A.shape + axis + 1, A.strides + axis + 1,
-                                        A.dimensions - axis - 1);
-            int aStride  = aC ? innerSize : A.strides[axis];
-            int idxOff   = iC ? ix : unravel(ix, I.shape, I.strides, I.dimensions);
-            int k        = (int)I.entries[idxOff];
-            op->out.entries[i] = A.entries[outerOff + k * aStride + innerOff];
+                              : unravel(inner, TensorShape(A) + axis + 1, TensorStride(A) + axis + 1,
+                                        TensorDimensions(A) - axis - 1);
+            int aStride  = aC ? innerSize : TensorStride(A)[axis];
+            int idxOff   = iC ? ix : unravel(ix, TensorShape(I), TensorStride(I), TensorDimensions(I));
+            int k        = (int)(TensorGet(I, idxOff) + (Real)0.5);
+            oute[i] = TensorGet(A, outerOff + k * aStride + innerOff);
         }
     }
 }
@@ -103,28 +105,29 @@ static void gatherBackward(void *arg, int start, int end)
     GatherContext *ctx = op->context;
     Tensor A      = op->A;
     Tensor I      = op->B;
+    Real *Ie      = TensorEntries(I);
     int axis      = ctx->axis;
-    int axisSize  = A.shape[axis];
+    int axisSize  = TensorShape(A)[axis];
     int idxSize   = TensorSize(I);
     int innerSize = 1;
-    for (int d = axis + 1; d < A.dimensions; d++) innerSize *= A.shape[d];
-    int aC = isContiguous(A.shape, A.strides, A.dimensions);
-    int iC = isContiguous(I.shape, I.strides, I.dimensions);
+    for (int d = axis + 1; d < TensorDimensions(A); d++) innerSize *= TensorShape(A)[d];
+    int aC = isContiguous(TensorShape(A), TensorStride(A), TensorDimensions(A));
+    int iC = isContiguous(TensorShape(I), TensorStride(I), TensorDimensions(I));
 
     // Fast path to parallelize over the inner columns
     if (aC && iC && innerSize >= VECTOR_DIMS) {
         int outer = 1;
-        for (int d = 0; d < axis; d++) outer *= A.shape[d];
-        Real *dA   = A.gradients;
-        Real *dout = op->out.gradients;
+        for (int d = 0; d < axis; d++) outer *= TensorShape(A)[d];
+        Real *dA   = TensorGradients(A);
+        Real *dout = TensorGradients(op->out);
         for (int o = 0; o < outer; o++) {
             for (int ix = 0; ix < idxSize; ix++) {
-                int k = (int)I.entries[ix];
+                int k = (int)(Ie[ix] + (Real)0.5);
                 const Real *src = dout + ((size_t)o * idxSize  + ix) * innerSize;
                 Real       *dst = dA   + ((size_t)o * axisSize + k)  * innerSize;
                 int c = start;
                 for (; c + VECTOR_DIMS <= end; c += VECTOR_DIMS)
-                    VectorStore(dst + c, VectorAdd(VectorLoad(dst + c), VectorLoad(src + c)));
+                    VectorStore(dst + c, VectorAdd(VectorLoad(dst + c, REAL), VectorLoad(src + c, REAL)));
                 for (; c < end; c++)
                     dst[c] += src[c];
             }
@@ -144,25 +147,25 @@ static void gatherBackward(void *arg, int start, int end)
             innerOff = inner;
             aStride  = innerSize;
         } else {
-            outerOff = unravel(outer, A.shape, A.strides, axis);
-            innerOff = unravel(inner, A.shape + axis + 1, A.strides + axis + 1,
-                               A.dimensions - axis - 1);
-            aStride  = A.strides[axis];
+            outerOff = unravel(outer, TensorShape(A), TensorStride(A), axis);
+            innerOff = unravel(inner, TensorShape(A) + axis + 1, TensorStride(A) + axis + 1,
+                               TensorDimensions(A) - axis - 1);
+            aStride  = TensorStride(A)[axis];
         }
 
         Real sum = 0;
         if (iC) {
             for (int ix = 0; ix < idxSize; ix++) {
-                if ((int)I.entries[ix] == kTarget)
-                    sum += op->out.gradients[(outer * idxSize + ix) * innerSize + inner];
+                if ((int)(Ie[ix] + (Real)0.5) == kTarget)
+                    sum += TensorGradients(op->out)[(outer * idxSize + ix) * innerSize + inner];
             }
         } else {
             for (int ix = 0; ix < idxSize; ix++) {
-                int idxOff = unravel(ix, I.shape, I.strides, I.dimensions);
-                if ((int)I.entries[idxOff] == kTarget)
-                    sum += op->out.gradients[(outer * idxSize + ix) * innerSize + inner];
+                int idxOff = unravel(ix, TensorShape(I), TensorStride(I), TensorDimensions(I));
+                if ((int)(Ie[idxOff] + (Real)0.5) == kTarget)
+                    sum += TensorGradients(op->out)[(outer * idxSize + ix) * innerSize + inner];
             }
         }
-        A.gradients[outerOff + kTarget * aStride + innerOff] += sum;
+        TensorGradients(A)[outerOff + kTarget * aStride + innerOff] += sum;
     }
 }

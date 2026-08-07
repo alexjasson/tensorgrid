@@ -12,6 +12,7 @@ struct Operation {
     Tensor out, A, B;
     OperationFn forward, backward;
     void *context;
+    int visited;
 };
 
 /*
@@ -48,9 +49,19 @@ Tensor OperationCrossEntropy(Tensor labels, Tensor logits, Real temperature);
 Tensor OperationMSE(Tensor y, Tensor y_hat);
 
 /*
- * Run the recorded autograd tape backwards from the loss tensor
+ * Run the recorded autograd graph backwards from the loss tensor
  */
 void OperationBackward(Tensor loss);
+
+/*
+ * Returns the operation that produced the tensor, NULL if none
+ */
+Operation *OperationGet(Tensor A);
+
+/*
+ * Sets the operation that produced the tensor
+ */
+void OperationSet(Tensor A, Operation *op);
 
 
 #endif

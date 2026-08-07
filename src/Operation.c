@@ -1,5 +1,6 @@
 // https://github.com/alexjasson/tensorgrid
 
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include "Operation.h"
@@ -9,12 +10,8 @@
 // Parallel threshold
 #define PARALLEL (1 << 18)
 
-// The autograd tape
-static DynamicArray operationArrayGet(void);
-static void operationArrayClear(DynamicArray arr);
-static void operationArrayPush(Operation op);
-
-// Helper function
+// Helper functions
+static void operationAdd(Operation *op, DynamicArray arr);
 static void zeroGradients(Operation *op);
 
 void OperationDispatch(ThreadPoolFn f, Operation *op, int total, long work)
@@ -24,54 +21,28 @@ void OperationDispatch(ThreadPoolFn f, Operation *op, int total, long work)
     else ThreadPoolMap(ThreadPoolGet(), f, op, total);
 }
 
-static DynamicArray operationArrayGet(void)
+// Adds the operations reachable from op in topological order
+static void operationAdd(Operation *op, DynamicArray arr)
 {
-    static DynamicArray arr = NULL;
-    if (!arr) arr = DynamicArrayNew(sizeof(Operation));
-    return arr;
-}
-
-static void operationArrayClear(DynamicArray arr)
-{
-    for (int i = 0; i < DynamicArraySize(arr); i++) {
-        Operation *op = DynamicArrayGet(arr, i);
-        TensorFree(op->out);
-        TensorFree(op->A);
-        TensorFree(op->B);
-        free(op->context);
-    }
-    DynamicArrayClear(arr);
-}
-
-static void operationArrayPush(Operation op)
-{
-    DynamicArray arr = operationArrayGet();
-
-    // Clears the array if the last operation is only referenced by the array
-    // itself - meaning the user finished a forward pass without calling backward.
-    int size = DynamicArraySize(arr);
-    if (size > 0) {
-        Operation *last = DynamicArrayGet(arr, size - 1);
-        if (last->out.refcount && *last->out.refcount == 1)
-            operationArrayClear(arr);
-    }
-
-    if (op.out.refcount) (*op.out.refcount)++;
-    if (op.A.refcount)   (*op.A.refcount)++;
-    if (op.B.refcount)   (*op.B.refcount)++;
+    if (!op || op->visited) return;
+    op->visited = 1;
+    if (op->A) operationAdd(OperationGet(op->A), arr);
+    if (op->B) operationAdd(OperationGet(op->B), arr);
     DynamicArrayPush(arr, &op);
 }
 
 static void zeroGradients(Operation *op)
 {
-    Tensor *inputs[] = { &op->A, &op->B };
+    Tensor inputs[] = { op->A, op->B };
     for (int n = 0; n < 2; n++) {
-        Real *gradients = inputs[n]->gradients;
+        Tensor input = inputs[n];
+        if (!input) continue;
+        Real *gradients = TensorGradients(input);
         if (!gradients) continue;
         size_t footprint = 1;
-        for (int i = 0; i < inputs[n]->dimensions; i++)
-            if (inputs[n]->strides[i] > 0)
-                footprint += (size_t)(inputs[n]->shape[i] - 1) * inputs[n]->strides[i];
+        for (int i = 0; i < TensorDimensions(input); i++)
+            if (TensorStride(input)[i] > 0)
+                footprint += (size_t)(TensorShape(input)[i] - 1) * TensorStride(input)[i];
         memset(gradients, 0, footprint * sizeof(Real));
     }
 }
@@ -87,31 +58,55 @@ Operation OperationNew(Tensor out, Tensor A, Tensor B, OperationFn forward, Oper
 
 Tensor OperationExecute(Operation op)
 {
-    Tensor out = op.out;
+    Tensor out = op.out, A = op.A, B = op.B;
+
+    // Cast entries to Real
+    if (TensorGradients(out)) {
+        if (A && (TensorDataType(A) != REAL || TensorScale(A))) {
+            op.A = TensorCopy(A);
+            TensorToType(op.A, REAL);
+        }
+        if (B && (TensorDataType(B) != REAL || TensorScale(B))) {
+            op.B = TensorCopy(B);
+            TensorToType(op.B, REAL);
+        }
+    }
     op.forward(&op);
-    if (op.out.gradients) operationArrayPush(op);
-    else free(op.context);
+
+    if (TensorGradients(op.out)) {
+        if (op.A == A && A) op.A = TensorView(A, TensorDimensions(A), TensorShape(A), TensorStride(A));
+        if (op.B == B && B) op.B = TensorView(B, TensorDimensions(B), TensorShape(B), TensorStride(B));
+        Operation *node = malloc(sizeof(*node));
+        if (!node) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+        *node = op;
+        OperationSet(out, node);
+    } else {
+        free(op.context);
+        if (op.A != A) TensorFree(op.A);
+        if (op.B != B) TensorFree(op.B);
+    }
     return out;
 }
 
 void OperationBackward(Tensor loss)
 {
-    DynamicArray arr = operationArrayGet();
+    DynamicArray arr = DynamicArrayNew(sizeof(Operation *));
+    operationAdd(OperationGet(loss), arr);
 
     // Zero all input gradients
     for (int i = 0; i < DynamicArraySize(arr); i++)
-        zeroGradients(DynamicArrayGet(arr, i));
+        zeroGradients(*(Operation **)DynamicArrayGet(arr, i));
 
     // Take mean over all loss entries
     int lossSize = TensorSize(loss);
     for (int i = 0; i < lossSize; i++)
-        loss.gradients[i] = 1.0f / lossSize;
+        TensorGradients(loss)[i] = 1.0f / lossSize;
 
     // Accumulate gradients backwards
     for (int i = DynamicArraySize(arr) - 1; i >= 0; i--) {
-        Operation *op = DynamicArrayGet(arr, i);
+        Operation *op = *(Operation **)DynamicArrayGet(arr, i);
         op->backward(op);
+        op->visited = 0;
     }
-
-    operationArrayClear(arr);
+    DynamicArrayFree(arr);
 }

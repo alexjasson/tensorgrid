@@ -85,8 +85,9 @@ static inline Block BlockNew(TensorArray parameters)
 
 static inline Tensor BlockForward(Tensor H, Block *b)
 {
-    Tensor causalMask = TensorCausalMask(SEQ_LENGTH);                      // [T, T]
-    causalMask = TensorReshape(causalMask, 3, (int[]){1, SEQ_LENGTH, SEQ_LENGTH});
+    Tensor mask = TensorCausalMask(SEQ_LENGTH);                            // [T, T]
+    Tensor causalMask = TensorReshape(mask, 3, (int[]){1, SEQ_LENGTH, SEQ_LENGTH});
+    TensorFree(mask);
 
     Tensor LN_H = TensorLayerNorm(H, b->g_LN1, b->b_LN1, LN_EPSILON);      // [N, T, D]
     Tensor Q    = TensorLinearLayer(LN_H, b->W_q, b->b_q, IDENTITY);       // [N, T, D]
@@ -155,12 +156,12 @@ static inline Tensor ModelForward(Tensor X, Model *m)
 // Sample the next token id given a context window of SEQ_LENGTH token ids
 static inline int ModelPredict(Model *m, int *context, float temperature)
 {
-    Tensor X = TensorNew(2, (int[]){1, SEQ_LENGTH}, 0);
+    Tensor X = TensorNew(2, (int[]){1, SEQ_LENGTH}, REAL, 0);
     for (int i = 0; i < SEQ_LENGTH; i++)
-        TensorSet(X, (int[]){0, i}, (Real)context[i]);
+        TensorSet(X, i, (Real)context[i]);
     Tensor Z   = ModelForward(X, m);           // [1, SEQ_LENGTH, NUM_CLASSES]
     Tensor ids = TensorSample(Z, temperature); // [1, SEQ_LENGTH]
-    int next   = (int)TensorGet(ids, (int[]){0, SEQ_LENGTH - 1});
+    int next   = (int)TensorGet(ids, SEQ_LENGTH - 1);
     TensorFree(X); TensorFree(Z); TensorFree(ids);
     return next;
 }
