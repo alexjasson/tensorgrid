@@ -26,7 +26,7 @@ Tensor OperationPool(Binary fn, Real initial, Tensor in, int size, int stride, i
     int Hout = (H + 2 * padding - size) / stride + 1;
     int Wout = (W + 2 * padding - size) / stride + 1;
     int autograd = TensorGradients(in) != NULL;
-    int cacheArg = autograd && (fn.f == MAX.f || fn.f == MIN.f);
+    int cacheArg = autograd && (fn.g == MAX.g || fn.g == MIN.g);
 
     Tensor out     = TensorNew(4, (int[]){N, C, Hout, Wout}, FLOAT32, autograd);
     Tensor indices = cacheArg ? TensorNew(4, (int[]){N, C, Hout, Wout}, FLOAT32, FALSE) : NULL;
@@ -79,7 +79,7 @@ static void poolForward(void *arg, int start, int end)
     Real *out    = TensorEntries(op->out);
     Real *argIdx = op->B ? TensorEntries(op->B) : NULL;
     Real fill    = ctx->fill;
-    f reducer = ctx->b.f;
+    g reducer = ctx->b.g;
 
     for (int p = start; p < end; p++) {
         int c = p % C, n = p / C;
@@ -99,14 +99,14 @@ static void poolForward(void *arg, int start, int end)
                         if (iw < 0 || iw >= W) continue;
                         Real v = TensorGet(A, rowOff + iw * sW);
                         int local = fh * size + fw;
-                        if      (reducer == MAX.f) { if (v > acc) { acc = v; bl = local; } }
-                        else if (reducer == MIN.f) { if (v < acc) { acc = v; bl = local; } }
-                        else if (reducer == ADD.f) { acc += v; }
+                        if      (reducer == MAX.g) { if (v > acc) { acc = v; bl = local; } }
+                        else if (reducer == MIN.g) { if (v < acc) { acc = v; bl = local; } }
+                        else if (reducer == ADD.g) { acc += v; }
                         else                       { acc = VectorApply((VectorBinary)reducer, acc, v); }
                     }
                 }
                 out[outIdx] = acc;
-                if ((reducer == MAX.f || reducer == MIN.f) && argIdx)
+                if ((reducer == MAX.g || reducer == MIN.g) && argIdx)
                     argIdx[outIdx] = (Real)bl;
             }
     }
@@ -130,11 +130,11 @@ static void poolBackward(void *arg, int start, int end)
     Real *dOut   = TensorGradients(op->out);
     Real *argIdx = TensorEntries(op->B);
     Real fill    = ctx->fill;
-    f reducer = ctx->b.f;
+    g reducer = ctx->b.g;
     VectorBinary da = (VectorBinary)ctx->b.da, db = (VectorBinary)ctx->b.db;
 
     // Fast paths for max, min and sum
-    if (reducer == MAX.f || reducer == MIN.f) {
+    if (reducer == MAX.g || reducer == MIN.g) {
         if (stride >= size) {
             for (int p = start; p < end; p++) {
                 int c = p % C, n = p / C;
@@ -180,7 +180,7 @@ static void poolBackward(void *arg, int start, int end)
                     }
             }
         }
-    } else if (reducer == ADD.f) {
+    } else if (reducer == ADD.g) {
         for (int p = start; p < end; p++) {
             int c = p % C, n = p / C;
             Real *plane   = dInput + (size_t)n * sN + (size_t)c * sC;

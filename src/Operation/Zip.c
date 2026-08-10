@@ -94,7 +94,7 @@ static void zipForward(void *arg, int start, int end)
     Real     *out = TensorEntries(op->out);
     Real     *A   = TensorEntries(op->A);
     Real     *B   = TensorEntries(op->B);
-    VectorBinary fn = (VectorBinary)ctx->b.f;
+    VectorBinary fn = (VectorBinary)ctx->b.g;
     int aC = isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
     int bC = isContiguous(TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
 

@@ -22,12 +22,12 @@ Unary  NEGATE   = { (f)negate,   (f)minusOne  };
 Unary  IDENTITY = { (f)identity, (f)one       };
 Unary  SQRT     = { (f)sqrte,    (f)dsqrte    };
 Unary  GELU     = { (f)gelu,     (f)dgelu     };
-Binary ADD      = { (f)add,      (f)ones,     (f)ones      };
-Binary SUBTRACT = { (f)subtract, (f)ones,     (f)minusOnes };
-Binary MULTIPLY = { (f)multiply, (f)second,   (f)first     };
-Binary DIVIDE   = { (f)divide,   (f)divideDa, (f)divideDb  };
-Binary MAX      = { (f)max,      (f)maxDa,    (f)maxDb     };
-Binary MIN      = { (f)min,      (f)minDa,    (f)minDb     };
+Binary ADD      = { (g)add,      (g)ones,     (g)ones      };
+Binary SUBTRACT = { (g)subtract, (g)ones,     (g)minusOnes };
+Binary MULTIPLY = { (g)multiply, (g)second,   (g)first     };
+Binary DIVIDE   = { (g)divide,   (g)divideDa, (g)divideDb  };
+Binary MAX      = { (g)max,      (g)maxDa,    (g)maxDb     };
+Binary MIN      = { (g)min,      (g)minDa,    (g)minDb     };
 
 typedef struct optimizer {
     Real *m; // SGD momentum or Adam first moment

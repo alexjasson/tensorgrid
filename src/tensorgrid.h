@@ -6,17 +6,16 @@
 #define FALSE 0
 #define INFINITE 1e+38
 
-typedef float Real;      // Floating point representation of a Real number
-typedef void (*f)(void); // A function f
+typedef float Real;      // Floating point representation of R, the real numbers
+typedef void (*f)(void); // f : R^n -> R^n
+typedef void (*g)(void); // g : R^n x R^n -> R^n
 
-/*
- * Unary/Binary functions y = f(a) and y = f(a, b), with derivatives dy/da (da)
- * and dy/db (db).
- */
+// Unary/Binary functions y = f(a) and y = g(a, b), with derivatives dy/da (da) and dy/db (db).
 typedef struct { f f, da;     } Unary;
-typedef struct { f f, da, db; } Binary;
+typedef struct { g g, da, db; } Binary;
 extern Unary RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
 extern Binary ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
+
 typedef enum { UINT8, INT8, INT16, INT32, FLOAT16, FLOAT32, FLOAT64 } DataType;
 typedef struct tensor *Tensor;
 typedef struct tensorArray *TensorArray; // Array of tensors intended to be used for model parameters
