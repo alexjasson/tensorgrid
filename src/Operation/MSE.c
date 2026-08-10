@@ -3,8 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../Operation.h"
+#include "../math/Vector.h"
 #include "../utility.h"
-#include "../math/Scalar.h"
 
 typedef struct {
     int size;
@@ -37,7 +37,7 @@ Tensor OperationMSE(Tensor y, Tensor y_hat)
     ctx->aContiguous = isContiguous(TensorShape(y), TensorStride(y), TensorDimensions(y));
     ctx->bContiguous = isContiguous(TensorShape(y_hat), TensorStride(y_hat), TensorDimensions(y_hat));
 
-    Tensor out = TensorNew(0, NULL, REAL, TensorGradients(y) != NULL || TensorGradients(y_hat) != NULL);
+    Tensor out = TensorNew(0, NULL, FLOAT32, TensorGradients(y) != NULL || TensorGradients(y_hat) != NULL);
     return OperationExecute(OperationNew(out, y, y_hat, OperationMSEForward, OperationMSEBackward, ctx));
 }
 

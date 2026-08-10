@@ -37,8 +37,8 @@ static Tensor forward(Tensor X, Model *m)
 
     Tensor X_T       = TensorTranspose(X);         // [SEQ_LENGTH, N]
     Tensor embedding = TensorEmbedding(m->E, X_T); // [SEQ_LENGTH, N, HIDDEN_SIZE]
-    Tensor h_prev    = TensorNew(2, (int[]){N, HIDDEN_SIZE}, REAL, FALSE); // [N, HIDDEN_SIZE]
-    Tensor ones      = TensorNew(2, (int[]){N, HIDDEN_SIZE}, REAL, FALSE); // [N, HIDDEN_SIZE]
+    Tensor h_prev    = TensorNew(2, (int[]){N, HIDDEN_SIZE}, FLOAT32, FALSE); // [N, HIDDEN_SIZE]
+    Tensor ones      = TensorNew(2, (int[]){N, HIDDEN_SIZE}, FLOAT32, FALSE); // [N, HIDDEN_SIZE]
     TensorFill(ones, 1.0f);
     TensorFree(X_T);
 

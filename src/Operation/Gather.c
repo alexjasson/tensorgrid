@@ -5,7 +5,6 @@
 #include "../Operation.h"
 #include "../utility.h"
 #include "../math/Vector.h"
-#include "../math/Scalar.h"
 
 typedef struct { int axis; } GatherContext;
 
@@ -29,7 +28,7 @@ Tensor OperationGather(Tensor A, Tensor B, int axis)
         exit(EXIT_FAILURE);
     }
     ctx->axis = axis;
-    Tensor out = TensorNew(outDims, outShape, REAL, TensorGradients(A) != NULL);
+    Tensor out = TensorNew(outDims, outShape, FLOAT32, TensorGradients(A) != NULL);
     return OperationExecute(OperationNew(out, A, B, OperationGatherForward, OperationGatherBackward, ctx));
 }
 
@@ -127,7 +126,7 @@ static void gatherBackward(void *arg, int start, int end)
                 Real       *dst = dA   + ((size_t)o * axisSize + k)  * innerSize;
                 int c = start;
                 for (; c + VECTOR_DIMS <= end; c += VECTOR_DIMS)
-                    VectorStore(dst + c, VectorAdd(VectorLoad(dst + c, REAL), VectorLoad(src + c, REAL)));
+                    VectorStore(dst + c, VectorAdd(VectorLoad(dst + c, FLOAT32), VectorLoad(src + c, FLOAT32)));
                 for (; c < end; c++)
                     dst[c] += src[c];
             }

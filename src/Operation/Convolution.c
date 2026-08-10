@@ -5,9 +5,9 @@
 #include <stdio.h>
 #include <stdatomic.h>
 #include "../Operation.h"
+#include "../math/Vector.h"
 #include "../utility.h"
 #include "../math/Matrix.h"
-#include "../math/Scalar.h"
 
 typedef struct {
     int fH, fW, stride, padding;
@@ -42,7 +42,7 @@ Tensor OperationConvolution(Tensor in, Tensor filter, int stride, int padding)
     ctx->padding = padding;
     ctx->fH = fH;
     ctx->fW = fW;
-    Tensor out = TensorNew(4, (int[]){N, Cout, Hout, Wout}, REAL, autograd);
+    Tensor out = TensorNew(4, (int[]){N, Cout, Hout, Wout}, FLOAT32, autograd);
     return OperationExecute(OperationNew(out, in, filter,
                             OperationConvolutionForward, OperationConvolutionBackward, ctx));
 }
@@ -82,7 +82,7 @@ static void im2col(Operation *op, Real *patches, int n, int kStart, int kEnd)
     int Hout   = TensorShape(op->out)[2], Wout = TensorShape(op->out)[3];
     int stride = ctx->stride, padding = ctx->padding;
     int sN = TensorStride(A)[0], sC = TensorStride(A)[1], sH = TensorStride(A)[2], sW = TensorStride(A)[3];
-    int real = TensorDataType(A) == REAL && !TensorScale(A);
+    int real = TensorDataType(A) == FLOAT32 && !TensorScale(A);
     int S = Hout * Wout;
     for (int k = kStart; k < kEnd; k++) {
         int ci = k / (fH * fW);

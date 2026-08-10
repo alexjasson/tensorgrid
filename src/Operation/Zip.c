@@ -5,7 +5,6 @@
 #include "../Operation.h"
 #include "../utility.h"
 #include "../math/Vector.h"
-#include "../math/Scalar.h"
 
 typedef struct { Binary b; } ZipContext;
 
@@ -19,8 +18,8 @@ Tensor OperationZip(Binary fn, Tensor A, Tensor B)
     // Dequantize the inputs so they run on the vectorized fast path if autograd is not needed
     Tensor Aorig = A, Borig = B;
     if (!TensorGradients(A) && !TensorGradients(B)) {
-        if (TensorDataType(A) != REAL || TensorScale(A)) A = TensorCopy(A);
-        if (TensorDataType(B) != REAL || TensorScale(B)) B = TensorCopy(B);
+        if (TensorDataType(A) != FLOAT32 || TensorScale(A)) A = TensorCopy(A);
+        if (TensorDataType(B) != FLOAT32 || TensorScale(B)) B = TensorCopy(B);
     }
 
     int outDims = TensorDimensions(A) >= TensorDimensions(B) ? TensorDimensions(A) : TensorDimensions(B);
@@ -60,7 +59,7 @@ Tensor OperationZip(Binary fn, Tensor A, Tensor B)
     Tensor zipB = TensorView(B, outDims, outShape, strides[1]);
 
     int autograd = TensorGradients(zipA) != NULL || TensorGradients(zipB) != NULL;
-    Tensor out = TensorNew(outDims, outShape, REAL, autograd);
+    Tensor out = TensorNew(outDims, outShape, FLOAT32, autograd);
 
     ZipContext *ctx = malloc(sizeof(*ctx));
     if (!ctx) {
@@ -95,16 +94,15 @@ static void zipForward(void *arg, int start, int end)
     Real     *out = TensorEntries(op->out);
     Real     *A   = TensorEntries(op->A);
     Real     *B   = TensorEntries(op->B);
-    VectorBinary fn = (VectorBinary)ctx->b.fv;
+    VectorBinary fn = (VectorBinary)ctx->b.f;
     int aC = isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
     int bC = isContiguous(TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
 
-    if (TensorDataType(op->A) != REAL || TensorScale(op->A) || TensorDataType(op->B) != REAL || TensorScale(op->B)) {
-        ScalarBinary sfn = (ScalarBinary)ctx->b.f;
+    if (TensorDataType(op->A) != FLOAT32 || TensorScale(op->A) || TensorDataType(op->B) != FLOAT32 || TensorScale(op->B)) {
         for (int i = start; i < end; i++) {
             int aOff = aC ? i : unravel(i, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
             int bOff = bC ? i : unravel(i, TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
-            out[i] = sfn(TensorGet(op->A, aOff), TensorGet(op->B, bOff));
+            out[i] = VectorApply(fn, TensorGet(op->A, aOff), TensorGet(op->B, bOff));
         }
         return;
     }
@@ -113,7 +111,7 @@ static void zipForward(void *arg, int start, int end)
     if (aC && bC) {
         int i = start;
         for (; i + VECTOR_DIMS <= end; i += VECTOR_DIMS)
-            VectorStore(out + i, fn(VectorLoad(A + i, REAL), VectorLoad(B + i, REAL)));
+            VectorStore(out + i, fn(VectorLoad(A + i, FLOAT32), VectorLoad(B + i, FLOAT32)));
         if (i < end) {
             Real x[VECTOR_DIMS], y[VECTOR_DIMS], z[VECTOR_DIMS];
             int tail = end - i;
@@ -121,7 +119,7 @@ static void zipForward(void *arg, int start, int end)
                 x[t] = t < tail ? A[i + t] : 1.0f;
                 y[t] = t < tail ? B[i + t] : 1.0f;
             }
-            VectorStore(z, fn(VectorLoad(x, REAL), VectorLoad(y, REAL)));
+            VectorStore(z, fn(VectorLoad(x, FLOAT32), VectorLoad(y, FLOAT32)));
             for (int t = 0; t < tail; t++)
                 out[i + t] = z[t];
         }
@@ -170,15 +168,15 @@ static void zipForward(void *arg, int start, int end)
             int i = 0;
             if (clsA && clsB) {
                 for (; i + VECTOR_DIMS <= len; i += VECTOR_DIMS)
-                    VectorStore(po + i, fn(VectorLoad(pa + i, REAL), VectorLoad(pb + i, REAL)));
+                    VectorStore(po + i, fn(VectorLoad(pa + i, FLOAT32), VectorLoad(pb + i, FLOAT32)));
             } else if (clsA) {
                 Vector vb = VectorBcast(*pb);
                 for (; i + VECTOR_DIMS <= len; i += VECTOR_DIMS)
-                    VectorStore(po + i, fn(VectorLoad(pa + i, REAL), vb));
+                    VectorStore(po + i, fn(VectorLoad(pa + i, FLOAT32), vb));
             } else if (clsB) {
                 Vector va = VectorBcast(*pa);
                 for (; i + VECTOR_DIMS <= len; i += VECTOR_DIMS)
-                    VectorStore(po + i, fn(va, VectorLoad(pb + i, REAL)));
+                    VectorStore(po + i, fn(va, VectorLoad(pb + i, FLOAT32)));
             } else {
                 Vector v = fn(VectorBcast(*pa), VectorBcast(*pb));
                 for (; i + VECTOR_DIMS <= len; i += VECTOR_DIMS)
@@ -191,7 +189,7 @@ static void zipForward(void *arg, int start, int end)
                     x[t] = clsA ? (t < tail ? pa[i + t] : 1.0f) : *pa;
                     y[t] = clsB ? (t < tail ? pb[i + t] : 1.0f) : *pb;
                 }
-                VectorStore(z, fn(VectorLoad(x, REAL), VectorLoad(y, REAL)));
+                VectorStore(z, fn(VectorLoad(x, FLOAT32), VectorLoad(y, FLOAT32)));
                 for (int t = 0; t < tail; t++) po[i + t] = z[t];
             }
             o += len; r += len;
@@ -218,7 +216,7 @@ static void zipForward(void *arg, int start, int end)
             x[t] = t < tail ? A[aC ? j : unravel(j, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A))] : 1.0f;
             y[t] = t < tail ? B[bC ? j : unravel(j, TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B))] : 1.0f;
         }
-        VectorStore(z, fn(VectorLoad(x, REAL), VectorLoad(y, REAL)));
+        VectorStore(z, fn(VectorLoad(x, FLOAT32), VectorLoad(y, FLOAT32)));
         for (int t = 0; t < tail; t++)
             out[i + t] = z[t];
     }
@@ -258,8 +256,8 @@ static void zipBackward(void *arg, int start, int end)
     Real      *dA = TensorGradients(op->A);
     Real      *dB = TensorGradients(op->B);
     Real    *dout = TensorGradients(op->out);
-    VectorBinary dafn = (VectorBinary)ctx->b.dav;
-    VectorBinary dbfn = (VectorBinary)ctx->b.dbv;
+    VectorBinary dafn = (VectorBinary)ctx->b.da;
+    VectorBinary dbfn = (VectorBinary)ctx->b.db;
     int aC = isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
     int bC = isContiguous(TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
 
@@ -267,11 +265,11 @@ static void zipBackward(void *arg, int start, int end)
     if (aC && bC) {
         int j = start;
         for (; j + VECTOR_DIMS <= end; j += VECTOR_DIMS) {
-            Vector a = VectorLoad(A + j, REAL);
-            Vector b = VectorLoad(B + j, REAL);
-            Vector g = VectorLoad(dout + j, REAL);
-            if (dA) VectorStore(dA + j, VectorFma(g, dafn(a, b), VectorLoad(dA + j, REAL)));
-            if (dB) VectorStore(dB + j, VectorFma(g, dbfn(a, b), VectorLoad(dB + j, REAL)));
+            Vector a = VectorLoad(A + j, FLOAT32);
+            Vector b = VectorLoad(B + j, FLOAT32);
+            Vector g = VectorLoad(dout + j, FLOAT32);
+            if (dA) VectorStore(dA + j, VectorFma(g, dafn(a, b), VectorLoad(dA + j, FLOAT32)));
+            if (dB) VectorStore(dB + j, VectorFma(g, dbfn(a, b), VectorLoad(dB + j, FLOAT32)));
         }
         if (j < end) {
             Real x[VECTOR_DIMS], y[VECTOR_DIMS], g[VECTOR_DIMS], r[VECTOR_DIMS], old[VECTOR_DIMS];
@@ -284,14 +282,14 @@ static void zipBackward(void *arg, int start, int end)
             if (dA) {
                 for (int t = 0; t < VECTOR_DIMS; t++)
                     old[t] = t < tail ? dA[j + t] : 0.0f;
-                VectorStore(r, VectorFma(VectorLoad(g, REAL), dafn(VectorLoad(x, REAL), VectorLoad(y, REAL)), VectorLoad(old, REAL)));
+                VectorStore(r, VectorFma(VectorLoad(g, FLOAT32), dafn(VectorLoad(x, FLOAT32), VectorLoad(y, FLOAT32)), VectorLoad(old, FLOAT32)));
                 for (int t = 0; t < tail; t++)
                     dA[j + t] = r[t];
             }
             if (dB) {
                 for (int t = 0; t < VECTOR_DIMS; t++)
                     old[t] = t < tail ? dB[j + t] : 0.0f;
-                VectorStore(r, VectorFma(VectorLoad(g, REAL), dbfn(VectorLoad(x, REAL), VectorLoad(y, REAL)), VectorLoad(old, REAL)));
+                VectorStore(r, VectorFma(VectorLoad(g, FLOAT32), dbfn(VectorLoad(x, FLOAT32), VectorLoad(y, FLOAT32)), VectorLoad(old, FLOAT32)));
                 for (int t = 0; t < tail; t++)
                     dB[j + t] = r[t];
             }
@@ -346,17 +344,17 @@ static void zipBackward(void *arg, int start, int end)
             Vector vb = clsB ? VectorZero() : VectorBcast(*pb);
             int i = 0;
             for (; i + VECTOR_DIMS <= len; i += VECTOR_DIMS) {
-                Vector av = clsA ? VectorLoad(pa + i, REAL) : va;
-                Vector bv = clsB ? VectorLoad(pb + i, REAL) : vb;
-                Vector g  = VectorLoad(pg + i, REAL);
+                Vector av = clsA ? VectorLoad(pa + i, FLOAT32) : va;
+                Vector bv = clsB ? VectorLoad(pb + i, FLOAT32) : vb;
+                Vector g  = VectorLoad(pg + i, FLOAT32);
                 if (pdA) {
                     Vector d = VectorMul(g, dafn(av, bv));
-                    if (clsA) VectorStore(pdA + i, VectorAdd(VectorLoad(pdA + i, REAL), d));
+                    if (clsA) VectorStore(pdA + i, VectorAdd(VectorLoad(pdA + i, FLOAT32), d));
                     else      accA = VectorAdd(accA, d);
                 }
                 if (pdB) {
                     Vector d = VectorMul(g, dbfn(av, bv));
-                    if (clsB) VectorStore(pdB + i, VectorAdd(VectorLoad(pdB + i, REAL), d));
+                    if (clsB) VectorStore(pdB + i, VectorAdd(VectorLoad(pdB + i, FLOAT32), d));
                     else      accB = VectorAdd(accB, d);
                 }
             }
@@ -368,7 +366,7 @@ static void zipBackward(void *arg, int start, int end)
                     y[t]  = clsB ? (t < tail ? pb[i + t] : 0.0f) : *pb;
                     gg[t] = t < tail ? pg[i + t] : 0.0f;
                 }
-                Vector av = VectorLoad(x, REAL), bv = VectorLoad(y, REAL), g = VectorLoad(gg, REAL);
+                Vector av = VectorLoad(x, FLOAT32), bv = VectorLoad(y, FLOAT32), g = VectorLoad(gg, FLOAT32);
                 if (pdA) {
                     Vector d = VectorMul(g, dafn(av, bv));
                     if (clsA) { Real tmp[VECTOR_DIMS]; VectorStore(tmp, d);
@@ -420,12 +418,12 @@ static void zipBackward(void *arg, int start, int end)
             }
         }
         if (dA) {
-            VectorStore(r, VectorMul(VectorLoad(g, REAL), dafn(VectorLoad(x, REAL), VectorLoad(y, REAL))));
+            VectorStore(r, VectorMul(VectorLoad(g, FLOAT32), dafn(VectorLoad(x, FLOAT32), VectorLoad(y, FLOAT32))));
             for (int t = 0; t < tail; t++)
                 dA[aOffs[t]] += r[t];
         }
         if (dB) {
-            VectorStore(r, VectorMul(VectorLoad(g, REAL), dbfn(VectorLoad(x, REAL), VectorLoad(y, REAL))));
+            VectorStore(r, VectorMul(VectorLoad(g, FLOAT32), dbfn(VectorLoad(x, FLOAT32), VectorLoad(y, FLOAT32))));
             for (int t = 0; t < tail; t++)
                 dB[bOffs[t]] += r[t];
         }

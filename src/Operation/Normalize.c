@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include "../Operation.h"
 #include "../utility.h"
-#include "../math/Scalar.h"
 #include "../math/Vector.h"
 
 typedef struct {
@@ -33,7 +32,7 @@ Tensor OperationNormalize(Tensor in, Real eps)
     ctx->mean       = (Real *)(ctx + 1);
     ctx->rstd       = ctx->mean + rows;
 
-    Tensor out = TensorNew(TensorDimensions(in), TensorShape(in), REAL, TensorGradients(in) != NULL);
+    Tensor out = TensorNew(TensorDimensions(in), TensorShape(in), FLOAT32, TensorGradients(in) != NULL);
     return OperationExecute(OperationNew(out, in, NULL, OperationNormalizeForward, OperationNormalizeBackward, ctx));
 }
 
@@ -60,7 +59,7 @@ static void normForward(void *arg, int start, int end)
     Real        *out = TensorEntries(op->out);
     int          sD  = TensorStride(A)[TensorDimensions(A) - 1];
 
-    if (TensorDataType(A) != REAL || TensorScale(A)) {
+    if (TensorDataType(A) != FLOAT32 || TensorScale(A)) {
         for (int r = start; r < end; r++) {
             int xBase = ctx->contiguous ? r * D : unravel(r, TensorShape(A), TensorStride(A), TensorDimensions(A) - 1);
             Real *o = out + (size_t)r * D;
@@ -75,7 +74,7 @@ static void normForward(void *arg, int start, int end)
                 Real d = TensorGet(A, xBase + i * sD) - mu;
                 var += d * d;
             }
-            Real rstd = 1.0f / sqrte(var / D + ctx->eps);
+            Real rstd = 1.0f / VectorFirst(sqrte(VectorBcast(var / D + ctx->eps)));
             ctx->mean[r] = mu;
             ctx->rstd[r] = rstd;
 
@@ -94,7 +93,7 @@ static void normForward(void *arg, int start, int end)
         int i = 0;
         if (ctx->contiguous || sD == 1) {
             Vector vs = VectorZero();
-            for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) vs = VectorAdd(vs, VectorLoad(x + i, REAL));
+            for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) vs = VectorAdd(vs, VectorLoad(x + i, FLOAT32));
             sum = VectorHsum(vs);
             for (; i < D; i++) sum += x[i];
         } else {
@@ -107,7 +106,7 @@ static void normForward(void *arg, int start, int end)
         if (ctx->contiguous || sD == 1) {
             Vector vmu = VectorBcast(mu), vv = VectorZero();
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) {
-                Vector d = VectorSub(VectorLoad(x + i, REAL), vmu);
+                Vector d = VectorSub(VectorLoad(x + i, FLOAT32), vmu);
                 vv = VectorFma(d, d, vv);
             }
             var = VectorHsum(vv);
@@ -117,7 +116,7 @@ static void normForward(void *arg, int start, int end)
         }
         var /= D;
 
-        Real rstd = 1.0f / sqrte(var + ctx->eps);
+        Real rstd = 1.0f / VectorFirst(sqrte(VectorBcast(var + ctx->eps)));
         ctx->mean[r] = mu;
         ctx->rstd[r] = rstd;
 
@@ -125,7 +124,7 @@ static void normForward(void *arg, int start, int end)
         if (ctx->contiguous || sD == 1) {
             Vector vmu = VectorBcast(mu), vr = VectorBcast(rstd);
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS)
-                VectorStore(o + i, VectorMul(VectorSub(VectorLoad(x + i, REAL), vmu), vr));
+                VectorStore(o + i, VectorMul(VectorSub(VectorLoad(x + i, FLOAT32), vmu), vr));
             for (; i < D; i++) o[i] = (x[i] - mu) * rstd;
         } else {
             for (; i < D; i++) o[i] = (x[i * sD] - mu) * rstd;
@@ -158,8 +157,8 @@ static void normBackward(void *arg, int start, int end)
             Vector vmu = VectorBcast(mu), vr = VectorBcast(rstd);
             Vector vs1 = VectorZero(), vs2 = VectorZero();
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) {
-                Vector dyv = VectorLoad(dy + i, REAL);
-                Vector y   = VectorMul(VectorSub(VectorLoad(x + i, REAL), vmu), vr);
+                Vector dyv = VectorLoad(dy + i, FLOAT32);
+                Vector y   = VectorMul(VectorSub(VectorLoad(x + i, FLOAT32), vmu), vr);
                 vs1 = VectorAdd(vs1, dyv);
                 vs2 = VectorFma(dyv, y, vs2);
             }
@@ -176,10 +175,10 @@ static void normBackward(void *arg, int start, int end)
             Vector vmu = VectorBcast(mu), vr = VectorBcast(rstd);
             Vector vc1 = VectorBcast(c1), vc2 = VectorBcast(c2);
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) {
-                Vector y   = VectorMul(VectorSub(VectorLoad(x + i, REAL), vmu), vr);
-                Vector dyv = VectorLoad(dy + i, REAL);
+                Vector y   = VectorMul(VectorSub(VectorLoad(x + i, FLOAT32), vmu), vr);
+                Vector dyv = VectorLoad(dy + i, FLOAT32);
                 Vector res = VectorMul(vr, VectorSub(VectorSub(dyv, vc1), VectorMul(y, vc2)));
-                VectorStore(gx + i, VectorAdd(VectorLoad(gx + i, REAL), res));
+                VectorStore(gx + i, VectorAdd(VectorLoad(gx + i, FLOAT32), res));
             }
             for (; i < D; i++) {
                 Real y = (x[i] - mu) * rstd;

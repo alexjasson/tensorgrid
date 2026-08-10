@@ -1,6 +1,7 @@
 #ifndef VECTOR_H
 #define VECTOR_H
 
+#include <stddef.h>
 #include "../tensorgrid.h" // Real
 
 /*
@@ -24,8 +25,11 @@ typedef Real Vector __attribute__((__vector_size__(VECTOR_BYTES)));
 typedef Vector (*VectorUnary)(Vector);
 typedef Vector (*VectorBinary)(Vector, Vector);
 
+size_t DataSize(DataType d);
 Vector VectorLoad(const void *p, DataType d);
 void   VectorStore(Real *p, Vector x);
+Real   VectorGet(const void *p, DataType d);
+void   VectorSet(void *p, DataType d, Real x);
 void   VectorFetch(const Real *p);
 Vector VectorBcast(Real x);
 Vector VectorAdd(Vector a, Vector b);
@@ -45,42 +49,44 @@ Vector VectorMantissa(Vector x);
 Vector VectorGt0(Vector v);
 Real   VectorHsum(Vector v);
 void VectorDot(void *A, void *B, Real *C, Real *q, int n, int k); // C[i * n + j] += q[j] * A[i] . B[j] for A[i], B[j] in R^k
+Real VectorFirst(Vector v);
+Real VectorApply(VectorBinary fn, Real a, Real b);
 
 // Unary activation functions and their derivatives
-Vector reluv(Vector a);
-Vector dreluv(Vector a);
-Vector identityv(Vector a);
-Vector didentityv(Vector a);
-Vector negatev(Vector a);
-Vector dnegatev(Vector a);
-Vector sigmoidv(Vector a);
-Vector dsigmoidv(Vector a);
-Vector tanhv(Vector a);
-Vector dtanhv(Vector a);
-Vector expv(Vector a);
-Vector logv(Vector a);
-Vector dlogv(Vector a);
-Vector sqrtv(Vector a);
-Vector dsqrtv(Vector a);
-Vector geluv(Vector a);
-Vector dgeluv(Vector a);
+Vector relu(Vector a);
+Vector drelu(Vector a);
+Vector identity(Vector a);
+Vector one(Vector a);
+Vector negate(Vector a);
+Vector minusOne(Vector a);
+Vector sigmoid(Vector a);
+Vector dsigmoid(Vector a);
+Vector tanhe(Vector a);
+Vector dtanhe(Vector a);
+Vector expe(Vector a);
+Vector loge(Vector a);
+Vector dloge(Vector a);
+Vector sqrte(Vector a);
+Vector dsqrte(Vector a);
+Vector gelu(Vector a);
+Vector dgelu(Vector a);
 
 // Binary functions and their partial derivatives
-Vector addv(Vector a, Vector b);
-Vector subtractv(Vector a, Vector b);
-Vector multiplyv(Vector a, Vector b);
-Vector dividev(Vector a, Vector b);
-Vector maxv(Vector a, Vector b);
-Vector firstv(Vector a, Vector b);
-Vector secondv(Vector a, Vector b);
-Vector onesv(Vector a, Vector b);
-Vector minusOnesv(Vector a, Vector b);
-Vector divideDav(Vector a, Vector b);
-Vector divideDbv(Vector a, Vector b);
-Vector maxDav(Vector a, Vector b);
-Vector maxDbv(Vector a, Vector b);
-Vector minv(Vector a, Vector b);
-Vector minDav(Vector a, Vector b);
-Vector minDbv(Vector a, Vector b);
+Vector add(Vector a, Vector b);
+Vector subtract(Vector a, Vector b);
+Vector multiply(Vector a, Vector b);
+Vector divide(Vector a, Vector b);
+Vector max(Vector a, Vector b);
+Vector first(Vector a, Vector b);
+Vector second(Vector a, Vector b);
+Vector ones(Vector a, Vector b);
+Vector minusOnes(Vector a, Vector b);
+Vector divideDa(Vector a, Vector b);
+Vector divideDb(Vector a, Vector b);
+Vector maxDa(Vector a, Vector b);
+Vector maxDb(Vector a, Vector b);
+Vector min(Vector a, Vector b);
+Vector minDa(Vector a, Vector b);
+Vector minDb(Vector a, Vector b);
 
 #endif

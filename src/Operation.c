@@ -62,13 +62,13 @@ Tensor OperationExecute(Operation op)
 
     // Cast entries to Real
     if (TensorGradients(out)) {
-        if (A && (TensorDataType(A) != REAL || TensorScale(A))) {
+        if (A && (TensorDataType(A) != FLOAT32 || TensorScale(A))) {
             op.A = TensorCopy(A);
-            TensorToType(op.A, REAL);
+            TensorToType(op.A, FLOAT32);
         }
-        if (B && (TensorDataType(B) != REAL || TensorScale(B))) {
+        if (B && (TensorDataType(B) != FLOAT32 || TensorScale(B))) {
             op.B = TensorCopy(B);
-            TensorToType(op.B, REAL);
+            TensorToType(op.B, FLOAT32);
         }
     }
     op.forward(&op);

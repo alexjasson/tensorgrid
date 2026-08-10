@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../Operation.h"
-#include "../math/Scalar.h"
+#include "../math/Vector.h"
 #include "../utility.h"
 
 typedef struct {
@@ -33,7 +33,7 @@ Tensor OperationSoftmax(Tensor logits, Real temperature)
     ctx->logitsContiguous = isContiguous(TensorShape(logits), TensorStride(logits), TensorDimensions(logits));
     ctx->invTemperature = 1.0f / temperature;
 
-    Tensor out = TensorNew(TensorDimensions(logits), TensorShape(logits), REAL, TensorGradients(logits) != NULL);
+    Tensor out = TensorNew(TensorDimensions(logits), TensorShape(logits), FLOAT32, TensorGradients(logits) != NULL);
     return OperationExecute(OperationNew(out, logits, NULL, OperationSoftmaxForward, OperationSoftmaxBackward, ctx));
 }
 
@@ -73,7 +73,7 @@ static void softmaxForward(void *arg, int start, int end)
 
         Real sum = 0.0f;
         for (int c = 0; c < classes; c++) {
-            Real e = expe(TensorGet(L, xBase + c * xStride) * ctx->invTemperature - max);
+            Real e = VectorFirst(expe(VectorBcast(TensorGet(L, xBase + c * xStride) * ctx->invTemperature - max)));
             p[c] = e;
             sum += e;
         }

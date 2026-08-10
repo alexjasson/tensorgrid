@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "../Operation.h"
-#include "../math/Scalar.h"
 #include "../utility.h"
 #include "../math/Vector.h"
 
@@ -35,7 +34,7 @@ Tensor OperationScatter(Binary fn, Tensor A, Tensor B, Real fill, int axis, int 
     ctx->b = fn;
     ctx->fill = fill;
     ctx->axis = axis;
-    Tensor out = TensorNew(outDims, outShape, REAL, TensorGradients(A) != NULL);
+    Tensor out = TensorNew(outDims, outShape, FLOAT32, TensorGradients(A) != NULL);
     return OperationExecute(OperationNew(out, A, B, OperationScatterForward, OperationScatterBackward, ctx));
 }
 
@@ -69,7 +68,7 @@ static void scatterForward(void *arg, int start, int end)
 
     // Vectorized MAX/MIN/ADD reduction of each output's contiguous input segment
     f reducer = ctx->b.f;
-    if (n == 1 && innerSize == 1 && aC && TensorDataType(A) == REAL && !TensorScale(A) &&
+    if (n == 1 && innerSize == 1 && aC && TensorDataType(A) == FLOAT32 && !TensorScale(A) &&
         (reducer == MAX.f || reducer == MIN.f || reducer == ADD.f)) {
         Real *out = TensorEntries(op->out);
         Real  fill = ctx->fill;
@@ -79,15 +78,15 @@ static void scatterForward(void *arg, int start, int end)
             if (reducer == ADD.f) {
                 Vector acc = VectorZero();
                 for (; j + VECTOR_DIMS <= idxSize; j += VECTOR_DIMS)
-                    acc = VectorAdd(acc, VectorLoad(row + j, REAL));
+                    acc = VectorAdd(acc, VectorLoad(row + j, FLOAT32));
                 Real r = fill + VectorHsum(acc);
                 for (; j < idxSize; j++) r += row[j];
                 out[i] = r;
             } else {
                 Vector acc = VectorBcast(fill);
                 for (; j + VECTOR_DIMS <= idxSize; j += VECTOR_DIMS)
-                    acc = (reducer == MAX.f) ? VectorMax(acc, VectorLoad(row + j, REAL))
-                                             : VectorMin(acc, VectorLoad(row + j, REAL));
+                    acc = (reducer == MAX.f) ? VectorMax(acc, VectorLoad(row + j, FLOAT32))
+                                             : VectorMin(acc, VectorLoad(row + j, FLOAT32));
                 Real lanes[VECTOR_DIMS]; VectorStore(lanes, acc);
                 Real r = fill;
                 for (int t = 0; t < VECTOR_DIMS; t++)
@@ -112,7 +111,7 @@ static void scatterForward(void *arg, int start, int end)
             Real acc = ctx->fill;
             for (int ix = 0; ix < idxSize; ix++) {
                 if ((int)(TensorGet(I, ix) + (Real)0.5) == kTarget)
-                    acc = ((ScalarBinary)ctx->b.f)(acc, TensorGet(A, (outer * idxSize + ix) * innerSize + inner));
+                    acc = VectorApply((VectorBinary)ctx->b.f, acc, TensorGet(A, (outer * idxSize + ix) * innerSize + inner));
             }
             oute[i] = acc;
         }
@@ -135,7 +134,7 @@ static void scatterForward(void *arg, int start, int end)
                 if ((int)(TensorGet(I, idxOff) + (Real)0.5) == kTarget) {
                     int aIxOff = aC ? ix * innerSize
                                     : unravel(ix, TensorShape(A) + axis, TensorStride(A) + axis, TensorDimensions(I));
-                    acc = ((ScalarBinary)ctx->b.f)(acc, TensorGet(A, outerOff + aIxOff + innerOff));
+                    acc = VectorApply((VectorBinary)ctx->b.f, acc, TensorGet(A, outerOff + aIxOff + innerOff));
                 }
             }
             oute[i] = acc;
@@ -168,7 +167,7 @@ static void scatterBackward(void *arg, int start, int end)
             Real *row = TensorGradients(A) + (size_t)i * idxSize;
             int j = 0;
             for (; j + VECTOR_DIMS <= idxSize; j += VECTOR_DIMS)
-                VectorStore(row + j, VectorAdd(VectorLoad(row + j, REAL), gv));
+                VectorStore(row + j, VectorAdd(VectorLoad(row + j, FLOAT32), gv));
             for (; j < idxSize; j++) row[j] += dout[i];
         }
         return;
@@ -199,7 +198,7 @@ static void scatterBackward(void *arg, int start, int end)
                 int aIxOff = aC ? ix * innerSize
                                 : unravel(ix, TensorShape(A) + axis, TensorStride(A) + axis, TensorDimensions(I));
                 Real Av = Ae[outerOff + aIxOff + innerOff];
-                chain[count + 1] = ((ScalarBinary)ctx->b.f)(chain[count], Av);
+                chain[count + 1] = VectorApply((VectorBinary)ctx->b.f, chain[count], Av);
                 count++;
             }
         }
@@ -213,8 +212,8 @@ static void scatterBackward(void *arg, int start, int end)
                                  : unravel(ix, TensorShape(A) + axis, TensorStride(A) + axis, TensorDimensions(I));
                 int aOffset = outerOff + aIxOff + innerOff;
                 Real Av     = Ae[aOffset];
-                TensorGradients(A)[aOffset] += dresult * ((ScalarBinary)ctx->b.db)(chain[c], Av);
-                dresult *= ((ScalarBinary)ctx->b.da)(chain[c], Av);
+                TensorGradients(A)[aOffset] += dresult * VectorApply((VectorBinary)ctx->b.db, chain[c], Av);
+                dresult *= VectorApply((VectorBinary)ctx->b.da, chain[c], Av);
                 c--;
             }
         }

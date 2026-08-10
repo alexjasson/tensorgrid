@@ -21,7 +21,7 @@ Tensor OperationMultiply(Tensor A, Tensor B)
     outShape[dimsOut - 2] = TensorShape(A)[dimsA - 2];
     outShape[dimsOut - 1] = TensorShape(B)[dimsB - 1];
     int autograd = TensorGradients(A) != NULL || TensorGradients(B) != NULL;
-    Tensor out = TensorNew(dimsOut, outShape, REAL, autograd);
+    Tensor out = TensorNew(dimsOut, outShape, FLOAT32, autograd);
     return OperationExecute(OperationNew(out, A, B, OperationMultiplyForward, OperationMultiplyBackward, NULL));
 }
 
@@ -29,15 +29,15 @@ static void OperationMultiplyForward(Operation *op)
 {
     Tensor A = op->A, B = op->B;
     int dimsA = TensorDimensions(A), dimsB = TensorDimensions(B);
-    if (TensorDataType(A) != REAL || TensorScale(A)) {
+    if (TensorDataType(A) != FLOAT32 || TensorScale(A)) {
         op->A = TensorCopy(A);
-        TensorToType(op->A, REAL);
+        TensorToType(op->A, FLOAT32);
     }
     int scaledIncompatible = TensorScale(B) && !(dimsB == 2 && TensorStride(B)[dimsB - 1] == 1);
-    int integerBatched     = dimsB >= 3 && TensorDataType(B) != REAL;
+    int integerBatched     = dimsB >= 3 && TensorDataType(B) != FLOAT32;
     if (scaledIncompatible || integerBatched) {
         op->B = TensorCopy(B);
-        TensorToType(op->B, REAL);
+        TensorToType(op->B, FLOAT32);
     }
 
     int m = TensorShape(op->A)[dimsA - 2], k = TensorShape(op->A)[dimsA - 1], n = TensorShape(op->B)[dimsB - 1];

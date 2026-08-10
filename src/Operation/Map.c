@@ -5,7 +5,6 @@
 #include "../Operation.h"
 #include "../utility.h"
 #include "../math/Vector.h"
-#include "../math/Scalar.h"
 
 typedef struct { Unary u; } MapContext;
 
@@ -22,7 +21,7 @@ Tensor OperationMap(Unary fn, Tensor A)
         exit(EXIT_FAILURE);
     }
     ctx->u = fn;
-    Tensor out = TensorNew(TensorDimensions(A), TensorShape(A), REAL, TensorGradients(A) != NULL);
+    Tensor out = TensorNew(TensorDimensions(A), TensorShape(A), FLOAT32, TensorGradients(A) != NULL);
     return OperationExecute(OperationNew(out, A, NULL, OperationMapForward, OperationMapBackward, ctx));
 }
 
@@ -44,14 +43,13 @@ static void mapForward(void *arg, int start, int end)
     MapContext *ctx = op->context;
     Real      *out = TensorEntries(op->out);
     Real      *A   = TensorEntries(op->A);
-    VectorUnary fn = (VectorUnary)ctx->u.fv;
+    VectorUnary fn = (VectorUnary)ctx->u.f;
 
-    if (TensorDataType(op->A) != REAL || TensorScale(op->A)) {
-        ScalarUnary sfn = (ScalarUnary)ctx->u.f;
+    if (TensorDataType(op->A) != FLOAT32 || TensorScale(op->A)) {
         int aC = isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
         for (int i = start; i < end; i++) {
             int off = aC ? i : unravel(i, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
-            out[i] = sfn(TensorGet(op->A, off));
+            out[i] = VectorFirst(fn(VectorBcast(TensorGet(op->A, off))));
         }
         return;
     }
@@ -59,13 +57,13 @@ static void mapForward(void *arg, int start, int end)
     if (isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A))) {
         int i = start;
         for (; i + VECTOR_DIMS <= end; i += VECTOR_DIMS)
-            VectorStore(out + i, fn(VectorLoad(A + i, REAL)));
+            VectorStore(out + i, fn(VectorLoad(A + i, FLOAT32)));
         if (i < end) {
             Real x[VECTOR_DIMS], y[VECTOR_DIMS];
             int tail = end - i;
             for (int t = 0; t < VECTOR_DIMS; t++)
                 x[t] = t < tail ? A[i + t] : 1.0f;
-            VectorStore(y, fn(VectorLoad(x, REAL)));
+            VectorStore(y, fn(VectorLoad(x, FLOAT32)));
             for (int t = 0; t < tail; t++)
                 out[i + t] = y[t];
         }
@@ -77,7 +75,7 @@ static void mapForward(void *arg, int start, int end)
                 int j = i + t;
                 x[t] = t < tail ? A[unravel(j, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A))] : 1.0f;
             }
-            VectorStore(y, fn(VectorLoad(x, REAL)));
+            VectorStore(y, fn(VectorLoad(x, FLOAT32)));
             for (int t = 0; t < tail; t++)
                 out[i + t] = y[t];
         }
@@ -91,11 +89,11 @@ static void mapBackward(void *arg, int start, int end)
     Real       *A   = TensorEntries(op->A);
     Real       *dA  = TensorGradients(op->A);
     Real     *dout  = TensorGradients(op->out);
-    VectorUnary dafn = (VectorUnary)ctx->u.dav;
+    VectorUnary dafn = (VectorUnary)ctx->u.da;
     if (isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A))) {
         int j = start;
         for (; j + VECTOR_DIMS <= end; j += VECTOR_DIMS)
-            VectorStore(dA + j, VectorFma(VectorLoad(dout + j, REAL), dafn(VectorLoad(A + j, REAL)), VectorLoad(dA + j, REAL)));
+            VectorStore(dA + j, VectorFma(VectorLoad(dout + j, FLOAT32), dafn(VectorLoad(A + j, FLOAT32)), VectorLoad(dA + j, FLOAT32)));
         if (j < end) {
             Real x[VECTOR_DIMS], g[VECTOR_DIMS], old[VECTOR_DIMS], y[VECTOR_DIMS];
             int tail = end - j;
@@ -104,7 +102,7 @@ static void mapBackward(void *arg, int start, int end)
                 g[t] = t < tail ? dout[j + t] : 0.0f;
                 old[t] = t < tail ? dA[j + t] : 0.0f;
             }
-            VectorStore(y, VectorFma(VectorLoad(g, REAL), dafn(VectorLoad(x, REAL)), VectorLoad(old, REAL)));
+            VectorStore(y, VectorFma(VectorLoad(g, FLOAT32), dafn(VectorLoad(x, FLOAT32)), VectorLoad(old, FLOAT32)));
             for (int t = 0; t < tail; t++)
                 dA[j + t] = y[t];
         }
@@ -124,7 +122,7 @@ static void mapBackward(void *arg, int start, int end)
                     g[t] = dout[i];
                 }
             }
-            VectorStore(y, VectorMul(VectorLoad(g, REAL), dafn(VectorLoad(x, REAL))));
+            VectorStore(y, VectorMul(VectorLoad(g, FLOAT32), dafn(VectorLoad(x, FLOAT32))));
             for (int t = 0; t < tail; t++)
                 dA[offs[t]] += y[t];
         }

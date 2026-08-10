@@ -6,18 +6,18 @@
 #define FALSE 0
 #define INFINITE 1e+38
 
-typedef float Real; // Floating point representation of a Real number, may be float or double
-typedef void (*f)(void); // A function applied to scalars or vectors
+typedef float Real;      // Floating point representation of a Real number
+typedef void (*f)(void); // A function f
 
 /*
- * Unary/Binary functions y = f(a) and y = f(a, b), with scalar derivatives
- * dy/da (da) and dy/db (db). Vectorized equivalents are denoted with a v.
+ * Unary/Binary functions y = f(a) and y = f(a, b), with derivatives dy/da (da)
+ * and dy/db (db).
  */
-typedef struct { f f, da;     f fv, dav;      } Unary;
-typedef struct { f f, da, db; f fv, dav, dbv; } Binary;
+typedef struct { f f, da;     } Unary;
+typedef struct { f f, da, db; } Binary;
 extern Unary RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
 extern Binary ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
-typedef enum { UINT8, INT8, INT16, INT32, FLOAT16, FLOAT32, FLOAT64, REAL } DataType;
+typedef enum { UINT8, INT8, INT16, INT32, FLOAT16, FLOAT32, FLOAT64 } DataType;
 typedef struct tensor *Tensor;
 typedef struct tensorArray *TensorArray; // Array of tensors intended to be used for model parameters
 
@@ -29,7 +29,7 @@ typedef struct tensorArray *TensorArray; // Array of tensors intended to be used
 /*
  * Allocates a new tensor with all entries as 0, each stored using the
  * given data type. If autograd is nonzero, the tensor also allocates
- * gradient storage and optimizer state. Autograd requires REAL as DataType.
+ * gradient storage and optimizer state. Autograd requires FLOAT32 as DataType.
  * Note: for a 0-dimensional tensor (scalar), pass shape = NULL.
  */
 Tensor TensorNew(int dimensions, int *shape, DataType d, int autograd);
