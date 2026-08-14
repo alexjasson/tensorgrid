@@ -20,7 +20,7 @@ static void scatterBackward(void *arg, int start, int end);
 Tensor OperationScatter(Binary fn, Tensor A, Tensor B, Real fill, int axis, int n)
 {
     int outDims = TensorDimensions(A) - TensorDimensions(B) + 1;
-    int outShape[MAX_DIMENSIONS];
+    int outShape[outDims > 0 ? outDims : 1];
     int p = 0;
     for (int d = 0; d < axis; d++) outShape[p++] = TensorShape(A)[d];
     outShape[p++] = n;

@@ -42,22 +42,26 @@ typedef struct {
 } Scale;          // The stored entry at offset i maps to values[i / stride] * entry
 
 struct tensor {
-    int dimensions;
-    int shape[MAX_DIMENSIONS];
-    int strides[MAX_DIMENSIONS];
+    int  dimensions;
+    int  *shape;
+    int  *strides;
     void *entries;
     DataType type;        // Storage format of entries
     Real *gradients;      // Gradients for each entry, NULL if no autograd
     Optimizer *optimizer; // Optimizer state, NULL if no autograd
     Scale scale;          // Maps stored entries to Real, NULL if unscaled
     Tensor owner;         // Owner tensor if this is a view, NULL if not a view
-    int references;       // Number of references
     Operation *op;        // Operation that produced this tensor, NULL if none
+    int references;       // Number of references
 };
 
 struct tensorArray {
     DynamicArray tensors;
 };
+
+// Axis functions
+static void axesNew(Tensor t, int dimensions, const int *shape, const int *strides); // Allocate and set shape and strides
+static void axesFree(Tensor t);                                                      // Free shape and strides
 
 // Scale functions
 static void scaleNew(Scale *s, int groups, int stride);  // Allocate values[groups]
@@ -82,6 +86,27 @@ Tensor TensorOwner(Tensor A)      { return A->owner;        }
 Operation *OperationGet(Tensor A)          { return A->op;  }
 void OperationSet(Tensor A, Operation *op) { A->op = op;    }
 
+
+static void axesNew(Tensor t, int dimensions, const int *shape, const int *strides)
+{
+    int axes = dimensions > 0 ? dimensions : 1;
+    int *block = malloc(2 * (size_t)axes * sizeof(int));
+    if (!block) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
+    t->dimensions = dimensions;
+    t->shape      = block;
+    t->strides    = block + axes;
+    for (int axis = 0; axis < dimensions; axis++) {
+        t->shape[axis]   = shape[axis];
+        t->strides[axis] = strides ? strides[axis] : 0;
+    }
+}
+
+static void axesFree(Tensor t)
+{
+    free(t->shape);
+    t->shape   = NULL;
+    t->strides = NULL;
+}
 
 static void scaleNew(Scale *s, int groups, int stride)
 {
@@ -124,11 +149,7 @@ Tensor TensorView(Tensor A, int dimensions, const int *shape, const int *strides
     Tensor view = malloc(sizeof(*view));
     if (!view) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
     *view = *A;
-    view->dimensions = dimensions;
-    for (int axis = 0; axis < dimensions; axis++) {
-        view->shape[axis] = shape[axis];
-        view->strides[axis] = strides[axis];
-    }
+    axesNew(view, dimensions, shape, strides);
     view->owner = A;
     view->references = 1;
     A->references++;
@@ -173,10 +194,9 @@ Tensor TensorNew(int dimensions, int *shape, DataType d, int autograd)
     }
     Tensor t = calloc(1, sizeof(*t));
     if (!t) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
-    t->dimensions = dimensions;
     t->type = d;
     t->references = 1;
-    for (int i = 0; i < dimensions; i++) t->shape[i] = shape[i];
+    axesNew(t, dimensions, shape, NULL);
     if (dimensions > 0) {
         t->strides[dimensions - 1] = 1;
         for (int i = dimensions - 2; i >= 0; i--)
@@ -235,6 +255,7 @@ void TensorFree(Tensor A)
             free(A->op);
         }
     }
+    axesFree(A);
     free(A);
     TensorFree(owner);
 }
@@ -249,7 +270,7 @@ void TensorArrayFree(TensorArray ta)
 
 Tensor TensorSlice(Tensor A, int index, int length)
 {
-    int shape[MAX_DIMENSIONS];
+    int shape[A->dimensions > 0 ? A->dimensions : 1];
     for (int axis = 0; axis < A->dimensions; axis++) shape[axis] = A->shape[axis];
     shape[0] = length;
     Tensor t = TensorView(A, A->dimensions, shape, A->strides);
@@ -281,7 +302,7 @@ Tensor TensorReshape(Tensor A, int dimensions, int *shape)
         fprintf(stderr, "TensorReshape requires an unscaled input!\n");
         exit(EXIT_FAILURE);
     }
-    int strides[MAX_DIMENSIONS] = {0};
+    int strides[dimensions > 0 ? dimensions : 1];
     if (dimensions > 0) {
         strides[dimensions - 1] = 1;
         for (int i = dimensions - 2; i >= 0; i--)
@@ -302,7 +323,7 @@ Tensor TensorDetach(Tensor A)
 Tensor TensorTranspose(Tensor A)
 {
     int dims = A->dimensions;
-    int shape[MAX_DIMENSIONS], strides[MAX_DIMENSIONS];
+    int shape[dims], strides[dims];
     for (int axis = 0; axis < dims; axis++) {
         shape[axis] = A->shape[axis];
         strides[axis] = A->strides[axis];
@@ -517,7 +538,7 @@ Tensor TensorSample(Tensor logits, Real temperature)
     int n          = TensorSize(logits) / numClasses;
 
     int outDims = logits->dimensions - 1;
-    int outShape[MAX_DIMENSIONS];
+    int outShape[outDims > 0 ? outDims : 1];
     for (int i = 0; i < outDims; i++) outShape[i] = logits->shape[i];
     Tensor out = TensorNew(outDims, outShape, FLOAT32, 0);
     Real *oe   = out->entries;
@@ -624,7 +645,7 @@ void TensorXavier(Tensor A)
 
 Tensor TensorOneHot(Tensor labels, int numClasses)
 {
-    int outShape[MAX_DIMENSIONS];
+    int outShape[labels->dimensions + 1];
     for (int i = 0; i < labels->dimensions; i++) outShape[i] = labels->shape[i];
     outShape[labels->dimensions] = numClasses;
 
@@ -643,7 +664,7 @@ Tensor TensorOneHot(Tensor labels, int numClasses)
 void TensorPrint(Tensor A)
 {
     int size = TensorSize(A);
-    int indices[MAX_DIMENSIONS] = {0};
+    int indices[A->dimensions > 0 ? A->dimensions : 1];
 
     if (size == 1) {
         printf("%g\n", TensorGet(A, 0));
@@ -913,24 +934,28 @@ int TensorArrayRead(TensorArray ta, char *path)
 
         // Read tensor shape
         int32_t dimensions;
-        int shape[MAX_DIMENSIONS];
-
-        if (fread(&dimensions, sizeof(dimensions), 1, f) != 1 ||
-            dimensions < 0 || dimensions > MAX_DIMENSIONS)
+        if (fread(&dimensions, sizeof(dimensions), 1, f) != 1 || dimensions < 0)
             goto error;
+
+        int *shape = malloc((size_t)(dimensions > 0 ? dimensions : 1) * sizeof(int));
+        if (!shape) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
 
         for (int d = 0; d < dimensions; d++) {
             int32_t dim;
-            if (fread(&dim, sizeof(dim), 1, f) != 1 || dim <= 0)
+            if (fread(&dim, sizeof(dim), 1, f) != 1 || dim <= 0) {
+                free(shape);
                 goto error;
+            }
             shape[d] = dim;
         }
 
         // Read scale count
         uint32_t groups;
         if (fread(&groups, sizeof(groups), 1, f) != 1 ||
-            (groups != 0 && groups != (uint32_t)(dimensions >= 2 ? shape[0] : 1)))
+            (groups != 0 && groups != (uint32_t)(dimensions >= 2 ? shape[0] : 1))) {
+            free(shape);
             goto error;
+        }
 
         // Check if tensor already exists, otherwise create a new one
         Tensor t;
@@ -949,6 +974,7 @@ int TensorArrayRead(TensorArray ta, char *path)
             DynamicArrayPush(ta->tensors, &created);
             t = created;
         }
+        free(shape);
         scaleFree(&t->scale);
         if (groups) {
             scaleNew(&t->scale, (int)groups, t->strides[0]);

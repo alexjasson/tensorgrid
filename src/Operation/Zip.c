@@ -23,7 +23,7 @@ Tensor OperationZip(Binary fn, Tensor A, Tensor B)
     }
 
     int outDims = TensorDimensions(A) >= TensorDimensions(B) ? TensorDimensions(A) : TensorDimensions(B);
-    int outShape[MAX_DIMENSIONS];
+    int outShape[outDims > 0 ? outDims : 1];
     for (int axis = 0; axis < outDims; axis++) {
         int aAxis = axis - (outDims - TensorDimensions(A));
         int bAxis = axis - (outDims - TensorDimensions(B));
@@ -37,7 +37,7 @@ Tensor OperationZip(Binary fn, Tensor A, Tensor B)
     }
 
     Tensor inputs[2] = { A, B };
-    int strides[2][MAX_DIMENSIONS];
+    int strides[2][outDims > 0 ? outDims : 1];
     for (int n = 0; n < 2; n++) {
         Tensor input = inputs[n];
         int pad = outDims - TensorDimensions(input);
@@ -149,7 +149,7 @@ static void zipForward(void *arg, int start, int end)
     }
     if (clsA >= 0 && clsB >= 0 && R >= VECTOR_DIMS) {
         int outerDims = dims - runAxes;
-        int oidx[MAX_DIMENSIONS];
+        int oidx[outerDims > 0 ? outerDims : 1];
         int b0 = start / R, r0 = start - b0 * R, rem = b0;
         long offA = 0, offB = 0;
         for (int ax = outerDims - 1; ax >= 0; ax--) {
@@ -321,7 +321,7 @@ static void zipBackward(void *arg, int start, int end)
     }
     if (clsA >= 0 && clsB >= 0 && R >= VECTOR_DIMS) {
         int outerDims = dims - runAxes;
-        int oidx[MAX_DIMENSIONS];
+        int oidx[outerDims > 0 ? outerDims : 1];
         int b0 = start / R, r0 = start - b0 * R, rem = b0;
         long offA = 0, offB = 0;
         for (int ax = outerDims - 1; ax >= 0; ax--) {

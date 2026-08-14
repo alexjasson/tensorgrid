@@ -1,7 +1,6 @@
 #ifndef TENSORGRID_H
 #define TENSORGRID_H
 
-#define MAX_DIMENSIONS 8
 #define TRUE 1
 #define FALSE 0
 #define INFINITE 1e+38

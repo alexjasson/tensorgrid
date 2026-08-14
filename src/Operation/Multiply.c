@@ -15,7 +15,7 @@ Tensor OperationMultiply(Tensor A, Tensor B)
     int dimsA   = TensorDimensions(A);
     int dimsB   = TensorDimensions(B);
     int dimsOut = dimsA >= dimsB ? dimsA : dimsB;
-    int outShape[MAX_DIMENSIONS];
+    int outShape[dimsOut];
     for (int i = 0; i < dimsOut - 2; i++)
         outShape[i] = (dimsA >= dimsB) ? TensorShape(A)[i] : TensorShape(B)[i];
     outShape[dimsOut - 2] = TensorShape(A)[dimsA - 2];

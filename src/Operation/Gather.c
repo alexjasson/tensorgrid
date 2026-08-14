@@ -16,7 +16,7 @@ static void gatherBackward(void *arg, int start, int end);
 Tensor OperationGather(Tensor A, Tensor B, int axis)
 {
     int outDims = TensorDimensions(A) - 1 + TensorDimensions(B);
-    int outShape[MAX_DIMENSIONS];
+    int outShape[outDims > 0 ? outDims : 1];
     int p = 0;
     for (int d = 0; d < axis; d++) outShape[p++] = TensorShape(A)[d];
     for (int d = 0; d < TensorDimensions(B); d++) outShape[p++] = TensorShape(B)[d];
