@@ -62,11 +62,11 @@ Tensor OperationExecute(Operation op)
 
     // Cast entries to Real
     if (TensorGradients(out)) {
-        if (A && (TensorDataType(A) != FLOAT32 || TensorScale(A))) {
+        if (A && (TensorDataType(A) != FLOAT32 || ScaleGet(A).values)) {
             op.A = TensorCopy(A);
             TensorToType(op.A, FLOAT32);
         }
-        if (B && (TensorDataType(B) != FLOAT32 || TensorScale(B))) {
+        if (B && (TensorDataType(B) != FLOAT32 || ScaleGet(B).values)) {
             op.B = TensorCopy(B);
             TensorToType(op.B, FLOAT32);
         }

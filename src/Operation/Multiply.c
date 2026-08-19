@@ -29,11 +29,11 @@ static void OperationMultiplyForward(Operation *op)
 {
     Tensor A = op->A, B = op->B;
     int dimsA = TensorDimensions(A), dimsB = TensorDimensions(B);
-    if (TensorDataType(A) != FLOAT32 || TensorScale(A)) {
+    if (TensorDataType(A) != FLOAT32 || ScaleGet(A).values) {
         op->A = TensorCopy(A);
         TensorToType(op->A, FLOAT32);
     }
-    int scaledIncompatible = TensorScale(B) && !(dimsB == 2 && TensorStride(B)[dimsB - 1] == 1);
+    int scaledIncompatible = ScaleGet(B).values && !(dimsB == 2 && TensorStride(B)[dimsB - 1] == 1);
     int integerBatched     = dimsB >= 3 && TensorDataType(B) != FLOAT32;
     if (scaledIncompatible || integerBatched) {
         op->B = TensorCopy(B);
@@ -81,7 +81,7 @@ static void multiplyForward(void *arg, int start, int end)
 
     Matrix Bv  = MatrixView(TensorEntries(op->B), k, n, bRowStride, bColStride);
     Bv.type    = TensorDataType(op->B);
-    Bv.scales  = TensorScale(op->B);
+    Bv.scale   = ScaleGet(op->B);
 
     // If B is shared and A's batches are contiguous, fuse into a single GEMM
     if (batchStrideB == 0 && batchStrideA == m * aRowStride) {

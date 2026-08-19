@@ -27,7 +27,7 @@ Tensor OperationAffine(Unary fn, Tensor A, Tensor bias, int inner)
     // Dequantize the bias so it runs on the vectorized fast path if autograd is not needed
     Tensor biasOrig = bias;
     if (!TensorGradients(A) && !TensorGradients(bias) &&
-        (TensorDataType(bias) != FLOAT32 || TensorScale(bias)))
+        (TensorDataType(bias) != FLOAT32 || ScaleGet(bias).values))
         bias = TensorCopy(bias);
 
     int autograd = TensorGradients(A) != NULL || TensorGradients(bias) != NULL;
@@ -65,7 +65,7 @@ static void affineForward(void *arg, int start, int end)
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     VectorUnary fn = (VectorUnary)ctx->u.f;
 
-    if (TensorDataType(op->A) != FLOAT32 || TensorScale(op->A) || TensorDataType(op->B) != FLOAT32 || TensorScale(op->B)) {
+    if (TensorDataType(op->A) != FLOAT32 || ScaleGet(op->A).values || TensorDataType(op->B) != FLOAT32 || ScaleGet(op->B).values) {
         for (int o = start; o < end; o++)
             for (int c = 0; c < biasSize; c++) {
                 Real bc = TensorGet(op->B, c);

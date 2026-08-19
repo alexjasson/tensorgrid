@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "tensorgrid.h"
+#include "math/Scale.h"
 #include "Operation.h"
 #include "adt/DynamicArray.h"
 #include "adt/HashMap.h"
@@ -35,12 +36,6 @@ typedef struct optimizer {
     int t;   // Adam timestep
 } Optimizer;
 
-typedef struct {
-    Real *values; // group scales, NULL if unscaled
-    int   groups; // number of scale entries
-    int   stride; // Stride between groups, 0 for a single group
-} Scale;          // The stored entry at offset i maps to values[i / stride] * entry
-
 struct tensor {
     int  dimensions;
     int  *shape;
@@ -64,11 +59,9 @@ static void axesNew(Tensor t, int dimensions, const int *shape, const int *strid
 static void axesFree(Tensor t);                                                      // Free shape and strides
 
 // Scale functions
-static void scaleNew(Scale *s, int groups, int stride);  // Allocate values[groups]
-static void scaleFree(Scale *s);                         // Free and reset to unscaled
-static Real scaleAt(Scale s, int position);              // Value at a position, 1 if unscaled
-static void scaleSlice(Scale *s, int group, int groups); // Keep the groups starting at group
-static void scaleIndex(Scale *s, int group);             // Collapse to the single group
+static void scaleSlice(Scale *s, int group, int groups);           // Keep the groups starting at group
+static void scaleIndex(Scale *s, int group);                       // Collapse onto the single group
+static void scaleFit(Scale *s, int group, Real low, Real high, Real max); // Map [low, high] onto a type reaching max
 
 // Pointer to the entry at given index
 static void *entry(Tensor A, size_t index) { return (unsigned char *)A->entries + index * DataSize(A->type); }
@@ -80,11 +73,11 @@ int *TensorStride(Tensor A)       { return A->strides;      }
 void *TensorEntries(Tensor A)     { return A->entries;      }
 DataType TensorDataType(Tensor A) { return A->type;         }
 Real *TensorGradients(Tensor A)   { return A->gradients;    }
-Real *TensorScale(Tensor A)       { return A->scale.values; }
 int TensorReference(Tensor A)     { return A->references;   }
 Tensor TensorOwner(Tensor A)      { return A->owner;        }
-Operation *OperationGet(Tensor A)          { return A->op;  }
-void OperationSet(Tensor A, Operation *op) { A->op = op;    }
+Scale ScaleGet(Tensor A)                   { return A->scale; }
+Operation *OperationGet(Tensor A)          { return A->op;    }
+void OperationSet(Tensor A, Operation *op) { A->op = op;      }
 
 
 static void axesNew(Tensor t, int dimensions, const int *shape, const int *strides)
@@ -108,40 +101,43 @@ static void axesFree(Tensor t)
     t->strides = NULL;
 }
 
-static void scaleNew(Scale *s, int groups, int stride)
-{
-    s->values = malloc((size_t)groups * sizeof(Real));
-    if (!s->values) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
-    s->groups = groups;
-    s->stride = groups >= 2 ? stride : 0; // single group uses one scale
-}
-
-static void scaleFree(Scale *s)
-{
-    free(s->values);
-    s->values = NULL;
-    s->groups = 0;
-    s->stride = 0;
-}
-
-static Real scaleAt(Scale s, int position)
-{
-    return s.values ? s.values[s.stride ? position / s.stride : 0] : 1.0;
-}
 
 static void scaleSlice(Scale *s, int group, int groups)
 {
     if (!s->values) return;
-    if (s->stride) s->values += group;
+    if (s->stride) {
+        s->values += group;
+        if (s->zeros) s->zeros += group;
+    }
     s->groups = groups;
 }
 
 static void scaleIndex(Scale *s, int group)
 {
     if (!s->values) return;
-    if (s->stride) s->values += group;
+    if (s->stride) {
+        s->values += group;
+        if (s->zeros) s->zeros += group;
+    }
     s->groups = 1;
     s->stride = 0;
+}
+
+
+// Maps a group's entries, spanning [low, high], onto a type whose largest value is max.
+static void scaleFit(Scale *s, int group, Real low, Real high, Real max)
+{
+    if (!s->zeros) {
+        Real absmax = high > -low ? high : -low;
+        s->values[group] = absmax > 0.0 ? absmax / max : 1.0;
+        return;
+    }
+    if (low > 0.0)  low  = 0.0;
+    if (high < 0.0) high = 0.0;
+    Real value = high > low ? (high - low) / max : 1.0;
+    Real zero  = (Real)(long)(-low / value + (Real)0.5); // -low / value is never negative
+    s->values[group] = value;
+    s->zeros[group]  = zero > max ? max : zero;
 }
 
 Tensor TensorView(Tensor A, int dimensions, const int *shape, const int *strides)
@@ -158,12 +154,12 @@ Tensor TensorView(Tensor A, int dimensions, const int *shape, const int *strides
 
 Real TensorGet(Tensor A, int index)
 {
-    return scaleAt(A->scale, index) * VectorGet(entry(A, (size_t)index), A->type);
+    return ScaleAt(A->scale, index) * (VectorGet(entry(A, (size_t)index), A->type) - ScaleZeroAt(A->scale, index));
 }
 
 void TensorSet(Tensor A, int index, Real value)
 {
-    VectorSet(entry(A, (size_t)index), A->type, value / scaleAt(A->scale, index));
+    VectorSet(entry(A, (size_t)index), A->type, value / ScaleAt(A->scale, index) + ScaleZeroAt(A->scale, index));
 }
 
 int TensorSize(Tensor A)
@@ -242,7 +238,7 @@ void TensorFree(Tensor A)
         MemoryPool pool = MemoryPoolGet();
         MemoryPoolFree(pool, A->entries, footprint * DataSize(A->type));
         MemoryPoolFree(pool, A->gradients, footprint * sizeof(Real));
-        scaleFree(&A->scale);
+        ScaleFree(&A->scale);
         if (A->optimizer) {
             free(A->optimizer->m);
             free(A->optimizer->v);
@@ -404,7 +400,7 @@ Tensor TensorScalarMultiply(Tensor A, Real scalar)
         }
         int groups = A->dimensions >= 2 ? A->shape[0] : 1;
         if (!A->scale.values) {
-            scaleNew(&A->scale, groups, A->strides[0]);
+            ScaleNew(&A->scale, groups, A->strides[0], FALSE);
             for (int c = 0; c < groups; c++) A->scale.values[c] = scalar;
         } else {
             for (int c = 0; c < A->scale.groups; c++) A->scale.values[c] *= scalar;
@@ -601,9 +597,12 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
     Tensor out = TensorNew(A->dimensions, A->shape, A->type, 0);
     if (A->scale.values) {
         int groups = A->dimensions >= 2 ? n : 1;
-        scaleNew(&out->scale, groups, out->strides[0]);
-        for (int i = 0; i < groups; i++)
-            out->scale.values[i] = A->scale.values[A->dimensions >= 2 ? perm[i] : i];
+        ScaleNew(&out->scale, groups, out->strides[0], A->scale.zeros != NULL);
+        for (int i = 0; i < groups; i++) {
+            int from = A->dimensions >= 2 ? perm[i] : i;
+            out->scale.values[i] = A->scale.values[from];
+            if (out->scale.zeros) out->scale.zeros[i] = A->scale.zeros[from];
+        }
     }
     int rowSize = TensorSize(A) / n;
     if (isContiguous(A->shape, A->strides, A->dimensions)) {
@@ -747,7 +746,7 @@ static void toReal(void *arg, int start, int end)
     Real *dst = op->out->entries;
     size_t esz = DataSize(op->A->type);
     for (int i = start; i < end; i++)
-        dst[i] = scaleAt(op->A->scale, i) * VectorGet(src + (size_t)i * esz, op->A->type);
+        dst[i] = ScaleAt(op->A->scale, i) * (VectorGet(src + (size_t)i * esz, op->A->type) - ScaleZeroAt(op->A->scale, i));
 }
 
 void TensorToType(Tensor A, DataType d)
@@ -771,33 +770,27 @@ void TensorToType(Tensor A, DataType d)
         Operation op = { .A = A, .out = out };
         OperationDispatch(toReal, &op, size, size);
     } else {
-        if (out->type <= INT32) { // For integer types, scale maps the largest value to the type's max
-            Real typeMax  = out->type == UINT8 ? UINT8_MAX : out->type == INT8 ? INT8_MAX : out->type == INT16 ? INT16_MAX : INT32_MAX;
-            int groups  = out->dimensions >= 2 ? out->shape[0] : 1;
-            int inner     = size / groups;
-            scaleNew(&out->scale, groups, inner);
+        if (out->type <= INT32) {
+            Real typeMax = out->type == UINT8 ? UINT8_MAX : out->type == INT8 ? INT8_MAX : out->type == INT16 ? INT16_MAX : INT32_MAX;
+            int groups = out->dimensions >= 2 ? out->shape[0] : 1;
+            int inner  = size / groups;
+            ScaleNew(&out->scale, groups, inner, out->type == UINT8);
             for (int c = 0; c < groups; c++) {
-                Real absmax = 0.0;
+                Real low = 0.0, high = 0.0;
                 for (int j = 0; j < inner; j++) {
                     int i   = c * inner + j;
                     int off = contiguous ? i : unravel(i, A->shape, A->strides, A->dimensions);
                     Real x  = TensorGet(A, off);
-                    if (x < 0.0) {
-                        if (out->type == UINT8) {
-                            fprintf(stderr, "Negative values can't be mapped to UINT8!\n");
-                            exit(EXIT_FAILURE);
-                        }
-                        x = -x;
-                    }
-                    if (x > absmax) absmax = x;
+                    if (j == 0)        low = high = x;
+                    else if (x < low)  low  = x;
+                    else if (x > high) high = x;
                 }
-                out->scale.values[c] = absmax > 0.0 ? absmax / typeMax : 1.0;
+                scaleFit(&out->scale, c, low, high, typeMax);
             }
         }
         for (int i = 0; i < size; i++) {
-            int off   = contiguous ? i : unravel(i, A->shape, A->strides, A->dimensions);
-            Real s    = scaleAt(out->scale, i);
-            VectorSet(entry(out, (size_t)i), out->type, TensorGet(A, off) / s);
+            int off = contiguous ? i : unravel(i, A->shape, A->strides, A->dimensions);
+            TensorSet(out, i, TensorGet(A, off));
         }
     }
     struct tensor tmp = *A;
@@ -874,7 +867,9 @@ void TensorArrayWrite(TensorArray ta, char *path)
 
         // Write tensor scale
         uint32_t groups = t->scale.values ? (uint32_t)t->scale.groups : 0;
-        if (fwrite(&groups, sizeof(groups), 1, f) != 1) {
+        uint32_t zeros  = t->scale.zeros  ? groups : 0;
+        if (fwrite(&groups, sizeof(groups), 1, f) != 1 ||
+            fwrite(&zeros,  sizeof(zeros),  1, f) != 1) {
             fprintf(stderr, "Cannot write file: %s\n", path);
             fclose(f);
             exit(EXIT_FAILURE);
@@ -882,6 +877,14 @@ void TensorArrayWrite(TensorArray ta, char *path)
         for (uint32_t c = 0; c < groups; c++) {
             double perChannel = t->scale.values[c];
             if (fwrite(&perChannel, sizeof(perChannel), 1, f) != 1) {
+                fprintf(stderr, "Cannot write file: %s\n", path);
+                fclose(f);
+                exit(EXIT_FAILURE);
+            }
+        }
+        for (uint32_t c = 0; c < zeros; c++) {
+            double zero = t->scale.zeros[c];
+            if (fwrite(&zero, sizeof(zero), 1, f) != 1) {
                 fprintf(stderr, "Cannot write file: %s\n", path);
                 fclose(f);
                 exit(EXIT_FAILURE);
@@ -950,9 +953,11 @@ int TensorArrayRead(TensorArray ta, char *path)
         }
 
         // Read scale count
-        uint32_t groups;
+        uint32_t groups, zeros;
         if (fread(&groups, sizeof(groups), 1, f) != 1 ||
-            (groups != 0 && groups != (uint32_t)(dimensions >= 2 ? shape[0] : 1))) {
+            fread(&zeros,  sizeof(zeros),  1, f) != 1 ||
+            (groups != 0 && groups != (uint32_t)(dimensions >= 2 ? shape[0] : 1)) ||
+            (zeros  != 0 && zeros  != groups)) {
             free(shape);
             goto error;
         }
@@ -975,14 +980,20 @@ int TensorArrayRead(TensorArray ta, char *path)
             t = created;
         }
         free(shape);
-        scaleFree(&t->scale);
+        ScaleFree(&t->scale);
         if (groups) {
-            scaleNew(&t->scale, (int)groups, t->strides[0]);
+            ScaleNew(&t->scale, (int)groups, t->strides[0], zeros != 0);
             for (uint32_t c = 0; c < groups; c++) {
                 double perChannel;
                 if (fread(&perChannel, sizeof(perChannel), 1, f) != 1)
                     goto error;
                 t->scale.values[c] = (Real)perChannel;
+            }
+            for (uint32_t c = 0; c < zeros; c++) {
+                double zero;
+                if (fread(&zero, sizeof(zero), 1, f) != 1)
+                    goto error;
+                t->scale.zeros[c] = (Real)zero;
             }
         }
 

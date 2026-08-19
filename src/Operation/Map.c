@@ -45,7 +45,7 @@ static void mapForward(void *arg, int start, int end)
     Real      *A   = TensorEntries(op->A);
     VectorUnary fn = (VectorUnary)ctx->u.f;
 
-    if (TensorDataType(op->A) != FLOAT32 || TensorScale(op->A)) {
+    if (TensorDataType(op->A) != FLOAT32 || ScaleGet(op->A).values) {
         int aC = isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
         for (int i = start; i < end; i++) {
             int off = aC ? i : unravel(i, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));

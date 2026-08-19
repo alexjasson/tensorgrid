@@ -66,8 +66,8 @@ Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataT
 /*
  * Converts A so each entry is stored using the given data type, preserving
  * the values as accurately as the type allows. A must not be a view and have no
- * references. The converted tensor has no autograd. Negative floating point 
- * values can't be mapped to unsigned integer types.
+ * references. The converted tensor has no autograd. Signed integer types are
+ * symmetrical around zero, unsigned ones are asymmetric with a zero point.
  */
 void TensorToType(Tensor A, DataType d);
 
@@ -477,7 +477,6 @@ int *TensorStride(Tensor A);
 void *TensorEntries(Tensor A);
 DataType TensorDataType(Tensor A);
 Real *TensorGradients(Tensor A);
-Real *TensorScale(Tensor A);
 int TensorReference(Tensor A);
 Tensor TensorOwner(Tensor A);
 

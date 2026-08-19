@@ -2,12 +2,13 @@
 #define MATRIX_H
 
 #include "../tensorgrid.h"
+#include "Scale.h"
 
 /*
  * A strided 2D matrix view over existing memory. Element (i, j) is
- * scale[i] * data[i*sRow + j*sCol]
+ * factor * scale.values[i] * (data[i*sRow + j*sCol] - scale.zeros[i])
  */
-typedef struct { Real *data; int rows, cols, sRow, sCol; DataType type; Real scale; Real *scales; } Matrix;
+typedef struct { Real *data; int rows, cols, sRow, sCol; DataType type; Real factor; Scale scale; } Matrix;
 
 /*
  * Returns a strided matrix view over existing memory, stored as FLOAT32

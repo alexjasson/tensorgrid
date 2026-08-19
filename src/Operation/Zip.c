@@ -18,8 +18,8 @@ Tensor OperationZip(Binary fn, Tensor A, Tensor B)
     // Dequantize the inputs so they run on the vectorized fast path if autograd is not needed
     Tensor Aorig = A, Borig = B;
     if (!TensorGradients(A) && !TensorGradients(B)) {
-        if (TensorDataType(A) != FLOAT32 || TensorScale(A)) A = TensorCopy(A);
-        if (TensorDataType(B) != FLOAT32 || TensorScale(B)) B = TensorCopy(B);
+        if (TensorDataType(A) != FLOAT32 || ScaleGet(A).values) A = TensorCopy(A);
+        if (TensorDataType(B) != FLOAT32 || ScaleGet(B).values) B = TensorCopy(B);
     }
 
     int outDims = TensorDimensions(A) >= TensorDimensions(B) ? TensorDimensions(A) : TensorDimensions(B);
@@ -98,7 +98,7 @@ static void zipForward(void *arg, int start, int end)
     int aC = isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
     int bC = isContiguous(TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
 
-    if (TensorDataType(op->A) != FLOAT32 || TensorScale(op->A) || TensorDataType(op->B) != FLOAT32 || TensorScale(op->B)) {
+    if (TensorDataType(op->A) != FLOAT32 || ScaleGet(op->A).values || TensorDataType(op->B) != FLOAT32 || ScaleGet(op->B).values) {
         for (int i = start; i < end; i++) {
             int aOff = aC ? i : unravel(i, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
             int bOff = bC ? i : unravel(i, TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));

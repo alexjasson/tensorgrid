@@ -2,6 +2,7 @@
 #define OPERATION_H
 
 #include "tensorgrid.h"
+#include "math/Scale.h"
 #include "adt/ThreadPool.h"
 
 // Represents an operation on a tensor, used by the autograd tape
@@ -62,6 +63,11 @@ Operation *OperationGet(Tensor A);
  * Sets the operation that produced the tensor
  */
 void OperationSet(Tensor A, Operation *op);
+
+/*
+ * Returns the scale mapping the tensor's stored entries onto the real numbers.
+ */
+Scale ScaleGet(Tensor A);
 
 
 #endif

@@ -59,7 +59,7 @@ static void normForward(void *arg, int start, int end)
     Real        *out = TensorEntries(op->out);
     int          sD  = TensorStride(A)[TensorDimensions(A) - 1];
 
-    if (TensorDataType(A) != FLOAT32 || TensorScale(A)) {
+    if (TensorDataType(A) != FLOAT32 || ScaleGet(A).values) {
         for (int r = start; r < end; r++) {
             int xBase = ctx->contiguous ? r * D : unravel(r, TensorShape(A), TensorStride(A), TensorDimensions(A) - 1);
             Real *o = out + (size_t)r * D;

@@ -68,7 +68,7 @@ static void scatterForward(void *arg, int start, int end)
 
     // Vectorized MAX/MIN/ADD reduction of each output's contiguous input segment
     g reducer = ctx->b.g;
-    if (n == 1 && innerSize == 1 && aC && TensorDataType(A) == FLOAT32 && !TensorScale(A) &&
+    if (n == 1 && innerSize == 1 && aC && TensorDataType(A) == FLOAT32 && !ScaleGet(A).values &&
         (reducer == MAX.g || reducer == MIN.g || reducer == ADD.g)) {
         Real *out = TensorEntries(op->out);
         Real  fill = ctx->fill;
