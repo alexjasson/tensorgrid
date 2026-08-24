@@ -82,7 +82,10 @@ static void im2col(Operation *op, Real *patches, int n, int kStart, int kEnd)
     int Hout   = TensorShape(op->out)[2], Wout = TensorShape(op->out)[3];
     int stride = ctx->stride, padding = ctx->padding;
     int sN = TensorStride(A)[0], sC = TensorStride(A)[1], sH = TensorStride(A)[2], sW = TensorStride(A)[3];
-    int real = TensorDataType(A) == FLOAT32 && !ScaleGet(A).values;
+    DataType type = TensorDataType(A);
+    Scale scale   = ScaleGet(A);
+    size_t esz    = DataSize(type);
+    int real      = type == FLOAT32 && !scale.values;
     int S = Hout * Wout;
     for (int k = kStart; k < kEnd; k++) {
         int ci = k / (fH * fW);
@@ -98,12 +101,26 @@ static void im2col(Operation *op, Real *patches, int n, int kStart, int kEnd)
                 continue;
             }
             int rowOff = planeOff + ih * sH;
-            if (stride == 1 && sW == 1 && real) {
+            int contiguousRun = stride == 1 && sW == 1;
+            int oneGroup = !scale.stride || (rowOff % scale.stride) + W <= scale.stride;
+            if (contiguousRun && (real || oneGroup)) {
                 int ow0 = padding - fw;     if (ow0 < 0)    ow0 = 0;
                 int ow1 = W + padding - fw; if (ow1 > Wout) ow1 = Wout;
                 if (ow0 > 0)    memset(outRow, 0, (size_t)ow0 * sizeof(Real));
-                if (ow1 > ow0)  memcpy(outRow + ow0, (const Real *)TensorEntries(A) + rowOff + (ow0 - padding + fw),
-                                       (size_t)(ow1 - ow0) * sizeof(Real));
+                size_t from = (size_t)(rowOff + (ow0 - padding + fw));
+                if (ow1 > ow0) {
+                    if (real) {
+                        memcpy(outRow + ow0, (const Real *)TensorEntries(A) + from, (size_t)(ow1 - ow0) * sizeof(Real));
+                    } else {
+                        const unsigned char *src = (const unsigned char *)TensorEntries(A) + from * esz;
+                        Vector s = VectorBcast(ScaleAt(scale, (int)from)), z = VectorBcast(ScaleZeroAt(scale, (int)from));
+                        int ow = ow0;
+                        for (; ow + VECTOR_DIMS <= ow1; ow += VECTOR_DIMS)
+                            VectorStore(outRow + ow, VectorMul(s, VectorSub(VectorLoad(src + (size_t)(ow - ow0) * esz, type), z)));
+                        for (; ow < ow1; ow++)
+                            outRow[ow] = TensorGet(A, (int)from + (ow - ow0));
+                    }
+                }
                 if (ow1 < Wout) memset(outRow + ow1, 0, (size_t)(Wout - ow1) * sizeof(Real));
             } else {
                 for (int ow = 0; ow < Wout; ow++) {
@@ -184,7 +201,9 @@ static void convolutionBackwardDa(void *arg, int start, int end)
     int S    = Hout * Wout;
     int K    = Cin * fH * fW;
     int sN = TensorStride(A)[0], sC = TensorStride(A)[1], sH = TensorStride(A)[2], sW = TensorStride(A)[3];
-    Real *filter = TensorEntries(op->B);
+    Matrix Fv = MatrixView(TensorEntries(op->B), K, Cout, 1, K);
+    Fv.type   = TensorDataType(op->B);
+    Fv.scale  = ScaleGet(op->B);
     Real *dProd  = TensorGradients(op->out);
     Real *dInput = TensorGradients(A);
 
@@ -193,7 +212,7 @@ static void convolutionBackwardDa(void *arg, int start, int end)
     for (int n = start; n < end; n++) {
         Real *dProd_n = dProd + (size_t)n * Cout * S;
         memset(dWin, 0, (size_t)K * S * sizeof(Real));
-        MatrixMultiply(MatrixView(filter, K, Cout, 1, K),
+        MatrixMultiply(Fv,
                        MatrixView(dProd_n, Cout, S, S, 1),
                        MatrixView(dWin, K, S, S, 1));
 

@@ -148,8 +148,6 @@ static void scatterBackward(void *arg, int start, int end)
     ScatterContext *ctx = op->context;
     Tensor A      = op->A;
     Tensor I      = op->B;
-    Real *Ae      = TensorEntries(A);
-    Real *Ie      = TensorEntries(I);
     int axis      = ctx->axis;
     int n         = TensorShape(op->out)[axis];
     int idxSize   = TensorSize(I);
@@ -194,10 +192,10 @@ static void scatterBackward(void *arg, int start, int end)
         int count = 0;
         for (int ix = 0; ix < idxSize; ix++) {
             int idxOff = iC ? ix : unravel(ix, TensorShape(I), TensorStride(I), TensorDimensions(I));
-            if ((int)(Ie[idxOff] + (Real)0.5) == kTarget) {
+            if ((int)(TensorGet(I, idxOff) + (Real)0.5) == kTarget) {
                 int aIxOff = aC ? ix * innerSize
                                 : unravel(ix, TensorShape(A) + axis, TensorStride(A) + axis, TensorDimensions(I));
-                Real Av = Ae[outerOff + aIxOff + innerOff];
+                Real Av = TensorGet(A, outerOff + aIxOff + innerOff);
                 chain[count + 1] = VectorApply((VectorBinary)ctx->b.g, chain[count], Av);
                 count++;
             }
@@ -207,11 +205,11 @@ static void scatterBackward(void *arg, int start, int end)
         int c = count - 1;
         for (int ix = idxSize - 1; ix >= 0 && c >= 0; ix--) {
             int idxOff = iC ? ix : unravel(ix, TensorShape(I), TensorStride(I), TensorDimensions(I));
-            if ((int)(Ie[idxOff] + (Real)0.5) == kTarget) {
+            if ((int)(TensorGet(I, idxOff) + (Real)0.5) == kTarget) {
                 int aIxOff  = aC ? ix * innerSize
                                  : unravel(ix, TensorShape(A) + axis, TensorStride(A) + axis, TensorDimensions(I));
                 int aOffset = outerOff + aIxOff + innerOff;
-                Real Av     = Ae[aOffset];
+                Real Av     = TensorGet(A, aOffset);
                 TensorGradients(A)[aOffset] += dresult * VectorApply((VectorBinary)ctx->b.db, chain[c], Av);
                 dresult *= VectorApply((VectorBinary)ctx->b.da, chain[c], Av);
                 c--;

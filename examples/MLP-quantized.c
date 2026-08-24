@@ -50,10 +50,10 @@ int main(void)
     // Create and initialize hidden and output layer weights/biases
     TensorArray parameters = TensorArrayNew();
     Model m;
-    m.W_h = TensorArrayAdd(parameters, 2, (int[]){IMAGE_SIZE,  HIDDEN_SIZE}, TRUE); // [784, 128]
-    m.b_h = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, TRUE);              // [128]
-    m.W_y = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE); // [128, 10]
-    m.b_y = TensorArrayAdd(parameters, 1, (int[]){NUM_CLASSES}, TRUE);              // [10]
+    m.W_h = TensorArrayAdd(parameters, 2, (int[]){IMAGE_SIZE,  HIDDEN_SIZE}, FLOAT32, TRUE); // [784, 128]
+    m.b_h = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, FLOAT32, TRUE);              // [128]
+    m.W_y = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, FLOAT32, TRUE); // [128, 10]
+    m.b_y = TensorArrayAdd(parameters, 1, (int[]){NUM_CLASSES}, FLOAT32, TRUE);              // [10]
     TensorXavier(m.W_h); TensorXavier(m.W_y);
 
     printf("Train Samples: %d\n", trainSamples);

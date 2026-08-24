@@ -143,9 +143,18 @@ static void normBackward(void *arg, int start, int end)
     Real        *dout = TensorGradients(op->out);
     int          sD   = TensorStride(A)[TensorDimensions(A) - 1];
 
+    int stored = TensorDataType(A) != FLOAT32 || ScaleGet(A).values;
+    Real row[stored ? D : 1];
+    int packed = stored ? 1 : (ctx->contiguous || sD == 1);
+    int xs     = stored ? 1 : sD;
+
     for (int r = start; r < end; r++) {
         int xBase = ctx->contiguous ? r * D : unravel(r, TensorShape(A), TensorStride(A), TensorDimensions(A) - 1);
         const Real *x  = in + xBase;
+        if (stored) {
+            for (int i = 0; i < D; i++) row[i] = TensorGet(A, xBase + i * sD);
+            x = row;
+        }
         const Real *dy = dout + (size_t)r * D;
         Real       *gx = dx + xBase;
         Real  mu   = ctx->mean[r];
@@ -153,7 +162,7 @@ static void normBackward(void *arg, int start, int end)
 
         Real s1 = 0.0f, s2 = 0.0f;
         int i = 0;
-        if (ctx->contiguous || sD == 1) {
+        if (packed) {
             Vector vmu = VectorBcast(mu), vr = VectorBcast(rstd);
             Vector vs1 = VectorZero(), vs2 = VectorZero();
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) {
@@ -166,12 +175,12 @@ static void normBackward(void *arg, int start, int end)
             s2 = VectorHsum(vs2);
             for (; i < D; i++) { Real y = (x[i] - mu) * rstd; s1 += dy[i]; s2 += dy[i] * y; }
         } else {
-            for (; i < D; i++) { Real y = (x[i * sD] - mu) * rstd; s1 += dy[i]; s2 += dy[i] * y; }
+            for (; i < D; i++) { Real y = (x[i * xs] - mu) * rstd; s1 += dy[i]; s2 += dy[i] * y; }
         }
         Real c1 = s1 / D, c2 = s2 / D;
 
         i = 0;
-        if (ctx->contiguous || sD == 1) {
+        if (packed) {
             Vector vmu = VectorBcast(mu), vr = VectorBcast(rstd);
             Vector vc1 = VectorBcast(c1), vc2 = VectorBcast(c2);
             for (; i + VECTOR_DIMS <= D; i += VECTOR_DIMS) {
@@ -186,7 +195,7 @@ static void normBackward(void *arg, int start, int end)
             }
         } else {
             for (; i < D; i++) {
-                Real y = (x[i * sD] - mu) * rstd;
+                Real y = (x[i * xs] - mu) * rstd;
                 gx[i * sD] += rstd * (dy[i] - c1 - y * c2);
             }
         }

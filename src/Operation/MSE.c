@@ -68,13 +68,12 @@ static void mseBackward(void *arg, int start, int end)
 {
     Operation *op = arg;
     MSEContext *ctx = op->context;
-    Real *ye = TensorEntries(op->A), *ye2 = TensorEntries(op->B);
     Real scale = 2.0f * TensorGradients(op->out)[0] / ctx->size;
 
     for (int i = start; i < end; i++) {
         int aOff = ctx->aContiguous ? i : unravel(i, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
         int bOff = ctx->bContiguous ? i : unravel(i, TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
-        Real d = ye[aOff] - ye2[bOff];
+        Real d = TensorGet(op->A, aOff) - TensorGet(op->B, bOff);
         if (TensorGradients(op->A)) TensorGradients(op->A)[aOff] += scale * d;
         if (TensorGradients(op->B)) TensorGradients(op->B)[bOff] -= scale * d;
     }

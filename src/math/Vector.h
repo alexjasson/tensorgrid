@@ -2,6 +2,7 @@
 #define VECTOR_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include "../tensorgrid.h" // Real
 
 /*
@@ -25,11 +26,16 @@ typedef Real Vector __attribute__((__vector_size__(VECTOR_BYTES)));
 typedef Vector (*VectorUnary)(Vector);
 typedef Vector (*VectorBinary)(Vector, Vector);
 
-size_t DataSize(DataType d);
+size_t  DataSize(DataType d);
+int64_t DataMax(DataType d);
+int64_t DataMin(DataType d);
+Real    DataGet(const void *p, DataType d);
+void    DataSet(void *p, DataType d, Real x);
+void    DataSetStochastic(void *p, DataType d, Real x); // DataSet, rounding integers stochastically
+
 Vector VectorLoad(const void *p, DataType d);
 void   VectorStore(Real *p, Vector x);
-Real   VectorGet(const void *p, DataType d);
-void   VectorSet(void *p, DataType d, Real x);
+void   VectorStoreStochastic(void *p, DataType d, Vector x);
 void   VectorFetch(const Real *p);
 Vector VectorBcast(Real x);
 Vector VectorAdd(Vector a, Vector b);

@@ -27,7 +27,7 @@ typedef struct tensorArray *TensorArray; // Array of tensors intended to be used
 /*
  * Allocates a new tensor with all entries as 0, each stored using the
  * given data type. If autograd is nonzero, the tensor also allocates
- * gradient storage and optimizer state. Autograd requires FLOAT32 as DataType.
+ * gradient storage and optimizer state.
  * Note: for a 0-dimensional tensor (scalar), pass shape = NULL.
  */
 Tensor TensorNew(int dimensions, int *shape, DataType d, int autograd);
@@ -40,7 +40,7 @@ TensorArray TensorArrayNew(void);
 /*
  * Allocates a new tensor, adds it to the array and returns it.
  */
-Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape, int autograd);
+Tensor TensorArrayAdd(TensorArray ta, int dimensions, int *shape, DataType d, int autograd);
 
 /*
  * Frees a tensor from memory.
@@ -315,7 +315,8 @@ Tensor TensorSubtract(Tensor A, Tensor B);
 Tensor TensorHadamard(Tensor A, Tensor B);
 
 /*
- * Returns a new tensor with the same shape and values as A. Allocates new memory.
+ * Returns a new tensor with the same shape and values as A, stored as FLOAT32.
+ * Allocates new memory.
  */
 Tensor TensorCopy(Tensor A);
 

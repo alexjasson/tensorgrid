@@ -114,7 +114,7 @@ static void crossEntropyBackward(void *arg, int start, int end)
 {
     Operation *op = arg;
     CrossEntropyContext *ctx = op->context;
-    Real *ze = TensorEntries(op->A), *ye = TensorEntries(op->B);
+    Tensor Z = op->A, Y = op->B;
     Real logitScale = TensorGradients(op->out)[0] * ctx->invTemperature / ctx->rows;
     Real targetScale = TensorGradients(op->out)[0] / ctx->rows;
 
@@ -126,13 +126,13 @@ static void crossEntropyBackward(void *arg, int start, int end)
 
         Real max = -INFINITE;
         for (int c = 0; c < ctx->classes; c++) {
-            Real v = ze[zBase + c * zStride] * ctx->invTemperature;
+            Real v = TensorGet(Z, zBase + c * zStride) * ctx->invTemperature;
             if (v > max) max = v;
         }
 
         Real sum = 0.0f;
         for (int c = 0; c < ctx->classes; c++)
-            sum += VectorFirst(expe(VectorBcast(ze[zBase + c * zStride] * ctx->invTemperature - max)));
+            sum += VectorFirst(expe(VectorBcast(TensorGet(Z, zBase + c * zStride) * ctx->invTemperature - max)));
         Real inv = 1.0f / sum;
         Real logDenom = max + VectorFirst(loge(VectorBcast(sum)));
 
@@ -146,17 +146,17 @@ static void crossEntropyBackward(void *arg, int start, int end)
             yStride = TensorStride(op->B)[TensorDimensions(op->B) - 1];
             targetSum = 0.0f;
             for (int c = 0; c < ctx->classes; c++)
-                targetSum += ye[yBase + c * yStride];
+                targetSum += TensorGet(Y, yBase + c * yStride);
         } else {
             int off = ctx->targetContiguous ? row : unravel(row, TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
-            target = (int)(ye[off] + (Real)0.5);
+            target = (int)(TensorGet(Y, off) + (Real)0.5);
         }
         for (int c = 0; c < ctx->classes; c++) {
-            Real z = ze[zBase + c * zStride];
+            Real z = TensorGet(Z, zBase + c * zStride);
             Real p = VectorFirst(expe(VectorBcast(z * ctx->invTemperature - max))) * inv;
             Real y = c == target ? 1.0f : 0.0f;
             if (ctx->distribution) {
-                y = ye[yBase + c * yStride];
+                y = TensorGet(Y, yBase + c * yStride);
             }
             if (TensorGradients(op->A)) TensorGradients(op->A)[zBase + c * zStride] += logitScale * (targetSum * p - y);
             if (ctx->distribution && TensorGradients(op->B))

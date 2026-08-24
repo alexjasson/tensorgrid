@@ -104,7 +104,6 @@ static void gatherBackward(void *arg, int start, int end)
     GatherContext *ctx = op->context;
     Tensor A      = op->A;
     Tensor I      = op->B;
-    Real *Ie      = TensorEntries(I);
     int axis      = ctx->axis;
     int axisSize  = TensorShape(A)[axis];
     int idxSize   = TensorSize(I);
@@ -121,7 +120,7 @@ static void gatherBackward(void *arg, int start, int end)
         Real *dout = TensorGradients(op->out);
         for (int o = 0; o < outer; o++) {
             for (int ix = 0; ix < idxSize; ix++) {
-                int k = (int)(Ie[ix] + (Real)0.5);
+                int k = (int)(TensorGet(I, ix) + (Real)0.5);
                 const Real *src = dout + ((size_t)o * idxSize  + ix) * innerSize;
                 Real       *dst = dA   + ((size_t)o * axisSize + k)  * innerSize;
                 int c = start;
@@ -155,13 +154,13 @@ static void gatherBackward(void *arg, int start, int end)
         Real sum = 0;
         if (iC) {
             for (int ix = 0; ix < idxSize; ix++) {
-                if ((int)(Ie[ix] + (Real)0.5) == kTarget)
+                if ((int)(TensorGet(I, ix) + (Real)0.5) == kTarget)
                     sum += TensorGradients(op->out)[(outer * idxSize + ix) * innerSize + inner];
             }
         } else {
             for (int ix = 0; ix < idxSize; ix++) {
                 int idxOff = unravel(ix, TensorShape(I), TensorStride(I), TensorDimensions(I));
-                if ((int)(Ie[idxOff] + (Real)0.5) == kTarget)
+                if ((int)(TensorGet(I, idxOff) + (Real)0.5) == kTarget)
                     sum += TensorGradients(op->out)[(outer * idxSize + ix) * innerSize + inner];
             }
         }

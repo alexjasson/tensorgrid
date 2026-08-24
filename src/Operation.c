@@ -6,6 +6,7 @@
 #include "Operation.h"
 #include "adt/ThreadPool.h"
 #include "adt/DynamicArray.h"
+#include "math/Vector.h"
 
 // Parallel threshold
 #define PARALLEL (1 << 18)
@@ -60,30 +61,17 @@ Tensor OperationExecute(Operation op)
 {
     Tensor out = op.out, A = op.A, B = op.B;
 
-    // Cast entries to Real
-    if (TensorGradients(out)) {
-        if (A && (TensorDataType(A) != FLOAT32 || ScaleGet(A).values)) {
-            op.A = TensorCopy(A);
-            TensorToType(op.A, FLOAT32);
-        }
-        if (B && (TensorDataType(B) != FLOAT32 || ScaleGet(B).values)) {
-            op.B = TensorCopy(B);
-            TensorToType(op.B, FLOAT32);
-        }
-    }
     op.forward(&op);
 
     if (TensorGradients(op.out)) {
-        if (op.A == A && A) op.A = TensorView(A, TensorDimensions(A), TensorShape(A), TensorStride(A));
-        if (op.B == B && B) op.B = TensorView(B, TensorDimensions(B), TensorShape(B), TensorStride(B));
+        if (A) op.A = TensorView(A, TensorDimensions(A), TensorShape(A), TensorStride(A));
+        if (B) op.B = TensorView(B, TensorDimensions(B), TensorShape(B), TensorStride(B));
         Operation *node = malloc(sizeof(*node));
         if (!node) { fprintf(stderr, "Insufficient memory!\n"); exit(EXIT_FAILURE); }
         *node = op;
         OperationSet(out, node);
     } else {
         free(op.context);
-        if (op.A != A) TensorFree(op.A);
-        if (op.B != B) TensorFree(op.B);
     }
     return out;
 }

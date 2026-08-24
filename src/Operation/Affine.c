@@ -23,18 +23,10 @@ Tensor OperationAffine(Unary fn, Tensor A, Tensor bias, int inner)
     }
     ctx->u = fn;
     ctx->inner = inner;
-    
-    // Dequantize the bias so it runs on the vectorized fast path if autograd is not needed
-    Tensor biasOrig = bias;
-    if (!TensorGradients(A) && !TensorGradients(bias) &&
-        (TensorDataType(bias) != FLOAT32 || ScaleGet(bias).values))
-        bias = TensorCopy(bias);
 
     int autograd = TensorGradients(A) != NULL || TensorGradients(bias) != NULL;
     Tensor out = TensorNew(TensorDimensions(A), TensorShape(A), FLOAT32, autograd);
-    Tensor result = OperationExecute(OperationNew(out, A, bias, OperationAffineForward, OperationAffineBackward, ctx));
-    if (bias != biasOrig) TensorFree(bias);
-    return result;
+    return OperationExecute(OperationNew(out, A, bias, OperationAffineForward, OperationAffineBackward, ctx));
 }
 
 static void OperationAffineForward(Operation *op)
@@ -61,14 +53,17 @@ static void affineForward(void *arg, int start, int end)
 {
     Operation *op = arg;
     AffineContext *ctx = op->context;
-    Real *out = TensorEntries(op->out), *A = TensorEntries(op->A), *bias = TensorEntries(op->B);
+    Real *out = TensorEntries(op->out), *A = TensorEntries(op->A);
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     VectorUnary fn = (VectorUnary)ctx->u.f;
 
-    if (TensorDataType(op->A) != FLOAT32 || ScaleGet(op->A).values || TensorDataType(op->B) != FLOAT32 || ScaleGet(op->B).values) {
+    Real bias[biasSize];
+    for (int i = 0; i < biasSize; i++) bias[i] = TensorGet(op->B, i);
+
+    if (TensorDataType(op->A) != FLOAT32 || ScaleGet(op->A).values) {
         for (int o = start; o < end; o++)
             for (int c = 0; c < biasSize; c++) {
-                Real bc = TensorGet(op->B, c);
+                Real bc = bias[c];
                 int base = (o * biasSize + c) * inner;
                 for (int i = 0; i < inner; i++)
                     out[base + i] = VectorFirst(fn(VectorBcast(TensorGet(op->A, base + i) + bc)));
@@ -119,7 +114,7 @@ static void affineBackwardDa(void *arg, int start, int end)
 {
     Operation *op = arg;
     AffineContext *ctx = op->context;
-    Real *A = TensorEntries(op->A), *bias = TensorEntries(op->B), *dA = TensorGradients(op->A), *dout = TensorGradients(op->out);
+    Real *A = TensorEntries(op->A), *dA = TensorGradients(op->A), *dout = TensorGradients(op->out);
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     VectorUnary dafn = (VectorUnary)ctx->u.da;
     
@@ -134,6 +129,20 @@ static void affineBackwardDa(void *arg, int start, int end)
             dA[i] += dout[i];
         return;
     }
+
+    Real bias[biasSize];
+    for (int i = 0; i < biasSize; i++) bias[i] = TensorGet(op->B, i);
+    if (TensorDataType(op->A) != FLOAT32 || ScaleGet(op->A).values) {
+        for (int o = start; o < end; o++)
+            for (int c = 0; c < biasSize; c++) {
+                Real bc = bias[c];
+                size_t base = ((size_t)o * biasSize + c) * inner;
+                for (int i = 0; i < inner; i++)
+                    dA[base + i] += dout[base + i] * VectorFirst(dafn(VectorBcast(TensorGet(op->A, (int)(base + i)) + bc)));
+            }
+        return;
+    }
+
     if (inner == 1) {
         for (int o = start; o < end; o++) {
             size_t base = (size_t)o * biasSize;
@@ -187,7 +196,7 @@ static void affineBackwardDb(void *arg, int start, int end)
 {
     Operation *op = arg;
     AffineContext *ctx = op->context;
-    Real *A = TensorEntries(op->A), *bias = TensorEntries(op->B), *dout = TensorGradients(op->out), *dB = TensorGradients(op->B);
+    Real *A = TensorEntries(op->A), *dout = TensorGradients(op->out), *dB = TensorGradients(op->B);
     int biasSize = TensorSize(op->B), inner = ctx->inner;
     int outer = TensorSize(op->out) / (biasSize * inner);
     VectorUnary dafn = (VectorUnary)ctx->u.da;
@@ -206,6 +215,22 @@ static void affineBackwardDb(void *arg, int start, int end)
             for (int o = 0; o < outer; o++)
                 s += dout[(size_t)o * biasSize + c];
             dB[c] += s;
+        }
+        return;
+    }
+
+    Real bias[biasSize];
+    for (int i = 0; i < biasSize; i++) bias[i] = TensorGet(op->B, i);
+
+    if (TensorDataType(op->A) != FLOAT32 || ScaleGet(op->A).values) {
+        for (int c = start; c < end; c++) {
+            Real sum = 0, bc = bias[c];
+            for (int o = 0; o < outer; o++) {
+                size_t base = ((size_t)o * biasSize + c) * inner;
+                for (int i = 0; i < inner; i++)
+                    sum += dout[base + i] * VectorFirst(dafn(VectorBcast(TensorGet(op->A, (int)(base + i)) + bc)));
+            }
+            dB[c] += sum;
         }
         return;
     }

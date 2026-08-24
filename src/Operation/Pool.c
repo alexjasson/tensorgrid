@@ -125,7 +125,6 @@ static void poolBackward(void *arg, int start, int end)
     int Hout = TensorShape(op->out)[2];
     int Wout = TensorShape(op->out)[3];
     int sN = TensorStride(A)[0], sC = TensorStride(A)[1], sH = TensorStride(A)[2], sW = TensorStride(A)[3];
-    Real *input  = TensorEntries(A);
     Real *dInput = TensorGradients(A);
     Real *dOut   = TensorGradients(op->out);
     Real *argIdx = TensorEntries(op->B);
@@ -205,7 +204,7 @@ static void poolBackward(void *arg, int start, int end)
         size_t offs[size * size];
         for (int p = start; p < end; p++) {
             int c = p % C, n = p / C;
-            Real *inPlane = input  + (size_t)n * sN + (size_t)c * sC;
+            size_t inPlane = (size_t)n * sN + (size_t)c * sC;
             Real *dPlane  = dInput + (size_t)n * sN + (size_t)c * sC;
             size_t outBase = (size_t)p * Hout * Wout;
             for (int oh = 0; oh < Hout; oh++)
@@ -219,7 +218,7 @@ static void poolBackward(void *arg, int start, int end)
                             int iw = ow * stride - padding + fw;
                             if (iw < 0 || iw >= W) continue;
                             size_t off = (size_t)ih * sH + (size_t)iw * sW;
-                            Real v = inPlane[off];
+                            Real v = TensorGet(A, (int)(inPlane + off));
                             chain[cnt + 1] = VectorApply((VectorBinary)reducer, chain[cnt], v);
                             vals[cnt] = v;
                             offs[cnt] = off;

@@ -61,22 +61,22 @@ typedef struct {
 static inline Block BlockNew(TensorArray parameters)
 {
     Block b;
-    b.g_LN1 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, TRUE);
-    b.b_LN1 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, TRUE);
-    b.W_q   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE}, TRUE);
-    b.b_q   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, TRUE);
-    b.W_k   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE}, TRUE);
-    b.b_k   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, TRUE);
-    b.W_v   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE}, TRUE);
-    b.b_v   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, TRUE);
-    b.W_o   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE}, TRUE);
-    b.b_o   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, TRUE);
-    b.g_LN2 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, TRUE);
-    b.b_LN2 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, TRUE);
-    b.W_1   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, MLP_HIDDEN}, TRUE);
-    b.b_1   = TensorArrayAdd(parameters, 1, (int[]){MLP_HIDDEN}, TRUE);
-    b.W_2   = TensorArrayAdd(parameters, 2, (int[]){MLP_HIDDEN, EMBED_SIZE}, TRUE);
-    b.b_2   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, TRUE);
+    b.g_LN1 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, FLOAT32, TRUE);
+    b.b_LN1 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, FLOAT32, TRUE);
+    b.W_q   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE}, FLOAT32, TRUE);
+    b.b_q   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, FLOAT32, TRUE);
+    b.W_k   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE}, FLOAT32, TRUE);
+    b.b_k   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, FLOAT32, TRUE);
+    b.W_v   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE}, FLOAT32, TRUE);
+    b.b_v   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, FLOAT32, TRUE);
+    b.W_o   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, EMBED_SIZE}, FLOAT32, TRUE);
+    b.b_o   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, FLOAT32, TRUE);
+    b.g_LN2 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, FLOAT32, TRUE);
+    b.b_LN2 = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, FLOAT32, TRUE);
+    b.W_1   = TensorArrayAdd(parameters, 2, (int[]){EMBED_SIZE, MLP_HIDDEN}, FLOAT32, TRUE);
+    b.b_1   = TensorArrayAdd(parameters, 1, (int[]){MLP_HIDDEN}, FLOAT32, TRUE);
+    b.W_2   = TensorArrayAdd(parameters, 2, (int[]){MLP_HIDDEN, EMBED_SIZE}, FLOAT32, TRUE);
+    b.b_2   = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, FLOAT32, TRUE);
     TensorFill(b.g_LN1, 1.0f); TensorFill(b.g_LN2, 1.0f);
     TensorXavier(b.W_q); TensorXavier(b.W_k); TensorXavier(b.W_v); TensorXavier(b.W_o);
     TensorXavier(b.W_1); TensorXavier(b.W_2);
@@ -122,12 +122,12 @@ static inline Tensor BlockForward(Tensor H, Block *b)
 static inline Model ModelNew(TensorArray parameters)
 {
     Model m;
-    m.E = TensorArrayAdd(parameters, 2, (int[]){NUM_CLASSES, EMBED_SIZE}, TRUE);
-    m.P = TensorArrayAdd(parameters, 2, (int[]){SEQ_LENGTH, EMBED_SIZE}, TRUE);
+    m.E = TensorArrayAdd(parameters, 2, (int[]){NUM_CLASSES, EMBED_SIZE}, FLOAT32, TRUE);
+    m.P = TensorArrayAdd(parameters, 2, (int[]){SEQ_LENGTH, EMBED_SIZE}, FLOAT32, TRUE);
     for (int l = 0; l < NUM_LAYERS; l++) m.blocks[l] = BlockNew(parameters);
-    m.g_LNf = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, TRUE);
-    m.b_LNf = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, TRUE);
-    m.merges = TensorArrayAdd(parameters, 2, (int[]){NUM_CLASSES - 256, 2}, FALSE); // bundled, not trained
+    m.g_LNf = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, FLOAT32, TRUE);
+    m.b_LNf = TensorArrayAdd(parameters, 1, (int[]){EMBED_SIZE}, FLOAT32, TRUE);
+    m.merges = TensorArrayAdd(parameters, 2, (int[]){NUM_CLASSES - 256, 2}, FLOAT32, FALSE); // bundled, not trained
     TensorXavier(m.E); TensorXavier(m.P);
     TensorFill(m.g_LNf, 1.0f);
     return m;

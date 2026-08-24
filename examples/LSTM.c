@@ -105,17 +105,17 @@ int main(void)
 
     TensorArray parameters = TensorArrayNew();
     Model m;
-    m.E   = TensorArrayAdd(parameters, 2, (int[]){NUM_CLASSES, HIDDEN_SIZE}, TRUE);
-    m.U_f = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_f = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, TRUE);
-    m.U_i = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_i = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, TRUE);
-    m.U_o = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_o = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, TRUE);
-    m.U_c = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, TRUE);
-    m.b_c = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, TRUE);
-    m.W_y = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, TRUE);
-    m.b_y = TensorArrayAdd(parameters, 1, (int[]){NUM_CLASSES}, TRUE);
+    m.E   = TensorArrayAdd(parameters, 2, (int[]){NUM_CLASSES, HIDDEN_SIZE}, FLOAT32, TRUE);
+    m.U_f = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, FLOAT32, TRUE);
+    m.b_f = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, FLOAT32, TRUE);
+    m.U_i = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, FLOAT32, TRUE);
+    m.b_i = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, FLOAT32, TRUE);
+    m.U_o = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, FLOAT32, TRUE);
+    m.b_o = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, FLOAT32, TRUE);
+    m.U_c = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, HIDDEN_SIZE}, FLOAT32, TRUE);
+    m.b_c = TensorArrayAdd(parameters, 1, (int[]){HIDDEN_SIZE}, FLOAT32, TRUE);
+    m.W_y = TensorArrayAdd(parameters, 2, (int[]){HIDDEN_SIZE, NUM_CLASSES}, FLOAT32, TRUE);
+    m.b_y = TensorArrayAdd(parameters, 1, (int[]){NUM_CLASSES}, FLOAT32, TRUE);
     TensorXavier(m.E);
     TensorXavier(m.U_f); TensorXavier(m.U_i); TensorXavier(m.U_o); TensorXavier(m.U_c);
     TensorXavier(m.W_y);

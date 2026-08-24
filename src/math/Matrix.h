@@ -6,7 +6,8 @@
 
 /*
  * A strided 2D matrix view over existing memory. Element (i, j) is
- * factor * scale.values[i] * (data[i*sRow + j*sCol] - scale.zeros[i])
+ * factor * scale.values[g] * (data[i*sRow + j*sCol] - scale.zeros[g]), where g is the
+ * group covering the position (i, j) in the matrix.
  */
 typedef struct { Real *data; int rows, cols, sRow, sCol; DataType type; Real factor; Scale scale; } Matrix;
 

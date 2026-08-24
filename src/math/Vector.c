@@ -53,7 +53,77 @@ static uint16_t realToHalf(Real x)
 // Size of the data type in bytes
 size_t DataSize(DataType d) { return (0x8424211u >> (4 * d)) & 0xF; }
 
-Real VectorGet(const void *p, DataType d)
+int64_t DataMax(DataType d)
+{
+    switch (d) {
+        case UINT8: return UINT8_MAX;
+        case INT8:  return INT8_MAX;
+        case INT16: return INT16_MAX;
+        case INT32: return INT32_MAX;
+        default:    return 0;
+    }
+}
+
+int64_t DataMin(DataType d)
+{
+    switch (d) {
+        case UINT8: return 0;
+        case INT8:  return INT8_MIN;
+        case INT16: return INT16_MIN;
+        case INT32: return INT32_MIN;
+        default:    return 0;
+    }
+}
+
+static Real randomLane(int lane)
+{
+    static uint64_t state[VECTOR_DIMS];
+    if (!state[0])
+        for (int i = 0; i < VECTOR_DIMS; i++)
+            state[i] = 0x853c49e6748fea9bULL + 0x9e3779b97f4a7c15ULL * (uint64_t)(i + 1);
+
+    uint64_t s = state[lane];
+    s ^= s << 13;
+    s ^= s >> 7;
+    s ^= s << 17;
+    state[lane] = s;
+    return (Real)(s >> 40) * (Real)(1.0 / 16777216.0);
+}
+
+static Vector randomVector(void)
+{
+    Vector u;
+    for (int i = 0; i < VECTOR_DIMS; i++) u[i] = randomLane(i);
+    return u;
+}
+
+static Real roundDown(Real x)
+{
+    int64_t i = (int64_t)x;
+    return (Real)(i - (x < (Real)i));
+}
+
+static void DataSetInt64(void *p, DataType d, int64_t x)
+{
+    if (d > INT32) { DataSet(p, d, (Real)x); return; }
+    int64_t low = DataMin(d), high = DataMax(d);
+    if (x < low)  x = low;
+    if (x > high) x = high;
+    switch (d) {
+        case UINT8: *(unsigned char *)p = (unsigned char)x; break;
+        case INT8:  *(signed char *)p = (signed char)x; break;
+        case INT16: { int16_t v = (int16_t)x; memcpy(p, &v, 2); break; }
+        default:    { int32_t v = (int32_t)x; memcpy(p, &v, 4); break; }
+    }
+}
+
+void DataSetStochastic(void *p, DataType d, Real x)
+{
+    if (!DataMax(d)) { DataSet(p, d, x); return; }
+    DataSetInt64(p, d, (int64_t)roundDown(x + randomLane(0)));
+}
+
+Real DataGet(const void *p, DataType d)
 {
     switch (d) {
         case UINT8:   return (Real)*(const unsigned char *)p;
@@ -67,7 +137,7 @@ Real VectorGet(const void *p, DataType d)
     return 0.0;
 }
 
-void VectorSet(void *p, DataType d, Real x)
+void DataSet(void *p, DataType d, Real x)
 {
     switch (d) {
         case UINT8:   *(unsigned char *)p = (unsigned char)nearest(in(x, 0.0, 255.0)); break;
@@ -108,12 +178,33 @@ Vector VectorLoad(const void *p, DataType d)
             }
 #endif
             for (int i = 0; i < VECTOR_DIMS; i++)
-                x[i] = VectorGet((const uint16_t *)p + i, FLOAT16);
+                x[i] = DataGet((const uint16_t *)p + i, FLOAT16);
             break;
     }
     return x;
 }
 void   VectorStore(Real *p, Vector x)             { memcpy(p, &x, sizeof(x)); }
+
+void VectorStoreStochastic(void *p, DataType d, Vector x)
+{
+    if (!DataMax(d)) {
+        if (d == FLOAT32 && sizeof(Real) == 4) { memcpy(p, &x, sizeof(x)); return; }
+        for (int i = 0; i < VECTOR_DIMS; i++)
+            DataSet((unsigned char *)p + (size_t)i * DataSize(d), d, x[i]);
+        return;
+    }
+
+    x = VectorMin(VectorMax(x, VectorBcast((Real)DataMin(d))), VectorBcast((Real)DataMax(d)));
+    x = x + randomVector();
+    for (int i = 0; i < VECTOR_DIMS; i++) x[i] = roundDown(x[i]);
+    switch (d) {
+        case UINT8: { uint8_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) e[i] = (uint8_t)x[i]; break; }
+        case INT8:  { int8_t  *e = p; for (int i = 0; i < VECTOR_DIMS; i++) e[i] = (int8_t)x[i];  break; }
+        case INT16: { int16_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) e[i] = (int16_t)x[i]; break; }
+        default:    { int32_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) e[i] = (int32_t)x[i]; break; }
+    }
+}
+
 void   VectorFetch(const Real *p)                 { _mm_prefetch((const char *)p, _MM_HINT_ET0); }
 Vector VectorZero(void)                           { return (Vector){0}; }
 Vector VectorBcast(Real x)                        { return VectorZero() + x; }
@@ -140,9 +231,7 @@ Vector VectorMin(Vector a, Vector b)
 
 Vector VectorGt0(Vector v)
 {
-    for (int i = 0; i < VECTOR_DIMS; i++)
-        v[i] = v[i] > 0.0 ? 1.0 : 0.0;
-    return v;
+    return VectorZero() - __builtin_convertvector(v > VectorZero(), Vector);
 }
 
 Vector VectorSqrt(Vector x)

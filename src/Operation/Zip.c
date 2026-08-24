@@ -261,6 +261,17 @@ static void zipBackward(void *arg, int start, int end)
     int aC = isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
     int bC = isContiguous(TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
 
+    if (TensorDataType(op->A) != FLOAT32 || ScaleGet(op->A).values || TensorDataType(op->B) != FLOAT32 || ScaleGet(op->B).values) {
+        for (int i = start; i < end; i++) {
+            int aOff = aC ? i : unravel(i, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
+            int bOff = bC ? i : unravel(i, TensorShape(op->B), TensorStride(op->B), TensorDimensions(op->B));
+            Real a = TensorGet(op->A, aOff), b = TensorGet(op->B, bOff);
+            if (dA) dA[aOff] += dout[i] * VectorApply(dafn, a, b);
+            if (dB) dB[bOff] += dout[i] * VectorApply(dbfn, a, b);
+        }
+        return;
+    }
+
     // Contiguous fast path
     if (aC && bC) {
         int j = start;

@@ -90,6 +90,16 @@ static void mapBackward(void *arg, int start, int end)
     Real       *dA  = TensorGradients(op->A);
     Real     *dout  = TensorGradients(op->out);
     VectorUnary dafn = (VectorUnary)ctx->u.da;
+
+    if (TensorDataType(op->A) != FLOAT32 || ScaleGet(op->A).values) {
+        int aC = isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
+        for (int i = start; i < end; i++) {
+            int off = aC ? i : unravel(i, TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A));
+            dA[off] += dout[i] * VectorFirst(dafn(VectorBcast(TensorGet(op->A, off))));
+        }
+        return;
+    }
+
     if (isContiguous(TensorShape(op->A), TensorStride(op->A), TensorDimensions(op->A))) {
         int j = start;
         for (; j + VECTOR_DIMS <= end; j += VECTOR_DIMS)
