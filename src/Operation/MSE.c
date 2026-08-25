@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../Operation.h"
-#include "../math/Vector.h"
 #include "../utility.h"
 
 typedef struct {

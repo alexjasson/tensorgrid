@@ -6,7 +6,6 @@
 #include "Operation.h"
 #include "adt/ThreadPool.h"
 #include "adt/DynamicArray.h"
-#include "math/Vector.h"
 
 // Parallel threshold
 #define PARALLEL (1 << 18)
