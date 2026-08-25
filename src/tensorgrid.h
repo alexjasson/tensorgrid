@@ -64,19 +64,6 @@ Tensor TensorRead(char *path);
 Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataType d);
 
 /*
- * Converts A so each entry is stored using the given data type, preserving
- * the values as accurately as the type allows. A must not be a view and have no
- * references. The converted tensor has no autograd. Signed integer types are
- * symmetrical around zero, unsigned ones are asymmetric with a zero point.
- */
-void TensorToType(Tensor A, DataType d);
-
-/*
- * Converts every tensor in the array to the given data type, see TensorToType.
- */
-void TensorArrayToType(TensorArray ta, DataType d);
-
-/*
  * Writes a tensor to a .tgd file.
  */
 void TensorWrite(Tensor A, char *path);
@@ -315,8 +302,9 @@ Tensor TensorSubtract(Tensor A, Tensor B);
 Tensor TensorHadamard(Tensor A, Tensor B);
 
 /*
- * Returns a new tensor with the same shape and values as A, stored as FLOAT32.
- * Allocates new memory.
+ * Returns a new, contiguous tensor with the same shape and values as A, keeping its data
+ * type and scale. Allocates new memory. Two copies cannot be represented yet and are returned
+ * as FLOAT32 - differentiable tensors and scaled non-contiguous tensors.
  */
 Tensor TensorCopy(Tensor A);
 

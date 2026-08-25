@@ -367,7 +367,6 @@ Tensor TensorCrossEntropyLoss(Tensor y, Tensor logits, Real temp)         { retu
 Tensor TensorMSE(Tensor y, Tensor y_hat)                                  { return OperationMSE(y, y_hat);                 }
 void TensorBackward(Tensor loss)                                          { OperationBackward(loss);                       }
 
-Tensor TensorCopy(Tensor A)                                               { return TensorMap(IDENTITY, A);                 }
 Tensor TensorAdd(Tensor A, Tensor B)                                      { return TensorZip(ADD, A, B);                   }
 Tensor TensorSubtract(Tensor A, Tensor B)                                 { return TensorZip(SUBTRACT, A, B);              }
 Tensor TensorHadamard(Tensor A, Tensor B)                                 { return TensorZip(MULTIPLY, A, B);              }
@@ -391,16 +390,41 @@ Tensor TensorConvolutionLayer(Tensor in, Tensor filter, Tensor bias, int stride,
     return out;
 }
 
+Tensor TensorCopy(Tensor A)
+{
+    int contiguous = isContiguous(A->shape, A->strides, A->dimensions);
+    if (A->gradients || (A->scale.values && !contiguous)) return TensorMap(IDENTITY, A);
+
+    Tensor out = TensorNew(A->dimensions, A->shape, A->type, FALSE);
+    int size   = TensorSize(A);
+    size_t esz = DataSize(A->type);
+
+    if (A->scale.values) { // Contiguous, so the groups carry over as they are
+        ScaleNew(&out->scale, A->scale.groups, A->scale.stride, A->scale.zeros != NULL);
+        for (int c = 0; c < A->scale.groups; c++) {
+            out->scale.values[c] = A->scale.values[c];
+            if (out->scale.zeros) out->scale.zeros[c] = A->scale.zeros[c];
+        }
+        memcpy(out->entries, A->entries, (size_t)size * esz);
+        return out;
+    }
+    if (contiguous) {
+        memcpy(out->entries, A->entries, (size_t)size * esz);
+        return out;
+    }
+    for (int i = 0; i < size; i++)
+        memcpy(entry(out, (size_t)i), entry(A, (size_t)unravel(i, A->shape, A->strides, A->dimensions)), esz);
+    return out;
+}
+
 Tensor TensorScalarMultiply(Tensor A, Real scalar)
 {
-    if (!A->gradients && A->type != FLOAT32) {
-        if (A->owner) {
-            DataType type = A->type;
-            Tensor detached = TensorCopy(A);
-            TensorToType(detached, type);
-            TensorFree(A);
-            A = detached;
-        }
+    if (!A->gradients && A->type != FLOAT32 && A->owner) {
+        Tensor copy = TensorCopy(A);
+        TensorFree(A);
+        A = copy;
+    }
+    if (!A->gradients && A->type != FLOAT32) { // Scaling a quantized tensor only moves its scale
         int groups = A->dimensions >= 2 ? A->shape[0] : 1;
         if (!A->scale.values) {
             ScaleNew(&A->scale, groups, A->strides[0], FALSE);
@@ -529,7 +553,7 @@ Tensor TensorNLL(Tensor y, Tensor logP)
 Tensor TensorSample(Tensor logits, Real temperature)
 {
     if (logits->type != FLOAT32 || logits->scale.values) {
-        fprintf(stderr, "TensorSample requires FLOAT32 entries, convert with TensorToType!\n");
+        fprintf(stderr, "TensorSample requires unscaled FLOAT32 entries!\n");
         exit(EXIT_FAILURE);
     }
     Real *le       = logits->entries;
@@ -746,72 +770,6 @@ Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataT
 
     fclose(f);
     return t;
-}
-
-static void toReal(void *arg, int start, int end)
-{
-    Operation *op = arg;
-    const unsigned char *src = op->A->entries;
-    Real *dst = op->out->entries;
-    size_t esz = DataSize(op->A->type);
-    for (int i = start; i < end; i++)
-        dst[i] = ScaleAt(op->A->scale, i) * (DataGet(src + (size_t)i * esz, op->A->type) - ScaleZeroAt(op->A->scale, i));
-}
-
-void TensorToType(Tensor A, DataType d)
-{
-    if (A->owner) {
-        fprintf(stderr, "TensorToType does not support views!\n");
-        exit(EXIT_FAILURE);
-    }
-    if (A->references != 1) {
-        fprintf(stderr, "TensorToType requires a Tensor that is not referenced by other Tensors!\n");
-        exit(EXIT_FAILURE);
-    }
-    if (!A->gradients && A->type == d && !A->scale.values &&
-        isContiguous(A->shape, A->strides, A->dimensions)) return;
-
-    Tensor out = TensorNew(A->dimensions, A->shape, d, FALSE);
-    int size = TensorSize(A);
-    int contiguous = isContiguous(A->shape, A->strides, A->dimensions);
-
-    if (out->type == FLOAT32 && contiguous) {
-        Operation op = { .A = A, .out = out };
-        OperationDispatch(toReal, &op, size, size);
-    } else {
-        if (out->type <= INT32) {
-            Real typeMax = out->type == UINT8 ? UINT8_MAX : out->type == INT8 ? INT8_MAX : out->type == INT16 ? INT16_MAX : INT32_MAX;
-            int groups = out->dimensions >= 2 ? out->shape[0] : 1;
-            int inner  = size / groups;
-            ScaleNew(&out->scale, groups, inner, out->type == UINT8);
-            for (int c = 0; c < groups; c++) {
-                Real low = 0.0, high = 0.0;
-                for (int j = 0; j < inner; j++) {
-                    int i   = c * inner + j;
-                    int off = contiguous ? i : unravel(i, A->shape, A->strides, A->dimensions);
-                    Real x  = TensorGet(A, off);
-                    if (j == 0)        low = high = x;
-                    else if (x < low)  low  = x;
-                    else if (x > high) high = x;
-                }
-                scaleFit(&out->scale, c, low, high, typeMax);
-            }
-        }
-        for (int i = 0; i < size; i++) {
-            int off = contiguous ? i : unravel(i, A->shape, A->strides, A->dimensions);
-            TensorSet(out, i, TensorGet(A, off));
-        }
-    }
-    struct tensor tmp = *A;
-    *A = *out;
-    *out = tmp;
-    TensorFree(out);
-}
-
-void TensorArrayToType(TensorArray ta, DataType d)
-{
-    for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
-        TensorToType(*(Tensor *)DynamicArrayGet(ta->tensors, i), d);
 }
 
 void TensorWrite(Tensor A, char *path)

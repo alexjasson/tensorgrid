@@ -15,11 +15,13 @@ static void zipBackward(void *arg, int start, int end);
 
 Tensor OperationZip(Binary fn, Tensor A, Tensor B)
 {
-    // Dequantize the inputs so they run on the vectorized fast path if autograd is not needed
+    // Dequantize the inputs so they run on the vectorized fast path if autograd is not needed.
+    // Temporary: once the kernels below write stored types this widens the very entries that
+    // quantizing an activation is meant to keep narrow, and should go
     Tensor Aorig = A, Borig = B;
     if (!TensorGradients(A) && !TensorGradients(B)) {
-        if (TensorDataType(A) != FLOAT32 || ScaleGet(A).values) A = TensorCopy(A);
-        if (TensorDataType(B) != FLOAT32 || ScaleGet(B).values) B = TensorCopy(B);
+        if (TensorDataType(A) != FLOAT32 || ScaleGet(A).values) A = TensorMap(IDENTITY, A);
+        if (TensorDataType(B) != FLOAT32 || ScaleGet(B).values) B = TensorMap(IDENTITY, B);
     }
 
     int outDims = TensorDimensions(A) >= TensorDimensions(B) ? TensorDimensions(A) : TensorDimensions(B);
