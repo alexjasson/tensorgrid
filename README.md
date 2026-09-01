@@ -15,7 +15,7 @@ New here? The best place to start is the [`examples/`](examples) directory. Ther
 - Multithreading
 - SIMD instructions (supports AVX2 and AVX-512 instruction sets)
 - Load and save tensors as `.tgd` files
-- Weight quantization for faster inference
+- Native weight quantization (no shadow weights)
 
 ## Prerequisites
 - Linux or mac
