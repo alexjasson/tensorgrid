@@ -14,11 +14,11 @@
 static void operationAdd(Operation *op, DynamicArray arr);
 static void zeroGradients(Operation *op);
 
-void OperationDispatch(ThreadPoolFn f, Operation *op, int total, long work)
+void OperationDispatch(ThreadPoolFn f, void *arg, int total, long work)
 {
     if (total <= 0) return;
-    if (work < PARALLEL) f(op, 0, total);
-    else ThreadPoolMap(ThreadPoolGet(), f, op, total);
+    if (work < PARALLEL) f(arg, 0, total);
+    else ThreadPoolMap(ThreadPoolGet(), f, arg, total);
 }
 
 // Adds the operations reachable from op in topological order

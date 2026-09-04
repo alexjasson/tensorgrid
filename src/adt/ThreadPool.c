@@ -266,6 +266,8 @@ void ThreadPoolMap(ThreadPool pool, ThreadPoolFn f, void *arg, int total)
     mutexUnlock(&pool->mutex);
 }
 
+int ThreadPoolSize(ThreadPool pool) { return pool->numThreads; }
+
 void ThreadPoolLock(ThreadPool pool)   { mutexLock(&pool->critical);   }
 void ThreadPoolUnlock(ThreadPool pool) { mutexUnlock(&pool->critical); }
 

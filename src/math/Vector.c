@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <immintrin.h>
 #include "Vector.h"
@@ -75,26 +76,43 @@ int64_t DataMin(DataType d)
     }
 }
 
-static Real randomLane(int lane)
+static Real dataHigh(DataType d)
 {
-    static uint64_t state[VECTOR_DIMS];
-    if (!state[0])
-        for (int i = 0; i < VECTOR_DIMS; i++)
-            state[i] = 0x853c49e6748fea9bULL + 0x9e3779b97f4a7c15ULL * (uint64_t)(i + 1);
-
-    uint64_t s = state[lane];
-    s ^= s << 13;
-    s ^= s >> 7;
-    s ^= s << 17;
-    state[lane] = s;
-    return (Real)(s >> 40) * (Real)(1.0 / 16777216.0);
+    Real h = (Real)DataMax(d);
+    return (int64_t)h > DataMax(d) ? h * (Real)(1.0 - 1.0 / 16777216.0) : h;
 }
 
-static Vector randomVector(void)
+static uint32_t ditherBase(const void *p)
 {
+    static _Atomic uint32_t draws;
+    uint32_t c = atomic_load_explicit(&draws, memory_order_relaxed);
+    atomic_store_explicit(&draws, c + 1, memory_order_relaxed);
+    return c * 0x9e3779b9u + (uint32_t)(uintptr_t)p * 2654435761u;
+}
+
+static Real randomScalar(const void *p)
+{
+    uint32_t z = ditherBase(p);
+    z ^= z >> 16; z *= 0x7feb352du;
+    z ^= z >> 15; z *= 0x846ca68bu;
+    z ^= z >> 16;
+    return (Real)(z >> 8) * (Real)(1.0 / 16777216.0);
+}
+
+static Vector randomVector(const void *p)
+{
+    typedef uint32_t Bits __attribute__((__vector_size__(VECTOR_DIMS * sizeof(uint32_t))));
+    uint32_t base = ditherBase(p);
+
+    Bits z;
+    for (int i = 0; i < VECTOR_DIMS; i++) z[i] = base + (uint32_t)i;
+    z ^= z >> 16; z *= 0x7feb352du;
+    z ^= z >> 15; z *= 0x846ca68bu;
+    z ^= z >> 16;
+
     Vector u;
-    for (int i = 0; i < VECTOR_DIMS; i++) u[i] = randomLane(i);
-    return u;
+    for (int i = 0; i < VECTOR_DIMS; i++) u[i] = (Real)(z[i] >> 8);
+    return u * (Real)(1.0 / 16777216.0);
 }
 
 static Real roundDown(Real x)
@@ -120,7 +138,7 @@ static void DataSetInt64(void *p, DataType d, int64_t x)
 void DataSetStochastic(void *p, DataType d, Real x)
 {
     if (!DataMax(d)) { DataSet(p, d, x); return; }
-    DataSetInt64(p, d, (int64_t)roundDown(x + randomLane(0)));
+    DataSetInt64(p, d, (int64_t)roundDown(x + randomScalar(p)));
 }
 
 Real DataGet(const void *p, DataType d)
@@ -185,6 +203,23 @@ Vector VectorLoad(const void *p, DataType d)
 }
 void   VectorStore(Real *p, Vector x)             { memcpy(p, &x, sizeof(x)); }
 
+static int narrowPacked(void *p, DataType d, Vector x)
+{
+#if defined(__AVX2__) && !defined(__AVX512F__)
+    if (sizeof(Real) == 4 && (d == INT8 || d == INT16)) {
+        __m256i w;
+        memcpy(&w, &x, sizeof(w));
+        __m256i v = _mm256_cvttps_epi32(_mm256_castsi256_ps(w));
+        __m128i n = _mm_packs_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256(v, 1));
+        if (d == INT8) _mm_storel_epi64((__m128i *)p, _mm_packs_epi16(n, n));
+        else           _mm_storeu_si128((__m128i *)p, n);
+        return 1;
+    }
+#endif
+    (void)p; (void)d; (void)x;
+    return 0;
+}
+
 void VectorStoreStochastic(void *p, DataType d, Vector x)
 {
     if (!DataMax(d)) {
@@ -194,9 +229,11 @@ void VectorStoreStochastic(void *p, DataType d, Vector x)
         return;
     }
 
-    x = VectorMin(VectorMax(x, VectorBcast((Real)DataMin(d))), VectorBcast((Real)DataMax(d)));
-    x = x + randomVector();
-    for (int i = 0; i < VECTOR_DIMS; i++) x[i] = roundDown(x[i]);
+    Vector lo = VectorBcast((Real)DataMin(d)), hi = VectorBcast(dataHigh(d));
+    x = VectorMin(VectorMax(x, lo), hi);
+    x = VectorMin(VectorMax(VectorFloor(x + randomVector(p)), lo), hi);
+
+    if (narrowPacked(p, d, x)) return;
     switch (d) {
         case UINT8: { uint8_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) e[i] = (uint8_t)x[i]; break; }
         case INT8:  { int8_t  *e = p; for (int i = 0; i < VECTOR_DIMS; i++) e[i] = (int8_t)x[i];  break; }
@@ -245,6 +282,13 @@ Vector VectorRound(Vector x)
 {
     for (int i = 0; i < VECTOR_DIMS; i++)
         x[i] = sizeof(Real) == 8 ? __builtin_rint(x[i]) : __builtin_rintf(x[i]);
+    return x;
+}
+
+Vector VectorFloor(Vector x)
+{
+    for (int i = 0; i < VECTOR_DIMS; i++)
+        x[i] = sizeof(Real) == 8 ? __builtin_floor(x[i]) : __builtin_floorf(x[i]);
     return x;
 }
 

@@ -84,6 +84,34 @@ static int integerAt(Matrix M, size_t e, int group)
     return v - (int)ScaleZero(M.scale, group);
 }
 
+static inline int integerOf(Matrix M, DataType d, size_t e)
+{
+    return d == INT8  ? ((const int8_t  *)M.data)[e]
+         : d == UINT8 ? ((const uint8_t *)M.data)[e]
+                      : ((const int16_t *)M.data)[e];
+}
+
+static inline void packBPairs(Matrix B, DataType d, int16_t *dst, size_t src,
+                              int p0, int j0, int kBlock, int rowB, int colB)
+{
+    const int8_t  *b8  = (const int8_t  *)B.data;
+    const uint8_t *bu8 = (const uint8_t *)B.data;
+    const int16_t *b16 = (const int16_t *)B.data;
+
+    for (int p2 = 0; p2 < kBlock / 2; p2++) {
+        int z0 = (int)ScaleZero(B.scale, scaleGroup(p0 + 2 * p2, j0, rowB, colB));
+        int z1 = (int)ScaleZero(B.scale, scaleGroup(p0 + 2 * p2 + 1, j0, rowB, colB));
+        size_t o0 = src + (size_t)(2 * p2) * B.sRow, o1 = o0 + B.sRow;
+        int16_t *e = dst + (size_t)p2 * NR * 2;
+        for (int nr = 0; nr < NR; nr++) {
+            int v0 = d == INT8 ? b8[o0 + nr] : d == UINT8 ? bu8[o0 + nr] : b16[o0 + nr];
+            int v1 = d == INT8 ? b8[o1 + nr] : d == UINT8 ? bu8[o1 + nr] : b16[o1 + nr];
+            e[nr * 2]     = (int16_t)(v0 - z0);
+            e[nr * 2 + 1] = (int16_t)(v1 - z1);
+        }
+    }
+}
+
 static Real realAt(Matrix M, const unsigned char *e, int group)
 {
     Real v = M.type == FLOAT32 ? *(const Real *)e : DataGet(e, M.type);
@@ -143,13 +171,10 @@ static void packB(void *buf, Matrix A, Matrix B, int p0, int kBlock, int j0, int
         for (int jp = 0; jp < fullPanels; jp++) {
             int16_t *dst = (int16_t *)buf + (size_t)jp * kPairs * 2 * NR;
             size_t src = (size_t)p0 * B.sRow + j0 + (size_t)jp * NR;
-            for (int p2 = 0; p2 < kBlock / 2; p2++) {
-                int g0 = scaleGroup(p0 + 2 * p2, j0, rowB, colB), g1 = scaleGroup(p0 + 2 * p2 + 1, j0, rowB, colB);
-                for (int nr = 0; nr < NR; nr++) {
-                    size_t e = src + (size_t)(2 * p2) * B.sRow + nr;
-                    dst[(p2 * NR + nr) * 2]     = integerAt(B, e, g0);
-                    dst[(p2 * NR + nr) * 2 + 1] = integerAt(B, e + B.sRow, g1);
-                }
+            switch (B.type) {
+                case UINT8: packBPairs(B, UINT8, dst, src, p0, j0, kBlock, rowB, colB); break;
+                case INT16: packBPairs(B, INT16, dst, src, p0, j0, kBlock, rowB, colB); break;
+                default:    packBPairs(B, INT8,  dst, src, p0, j0, kBlock, rowB, colB); break;
             }
             if (kBlock % 2) {
                 int g = scaleGroup(p0 + kBlock - 1, j0, rowB, colB);
@@ -303,7 +328,20 @@ static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int
                 int group = scaleGroup(i0 + row, p0, rowA, colA);
                 Real vals[KC];
                 Real m = 0;
-                for (int p = 0; p < kBlock; p++) {
+                int p = 0;
+
+                if (A.sCol == 1) {
+                    Vector zv = VectorBcast(ScaleZero(A.scale, group)), mv = VectorZero();
+                    for (; p + VECTOR_DIMS <= kBlock; p += VECTOR_DIMS) {
+                        Vector f = VectorMul(VectorSub(VectorLoad(a + (size_t)p * esz, A.type), zv),
+                                             VectorLoad(sB + p, FLOAT32));
+                        VectorStore(vals + p, f);
+                        mv = VectorMax(mv, VectorMax(f, VectorSub(VectorZero(), f)));
+                    }
+                    for (int i = 0; i < VECTOR_DIMS; i++) m = mv[i] > m ? mv[i] : m;
+                }
+
+                for (; p < kBlock; p++) {
                     const unsigned char *e = a + (size_t)p * A.sCol * esz;
                     Real f = realAt(A, e, group) * sB[p];
                     vals[p] = f;

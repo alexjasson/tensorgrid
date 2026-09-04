@@ -15,6 +15,11 @@ ThreadPool ThreadPoolGet(void);
 void ThreadPoolMap(ThreadPool pool, ThreadPoolFn f, void *arg, int total);
 
 /*
+ * The number of worker threads the pool maps across.
+ */
+int ThreadPoolSize(ThreadPool pool);
+
+/*
  * Acquire/release the pool's lock for short critical sections. Used when threads need to
  * synchronize on shared data. 
  */

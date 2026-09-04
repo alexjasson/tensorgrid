@@ -25,7 +25,7 @@ Operation OperationNew(Tensor out, Tensor A, Tensor B, OperationFn forward, Oper
  * Runs f over [0, total). Parallelizes 'work' with thread pool when it is above
  * a fixed threshold.
  */
-void OperationDispatch(ThreadPoolFn f, Operation *op, int total, long work);
+void OperationDispatch(ThreadPoolFn f, void *arg, int total, long work);
 
 /*
  * Runs an operations forward pass and returns the output. If the output tensor

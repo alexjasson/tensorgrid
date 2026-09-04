@@ -48,6 +48,7 @@ Vector VectorMax(Vector a, Vector b);
 Vector VectorMin(Vector a, Vector b);
 Vector VectorFnmadd(Vector a, Vector b, Vector c);
 Vector VectorRound(Vector x);
+Vector VectorFloor(Vector x);
 Vector VectorPow2i(Vector n);
 Vector VectorSqrt(Vector x);
 Vector VectorLog2i(Vector x);

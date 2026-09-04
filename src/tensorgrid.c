@@ -31,9 +31,16 @@ Binary MAX      = { (g)max,      (g)maxDa,    (g)maxDb     };
 Binary MIN      = { (g)min,      (g)minDa,    (g)minDb     };
 
 typedef struct optimizer {
-    Real *m; // SGD momentum or Adam first moment
-    Real *v; // Adam second moment
-    int t;   // Adam timestep
+    Real *m;           // SGD momentum or Adam first moment
+    Real *v;           // Adam second moment
+    int t;             // Adam timestep
+    Real lr;           // learning rate
+    Real decay;        // SGD momentum, or Adam beta1
+    Real beta2;        // Adam second moment decay
+    Real epsilon;      // Adam epsilon
+    Real weightDecay;  // Adam weight decay
+    Real biasM, biasV; // Adam bias corrections
+    int inner;         // Entries one kernel covers
 } Optimizer;
 
 struct tensor {
@@ -998,6 +1005,100 @@ static void scaleUpdate(Tensor A, int base, int inner, int group, int overflow, 
     A->scale.values[group] = widen ? A->scale.values[group] * 2 : A->scale.values[group] / 2;
 }
 
+static int blockInner(Tensor A, int size)
+{
+    int groups = A->scale.values ? A->scale.groups : 1;
+    if (groups > 1 && A->scale.stride) return A->scale.stride;
+    if (DataMax(A->type)) return size;
+
+    int workers = ThreadPoolSize(ThreadPoolGet());
+    if (workers < 1) workers = 1;
+
+    int inner = (size + workers - 1) / workers;
+    inner = (inner + VECTOR_DIMS - 1) / VECTOR_DIMS * VECTOR_DIMS;
+    return inner < size ? inner : size;
+}
+
+static inline void sgdKernel(Tensor A, DataType d, int base, int n, int group,
+                          int *overflowOut, int *wouldOut)
+{
+    Optimizer *o = A->optimizer;
+    Real *m = o->decay != 0.0 ? o->m : NULL;
+    int64_t qMax = DataMax(d);
+    Real scale = ScaleValue(A->scale, group), zero = ScaleZero(A->scale, group);
+    Vector decay = VectorBcast(o->decay);
+    Vector rate = VectorBcast(scale > 0.0 ? o->lr / scale : 0.0);
+    Vector low = VectorBcast((Real)DataMin(d)), high = VectorBcast((Real)qMax);
+    Vector zeroed = VectorBcast(zero);
+    Vector upv = VectorBcast((Real)qMax - zero), downv = VectorBcast(zero - (Real)DataMin(d));
+    Vector overflow = VectorZero(), wouldOverflow = VectorZero();
+    unsigned char *entries = (unsigned char *)A->entries + (size_t)base * DataSize(d);
+
+    unsigned char eb[VECTOR_DIMS * sizeof(double)];
+    Real gb[VECTOR_DIMS], mb[VECTOR_DIMS];
+    for (int j = 0; j < n; j += VECTOR_DIMS) {
+        void *ep = entries + (size_t)j * DataSize(d);
+        Real *gp = A->gradients + base + j, *mp = m ? m + base + j : NULL;
+        int tail = n - j < VECTOR_DIMS;
+        size_t reals = (size_t)(n - j) * sizeof(Real);
+        if (tail) {
+            memset(eb, 0, sizeof(eb)); memset(gb, 0, sizeof(gb)); memset(mb, 0, sizeof(mb));
+            memcpy(eb, ep, (size_t)(n - j) * DataSize(d));
+            memcpy(gb, gp, reals);
+            if (mp) memcpy(mb, mp, reals);
+            ep = eb; gp = gb; mp = mp ? mb : NULL;
+        }
+
+        Vector step = VectorLoad(gp, FLOAT32);
+        if (mp) { step = VectorFma(decay, VectorLoad(mp, FLOAT32), step); VectorStore(mp, step); }
+        Vector w = VectorFnmadd(rate, step, VectorLoad(ep, d));
+        if (qMax) {
+            Vector in = VectorMin(VectorMax(w, low), high);
+            Vector over = VectorSub(w, in);
+            overflow = VectorAdd(overflow, VectorGt0(VectorMax(over, VectorZero() - over)));
+            w = in;
+            Vector twice = VectorAdd(VectorSub(w, zeroed), VectorSub(w, zeroed));
+            wouldOverflow = VectorAdd(wouldOverflow,
+                                      VectorGt0(VectorMax(VectorSub(twice, upv),
+                                                          VectorSub(VectorZero() - downv, twice))));
+        }
+        VectorStoreStochastic(ep, d, w);
+
+        if (tail) {
+            memcpy(entries + (size_t)j * DataSize(d), eb, (size_t)(n - j) * DataSize(d));
+            if (m) memcpy(m + base + j, mb, reals);
+        }
+    }
+
+    *overflowOut = (int)VectorHsum(overflow);
+    *wouldOut = (int)VectorHsum(wouldOverflow);
+}
+
+static void sgdBlock(void *arg, int start, int end)
+{
+    Tensor A = arg;
+    int size = TensorSize(A), inner = A->optimizer->inner;
+
+    for (int block = start; block < end; block++) {
+        int base = block * inner;
+        int n = size - base < inner ? size - base : inner;
+        int group = A->scale.stride ? base / A->scale.stride : 0;
+        int overflow = 0, would = 0;
+
+        switch (A->type) {
+            case FLOAT32: sgdKernel(A, FLOAT32, base, n, group, &overflow, &would); break;
+            case INT8:    sgdKernel(A, INT8,    base, n, group, &overflow, &would); break;
+            case UINT8:   sgdKernel(A, UINT8,   base, n, group, &overflow, &would); break;
+            case INT16:   sgdKernel(A, INT16,   base, n, group, &overflow, &would); break;
+            case INT32:   sgdKernel(A, INT32,   base, n, group, &overflow, &would); break;
+            default:      sgdKernel(A, A->type, base, n, group, &overflow, &would); break;
+        }
+
+        if (DataMax(A->type)) scaleUpdate(A, base, n, group, overflow, would);
+    }
+}
+
+
 void TensorSGD(Tensor A, Real lr, Real momentum)
 {
     Optimizer *optimizer = A->optimizer;
@@ -1006,78 +1107,117 @@ void TensorSGD(Tensor A, Real lr, Real momentum)
     int64_t qMax = DataMax(A->type);
     if (qMax && !A->scale.values) scaleOnes(A, &A->scale);
 
-    Real *m = NULL;
-    if (momentum != 0.0) {
+    if (momentum != 0.0 && !optimizer->m) {
+        optimizer->m = calloc((size_t)size, sizeof(Real));
         if (!optimizer->m) {
-            optimizer->m = calloc((size_t)size, sizeof(Real));
-            if (!optimizer->m) {
-                fprintf(stderr, "Insufficient memory!\n");
-                exit(EXIT_FAILURE);
-            }
+            fprintf(stderr, "Insufficient memory!\n");
+            exit(EXIT_FAILURE);
         }
-        m = optimizer->m;
     }
-
-    int groups = A->scale.values ? A->scale.groups : 1;
-    int inner = groups > 1 && A->scale.stride ? A->scale.stride : size;
-    Vector decay = VectorBcast(momentum);
-    Vector low = VectorBcast((Real)DataMin(A->type)), high = VectorBcast((Real)qMax);
-
-    for (int base = 0; base < size; base += inner) {
-        int n = size - base < inner ? size - base : inner;
-        int group = A->scale.stride ? base / A->scale.stride : 0;
-        Real scale = ScaleValue(A->scale, group), zero = ScaleZero(A->scale, group);
-        Vector rate = VectorBcast(scale > 0.0 ? lr / scale : 0.0);
-        Vector zeroed = VectorBcast(zero);
-        Vector upv = VectorBcast((Real)DataMax(A->type) - zero);
-        Vector downv = VectorBcast(zero - (Real)DataMin(A->type));
-        Vector overflow = VectorZero(), wouldOverflow = VectorZero();
-
-        unsigned char eb[VECTOR_DIMS * sizeof(double)];
-        Real gb[VECTOR_DIMS], mb[VECTOR_DIMS];
-        for (int j = 0; j < n; j += VECTOR_DIMS) {
-            void *ep = entry(A, (size_t)(base + j));
-            Real *gp = A->gradients + base + j, *mp = m ? m + base + j : NULL;
-            int tail = n - j < VECTOR_DIMS;
-            size_t reals = (size_t)(n - j) * sizeof(Real);
-            if (tail) {
-                memset(eb, 0, sizeof(eb)); memset(gb, 0, sizeof(gb)); memset(mb, 0, sizeof(mb));
-                memcpy(eb, ep, (size_t)(n - j) * DataSize(A->type));
-                memcpy(gb, gp, reals);
-                if (mp) memcpy(mb, mp, reals);
-                ep = eb; gp = gb; mp = mp ? mb : NULL;
-            }
-
-            Vector step = VectorLoad(gp, FLOAT32);
-            if (mp) { step = VectorFma(decay, VectorLoad(mp, FLOAT32), step); VectorStore(mp, step); }
-            Vector w = VectorFnmadd(rate, step, VectorLoad(ep, A->type));
-            if (qMax) {
-                Vector in = VectorMin(VectorMax(w, low), high);
-                Vector over = VectorSub(w, in);
-                overflow = VectorAdd(overflow, VectorGt0(VectorMax(over, VectorZero() - over)));
-                w = in;
-                Vector twice = VectorAdd(VectorSub(w, zeroed), VectorSub(w, zeroed));
-                wouldOverflow = VectorAdd(wouldOverflow,
-                                          VectorGt0(VectorMax(VectorSub(twice, upv),
-                                                              VectorSub(VectorZero() - downv, twice))));
-            }
-            VectorStoreStochastic(ep, A->type, w);
-
-            if (tail) {
-                memcpy(entry(A, (size_t)(base + j)), eb, (size_t)(n - j) * DataSize(A->type));
-                if (m) memcpy(m + base + j, mb, reals);
-            }
-        }
-
-        if (!qMax) continue;
-        scaleUpdate(A, base, n, group, (int)VectorHsum(overflow), (int)VectorHsum(wouldOverflow));
-    }
+    optimizer->lr = lr;
+    optimizer->decay = momentum;
+    int inner = optimizer->inner = blockInner(A, size);
+    OperationDispatch(sgdBlock, A, (size + inner - 1) / inner, (long)size * 10);
 }
 
 void TensorArraySGD(TensorArray ta, Real lr, Real momentum)
 {
     for (int i = 0; i < DynamicArraySize(ta->tensors); i++)
         TensorSGD(*(Tensor *)DynamicArrayGet(ta->tensors, i), lr, momentum);
+}
+
+static inline void adamKernel(Tensor A, DataType d, int base, int n, int group,
+                           int *overflowOut, int *wouldOut)
+{
+    Optimizer *o = A->optimizer;
+    Real *m = o->m, *v = o->v, *g = A->gradients;
+    int64_t qMax = DataMax(d);
+    Real scale = ScaleValue(A->scale, group), zero = ScaleZero(A->scale, group);
+    Vector b1 = VectorBcast(o->decay), c1 = VectorBcast(1.0 - o->decay);
+    Vector b2 = VectorBcast(o->beta2), c2 = VectorBcast(1.0 - o->beta2);
+    Vector biasM = VectorBcast(o->biasM), biasV = VectorBcast(o->biasV);
+    Vector epsv = VectorBcast(o->epsilon), wdv = VectorBcast(o->weightDecay);
+    Vector rate = VectorBcast(scale > 0.0 ? o->lr / scale : 0.0);
+    Vector scaled = VectorBcast(scale), zeroed = VectorBcast(zero);
+    Vector low = VectorBcast((Real)DataMin(d)), high = VectorBcast((Real)qMax);
+    Vector upv = VectorBcast((Real)qMax - zero), downv = VectorBcast(zero - (Real)DataMin(d));
+    Vector overflow = VectorZero(), wouldOverflow = VectorZero();
+    unsigned char *entries = (unsigned char *)A->entries + (size_t)base * DataSize(d);
+
+    unsigned char eb[VECTOR_DIMS * sizeof(double)];
+    Real gb[VECTOR_DIMS], mb[VECTOR_DIMS], vb[VECTOR_DIMS];
+    for (int j = 0; j < n; j += VECTOR_DIMS) {
+        void *ep = entries + (size_t)j * DataSize(d);
+        Real *gp = g + base + j, *mp = m + base + j, *vp = v + base + j;
+        int tail = n - j < VECTOR_DIMS;
+        size_t reals = (size_t)(n - j) * sizeof(Real);
+        if (tail) { // Tail through padded buffers, so the zeroed lanes are a no-op
+            memset(eb, 0, sizeof(eb)); memset(gb, 0, sizeof(gb));
+            memset(mb, 0, sizeof(mb)); memset(vb, 0, sizeof(vb));
+            memcpy(eb, ep, (size_t)(n - j) * DataSize(d));
+            memcpy(gb, gp, reals);
+            memcpy(mb, mp, reals);
+            memcpy(vb, vp, reals);
+            ep = eb; gp = gb; mp = mb; vp = vb;
+        }
+
+        Vector gv = VectorLoad(gp, FLOAT32);
+        Vector mv = VectorFma(b1, VectorLoad(mp, FLOAT32), VectorMul(c1, gv));
+        Vector vv = VectorFma(b2, VectorLoad(vp, FLOAT32), VectorMul(c2, VectorMul(gv, gv)));
+        VectorStore(mp, mv);
+        VectorStore(vp, vv);
+
+        Vector e    = VectorLoad(ep, d);
+        Vector mHat = VectorDiv(mv, biasM);
+        Vector vHat = VectorDiv(vv, biasV);
+        Vector step = VectorAdd(VectorDiv(mHat, VectorAdd(sqrte(vHat), epsv)),
+                                VectorMul(wdv, VectorMul(scaled, VectorSub(e, zeroed))));
+        Vector w = VectorFnmadd(rate, step, e);
+        if (qMax) {
+            Vector in = VectorMin(VectorMax(w, low), high);
+            Vector over = VectorSub(w, in);
+            overflow = VectorAdd(overflow, VectorGt0(VectorMax(over, VectorZero() - over)));
+            w = in;
+            Vector twice = VectorAdd(VectorSub(w, zeroed), VectorSub(w, zeroed));
+            wouldOverflow = VectorAdd(wouldOverflow,
+                                      VectorGt0(VectorMax(VectorSub(twice, upv),
+                                                          VectorSub(VectorZero() - downv, twice))));
+        }
+        VectorStoreStochastic(ep, d, w);
+
+        if (tail) {
+            memcpy(entries + (size_t)j * DataSize(d), eb, (size_t)(n - j) * DataSize(d));
+            memcpy(m + base + j, mb, reals);
+            memcpy(v + base + j, vb, reals);
+        }
+    }
+
+    *overflowOut = (int)VectorHsum(overflow);
+    *wouldOut = (int)VectorHsum(wouldOverflow);
+}
+
+static void adamBlock(void *arg, int start, int end)
+{
+    Tensor A = arg;
+    int size = TensorSize(A), inner = A->optimizer->inner;
+
+    for (int block = start; block < end; block++) {
+        int base = block * inner;
+        int n = size - base < inner ? size - base : inner;
+        int group = A->scale.stride ? base / A->scale.stride : 0;
+        int overflow = 0, would = 0;
+
+        switch (A->type) {
+            case FLOAT32: adamKernel(A, FLOAT32, base, n, group, &overflow, &would); break;
+            case INT8:    adamKernel(A, INT8,    base, n, group, &overflow, &would); break;
+            case UINT8:   adamKernel(A, UINT8,   base, n, group, &overflow, &would); break;
+            case INT16:   adamKernel(A, INT16,   base, n, group, &overflow, &would); break;
+            case INT32:   adamKernel(A, INT32,   base, n, group, &overflow, &would); break;
+            default:      adamKernel(A, A->type, base, n, group, &overflow, &would); break;
+        }
+
+        if (DataMax(A->type)) scaleUpdate(A, base, n, group, overflow, would);
+    }
 }
 
 void TensorAdam(Tensor A, Real lr, Real beta1, Real beta2, Real epsilon, Real weightDecay)
@@ -1097,80 +1237,16 @@ void TensorAdam(Tensor A, Real lr, Real beta1, Real beta2, Real epsilon, Real we
         }
     }
     optimizer->t++;
-    Real *m = optimizer->m;
-    Real *v = optimizer->v;
-    Real *g = A->gradients;
+    optimizer->lr = lr;
+    optimizer->decay = beta1;
+    optimizer->beta2 = beta2;
+    optimizer->epsilon = epsilon;
+    optimizer->weightDecay = weightDecay;
+    optimizer->biasM = 1.0 - powi(beta1, optimizer->t);
+    optimizer->biasV = 1.0 - powi(beta2, optimizer->t);
 
-    int groups = A->scale.values ? A->scale.groups : 1;
-    int inner = groups > 1 && A->scale.stride ? A->scale.stride : size;
-    Vector b1 = VectorBcast(beta1), c1 = VectorBcast(1.0 - beta1);
-    Vector b2 = VectorBcast(beta2), c2 = VectorBcast(1.0 - beta2);
-    Vector biasM = VectorBcast(1.0 - powi(beta1, optimizer->t));
-    Vector biasV = VectorBcast(1.0 - powi(beta2, optimizer->t));
-    Vector epsv = VectorBcast(epsilon), wdv = VectorBcast(weightDecay);
-    Vector low = VectorBcast((Real)DataMin(A->type)), high = VectorBcast((Real)qMax);
-
-    for (int base = 0; base < size; base += inner) {
-        int n = size - base < inner ? size - base : inner;
-        int group = A->scale.stride ? base / A->scale.stride : 0;
-        Real scale = ScaleValue(A->scale, group), zero = ScaleZero(A->scale, group);
-        Vector rate = VectorBcast(scale > 0.0 ? lr / scale : 0.0);
-        Vector scaled = VectorBcast(scale), zeroed = VectorBcast(zero);
-        Vector upv = VectorBcast((Real)DataMax(A->type) - zero);
-        Vector downv = VectorBcast(zero - (Real)DataMin(A->type));
-        Vector overflow = VectorZero(), wouldOverflow = VectorZero();
-
-        unsigned char eb[VECTOR_DIMS * sizeof(double)];
-        Real gb[VECTOR_DIMS], mb[VECTOR_DIMS], vb[VECTOR_DIMS];
-        for (int j = 0; j < n; j += VECTOR_DIMS) {
-            void *ep = entry(A, (size_t)(base + j));
-            Real *gp = g + base + j, *mp = m + base + j, *vp = v + base + j;
-            int tail = n - j < VECTOR_DIMS;
-            size_t reals = (size_t)(n - j) * sizeof(Real);
-            if (tail) { // Tail through padded buffers, so the zeroed lanes are a no-op
-                memset(eb, 0, sizeof(eb)); memset(gb, 0, sizeof(gb));
-                memset(mb, 0, sizeof(mb)); memset(vb, 0, sizeof(vb));
-                memcpy(eb, ep, (size_t)(n - j) * DataSize(A->type));
-                memcpy(gb, gp, reals);
-                memcpy(mb, mp, reals);
-                memcpy(vb, vp, reals);
-                ep = eb; gp = gb; mp = mb; vp = vb;
-            }
-
-            Vector gv = VectorLoad(gp, FLOAT32);
-            Vector mv = VectorFma(b1, VectorLoad(mp, FLOAT32), VectorMul(c1, gv));
-            Vector vv = VectorFma(b2, VectorLoad(vp, FLOAT32), VectorMul(c2, VectorMul(gv, gv)));
-            VectorStore(mp, mv);
-            VectorStore(vp, vv);
-
-            Vector e    = VectorLoad(ep, A->type);
-            Vector mHat = VectorDiv(mv, biasM);
-            Vector vHat = VectorDiv(vv, biasV);
-            Vector step = VectorAdd(VectorDiv(mHat, VectorAdd(sqrte(vHat), epsv)),
-                                    VectorMul(wdv, VectorMul(scaled, VectorSub(e, zeroed))));
-            Vector w = VectorFnmadd(rate, step, e);
-            if (qMax) {
-                Vector in = VectorMin(VectorMax(w, low), high);
-                Vector over = VectorSub(w, in);
-                overflow = VectorAdd(overflow, VectorGt0(VectorMax(over, VectorZero() - over)));
-                w = in;
-                Vector twice = VectorAdd(VectorSub(w, zeroed), VectorSub(w, zeroed));
-                wouldOverflow = VectorAdd(wouldOverflow,
-                                          VectorGt0(VectorMax(VectorSub(twice, upv),
-                                                              VectorSub(VectorZero() - downv, twice))));
-            }
-            VectorStoreStochastic(ep, A->type, w);
-
-            if (tail) {
-                memcpy(entry(A, (size_t)(base + j)), eb, (size_t)(n - j) * DataSize(A->type));
-                memcpy(m + base + j, mb, reals);
-                memcpy(v + base + j, vb, reals);
-            }
-        }
-
-        if (!qMax) continue;
-        scaleUpdate(A, base, n, group, (int)VectorHsum(overflow), (int)VectorHsum(wouldOverflow));
-    }
+    int inner = optimizer->inner = blockInner(A, size);
+    OperationDispatch(adamBlock, A, (size + inner - 1) / inner, (long)size * 16);
 }
 
 void TensorArrayAdam(TensorArray ta, Real lr, Real beta1, Real beta2, Real epsilon, Real weightDecay)
