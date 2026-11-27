@@ -30,23 +30,25 @@ static void microKernel(void *Ap, void *Bp, Real *bScale, int kBlock, Matrix C, 
 static void smallGemm(Matrix A, Matrix B, Matrix C);
 static void packedGemm(Matrix A, Matrix B, Matrix C);
 
-Matrix MatrixView(Real *data, int rows, int cols, int sRow, int sCol)
+Matrix MatrixView(void *data, int rows, int cols, int sRow, int sCol, DataType type, Scale scale)
 {
-    return (Matrix){data, rows, cols, sRow, sCol, FLOAT32, 1.0, {NULL, NULL, 0, 0}};
+    return (Matrix){data, 0, rows, cols, sRow, sCol, type, 1.0, scale};
 }
 
 static int imin(int a, int b) { return a < b ? a : b; }
+static int integerBound(DataType d) { return d == INT2 ? 1 : d == INT4 ? 8 : d == INT8 ? 127 : d == UINT8 ? 255 : 32767; }
+static int integerType(DataType d) { return d == INT2 || d == INT4 || d == INT8 || d == INT16 || d == UINT8; }
 
 static int integerPackB(Matrix A, Matrix B)
 {
-    if (B.type != INT8 && B.type != INT16 && B.type != UINT8) return 0;
+    if (!integerType(B.type)) return 0;
     if (sizeof(Real) != 4) return 0;
     return !columnGroups(B) && !columnGroups(A);
 }
 
 static int integerPackA(Matrix A, Matrix B)
 {
-    if (A.type != INT8 && A.type != INT16 && A.type != UINT8) return 0;
+    if (!integerType(A.type)) return 0;
     if (B.type != FLOAT32 || sizeof(Real) != 4) return 0;
     if (columnGroups(A)) return 0;
     return (long)A.rows * A.cols >= 1024L * B.cols;
@@ -78,43 +80,31 @@ static int columnGroups(Matrix M)
 
 static int integerAt(Matrix M, size_t e, int group)
 {
-    int v = M.type == INT8  ? ((const int8_t  *)M.data)[e]
-          : M.type == UINT8 ? ((const uint8_t *)M.data)[e]
-                            : ((const int16_t *)M.data)[e];
+    size_t i = M.off + e;
+    int v = M.type == INT8  ? ((const int8_t  *)M.data)[i]
+          : M.type == UINT8 ? ((const uint8_t *)M.data)[i]
+          : M.type == INT2  ? (((((const unsigned char *)M.data)[i / 4] >> (i % 4) * 2) & 3) ^ 2) - 2
+          : DataPerByte(M.type) > 1 ? (int)DataGet(M.data, i, M.type)
+                            : ((const int16_t *)M.data)[i];
     return v - (int)ScaleZero(M.scale, group);
 }
 
-static inline int integerOf(Matrix M, DataType d, size_t e)
+static void integerPairs(Matrix M, size_t e0, size_t e1, int g0, int g1, int16_t *dst)
 {
-    return d == INT8  ? ((const int8_t  *)M.data)[e]
-         : d == UINT8 ? ((const uint8_t *)M.data)[e]
-                      : ((const int16_t *)M.data)[e];
-}
+    int z0 = (int)ScaleZero(M.scale, g0), z1 = (int)ScaleZero(M.scale, g1);
+    int16_t a[NR], b[NR];
 
-static inline void packBPairs(Matrix B, DataType d, int16_t *dst, size_t src,
-                              int p0, int j0, int kBlock, int rowB, int colB)
-{
-    const int8_t  *b8  = (const int8_t  *)B.data;
-    const uint8_t *bu8 = (const uint8_t *)B.data;
-    const int16_t *b16 = (const int16_t *)B.data;
-
-    for (int p2 = 0; p2 < kBlock / 2; p2++) {
-        int z0 = (int)ScaleZero(B.scale, scaleGroup(p0 + 2 * p2, j0, rowB, colB));
-        int z1 = (int)ScaleZero(B.scale, scaleGroup(p0 + 2 * p2 + 1, j0, rowB, colB));
-        size_t o0 = src + (size_t)(2 * p2) * B.sRow, o1 = o0 + B.sRow;
-        int16_t *e = dst + (size_t)p2 * NR * 2;
-        for (int nr = 0; nr < NR; nr++) {
-            int v0 = d == INT8 ? b8[o0 + nr] : d == UINT8 ? bu8[o0 + nr] : b16[o0 + nr];
-            int v1 = d == INT8 ? b8[o1 + nr] : d == UINT8 ? bu8[o1 + nr] : b16[o1 + nr];
-            e[nr * 2]     = (int16_t)(v0 - z0);
-            e[nr * 2 + 1] = (int16_t)(v1 - z1);
-        }
+    DataConvert(a, 0, INT16, M.data, M.off + e0, M.type, NR);
+    DataConvert(b, 0, INT16, M.data, M.off + e1, M.type, NR);
+    for (int nr = 0; nr < NR; nr++) {
+        dst[2 * nr]     = (int16_t)(a[nr] - z0);
+        dst[2 * nr + 1] = (int16_t)(b[nr] - z1);
     }
 }
 
-static Real realAt(Matrix M, const unsigned char *e, int group)
+static Real realAt(Matrix M, size_t e, int group)
 {
-    Real v = M.type == FLOAT32 ? *(const Real *)e : DataGet(e, M.type);
+    Real v = DataGet(M.data, M.off + e, M.type);
     return v - ScaleZero(M.scale, group);
 }
 
@@ -130,7 +120,7 @@ static void packB(void *buf, Matrix A, Matrix B, int p0, int kBlock, int j0, int
     if (integerPackA(A, B)) {
         int kPairs = (kBlock + 1) / 2;
         size_t panelSize = NR * sizeof(Real) + (size_t)kPairs * 2 * NR * sizeof(int16_t);
-        Real qMax = imin(32767, INT32_MAX / (kBlock * (A.type == INT8 ? 127 : A.type == UINT8 ? 255 : 32767)));
+        Real qMax = imin(32767, INT32_MAX / (kBlock * integerBound(A.type)));
 
         for (int jp = 0; jp < panels; jp++) {
             Real *colScale = (Real *)((char *)buf + jp * panelSize);
@@ -141,7 +131,7 @@ static void packB(void *buf, Matrix A, Matrix B, int p0, int kBlock, int j0, int
                 Real s = B.factor * ScaleValue(B.scale, scaleGroup(p0 + p, j0, rowB, colB));
                 for (int nr = 0; nr < NR; nr++) {
                     int col = jp * NR + nr;
-                    Real f = col < nBlock ? s * B.data[(size_t)(p0 + p) * B.sRow + (size_t)(j0 + col) * B.sCol] : 0;
+                    Real f = col < nBlock ? s * B.data[B.off + (size_t)(p0 + p) * B.sRow + (size_t)(j0 + col) * B.sCol] : 0;
                     vals[p][nr] = f;
                     m[nr] = f < -m[nr] ? -f : f > m[nr] ? f : m[nr];
                 }
@@ -171,10 +161,10 @@ static void packB(void *buf, Matrix A, Matrix B, int p0, int kBlock, int j0, int
         for (int jp = 0; jp < fullPanels; jp++) {
             int16_t *dst = (int16_t *)buf + (size_t)jp * kPairs * 2 * NR;
             size_t src = (size_t)p0 * B.sRow + j0 + (size_t)jp * NR;
-            switch (B.type) {
-                case UINT8: packBPairs(B, UINT8, dst, src, p0, j0, kBlock, rowB, colB); break;
-                case INT16: packBPairs(B, INT16, dst, src, p0, j0, kBlock, rowB, colB); break;
-                default:    packBPairs(B, INT8,  dst, src, p0, j0, kBlock, rowB, colB); break;
+            for (int p2 = 0; p2 < kBlock / 2; p2++) {
+                int g0 = scaleGroup(p0 + 2 * p2, j0, rowB, colB), g1 = scaleGroup(p0 + 2 * p2 + 1, j0, rowB, colB);
+                size_t e = src + (size_t)(2 * p2) * B.sRow;
+                integerPairs(B, e, e + B.sRow, g0, g1, dst + (size_t)p2 * NR * 2);
             }
             if (kBlock % 2) {
                 int g = scaleGroup(p0 + kBlock - 1, j0, rowB, colB);
@@ -208,7 +198,7 @@ static void packB(void *buf, Matrix A, Matrix B, int p0, int kBlock, int j0, int
         // Vectorize contiguous rows
         for (int jp = 0; jp < fullPanels; jp++) {
             Real *dst = Bp + (size_t)jp * kBlock * NR;
-            Real *src = B.data + (size_t)p0 * B.sRow + j0 + (size_t)jp * NR;
+            Real *src = B.data + B.off + (size_t)p0 * B.sRow + j0 + (size_t)jp * NR;
             for (int p = 0; p < kBlock; p++)
                 for (int v = 0; v < NR; v += VECTOR_DIMS)
                     VectorStore(dst + p * NR + v, VectorLoad(src + (size_t)p * B.sRow + v, FLOAT32));
@@ -217,7 +207,7 @@ static void packB(void *buf, Matrix A, Matrix B, int p0, int kBlock, int j0, int
         for (int jp = fullPanels; jp < panels; jp++) {
             Real *dst = Bp + (size_t)jp * kBlock * NR;
             for (int p = 0; p < kBlock; p++) {
-                Real *brow = B.data + (size_t)(p0 + p) * B.sRow;
+                Real *brow = B.data + B.off + (size_t)(p0 + p) * B.sRow;
                 for (int nr = 0; nr < NR; nr++) {
                     int col = jp * NR + nr;
                     dst[p * NR + nr] = (col < nBlock) ? brow[(size_t)(j0 + col) * B.sCol] : 0.0f;
@@ -227,14 +217,11 @@ static void packB(void *buf, Matrix A, Matrix B, int p0, int kBlock, int j0, int
         return;
     }
 
-    size_t esz = DataSize(B.type);
-    const unsigned char *base = (const unsigned char *)B.data;
-
     int byCol = colB != 0 && rowB == 0;
 
     for (int jp = 0; jp < fullPanels; jp++) {
         Real *dst = Bp + (size_t)jp * kBlock * NR;
-        const unsigned char *src = base + ((size_t)p0 * B.sRow + j0 + (size_t)jp * NR) * esz;
+        size_t src = B.off + (size_t)p0 * B.sRow + j0 + (size_t)jp * NR; // an entry index, entries may share a byte
         Real cs[NR], cz[NR];
         if (byCol)
             for (int nr = 0; nr < NR; nr++) {
@@ -248,7 +235,7 @@ static void packB(void *buf, Matrix A, Matrix B, int p0, int kBlock, int j0, int
                 Vector scale = byCol ? VectorLoad(cs + v, FLOAT32) : VectorBcast(B.factor * ScaleValue(B.scale, group));
                 Vector zero  = byCol ? VectorLoad(cz + v, FLOAT32) : VectorBcast(ScaleZero(B.scale, group));
                 VectorStore(dst + p * NR + v,
-                            VectorMul(VectorSub(VectorLoad(src + ((size_t)p * B.sRow + v) * esz, B.type), zero), scale));
+                            VectorMul(VectorSub(VectorLoadAt(B.data, src + (size_t)p * B.sRow + v, B.type), zero), scale));
             }
         }
     }
@@ -256,12 +243,12 @@ static void packB(void *buf, Matrix A, Matrix B, int p0, int kBlock, int j0, int
     for (int jp = fullPanels; jp < panels; jp++) {
         Real *dst = Bp + (size_t)jp * kBlock * NR;
         for (int p = 0; p < kBlock; p++) {
-            const unsigned char *brow = base + (size_t)(p0 + p) * B.sRow * esz;
+            size_t brow = (size_t)(p0 + p) * B.sRow;
             for (int nr = 0; nr < NR; nr++) {
                 int col = jp * NR + nr;
                 int group = scaleGroup(p0 + p, j0 + col, rowB, colB);
                 dst[p * NR + nr] = (col < nBlock)
-                    ? B.factor * ScaleValue(B.scale, group) * realAt(B, brow + (size_t)(j0 + col) * B.sCol * esz, group)
+                    ? B.factor * ScaleValue(B.scale, group) * realAt(B, brow + (size_t)(j0 + col) * B.sCol, group)
                     : 0.0f;
             }
         }
@@ -275,8 +262,6 @@ static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int
     int rowA, colA, rowB, colB;
     groupSteps(A, &rowA, &colA);
     groupSteps(B, &rowB, &colB);
-    size_t esz = DataSize(A.type);
-    const unsigned char *base = (const unsigned char *)A.data;
 
     // Integer path (quantized A)
     if (integerPackA(A, B)) {
@@ -306,7 +291,7 @@ static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int
     if (integerPackB(A, B)) {
         int kPairs = (kBlock + 1) / 2;
         size_t panelSize = MR * sizeof(Real) + (size_t)kPairs * 2 * MR * sizeof(int16_t);
-        Real qMax = imin(32767, INT32_MAX / (kBlock * (B.type == INT8 ? 127 : B.type == UINT8 ? 255 : 32767)));
+        Real qMax = imin(32767, INT32_MAX / (kBlock * integerBound(B.type)));
         Real sB[KC];
         for (int p = 0; p < kBlock; p++)
             sB[p] = B.factor * ScaleValue(B.scale, scaleGroup(p0 + p, 0, rowB, colB));
@@ -324,7 +309,7 @@ static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int
                     continue;
                 }
 
-                const unsigned char *a = base + ((size_t)(i0 + row) * A.sRow + (size_t)p0 * A.sCol) * esz;
+                size_t a = (size_t)(i0 + row) * A.sRow + (size_t)p0 * A.sCol;
                 int group = scaleGroup(i0 + row, p0, rowA, colA);
                 Real vals[KC];
                 Real m = 0;
@@ -333,7 +318,7 @@ static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int
                 if (A.sCol == 1) {
                     Vector zv = VectorBcast(ScaleZero(A.scale, group)), mv = VectorZero();
                     for (; p + VECTOR_DIMS <= kBlock; p += VECTOR_DIMS) {
-                        Vector f = VectorMul(VectorSub(VectorLoad(a + (size_t)p * esz, A.type), zv),
+                        Vector f = VectorMul(VectorSub(VectorLoadAt(A.data, A.off + a + (size_t)p, A.type), zv),
                                              VectorLoad(sB + p, FLOAT32));
                         VectorStore(vals + p, f);
                         mv = VectorMax(mv, VectorMax(f, VectorSub(VectorZero(), f)));
@@ -342,8 +327,7 @@ static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int
                 }
 
                 for (; p < kBlock; p++) {
-                    const unsigned char *e = a + (size_t)p * A.sCol * esz;
-                    Real f = realAt(A, e, group) * sB[p];
+                    Real f = realAt(A, a + (size_t)p * A.sCol, group) * sB[p];
                     vals[p] = f;
                     m = f < -m ? -f : f > m ? f : m;
                 }
@@ -369,7 +353,7 @@ static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int
             for (int p = 0; p < kBlock; p++) {
                 for (int mr = 0; mr < MR; mr++) {
                     int row = ip * MR + mr;
-                    dst[p * MR + mr] = (row < mBlock) ? A.data[(size_t)(i0 + row) * A.sRow + (size_t)(p0 + p) * A.sCol] : 0.0f;
+                    dst[p * MR + mr] = (row < mBlock) ? A.data[A.off + (size_t)(i0 + row) * A.sRow + (size_t)(p0 + p) * A.sCol] : 0.0f;
                 }
             }
         }
@@ -383,7 +367,7 @@ static void packA(void *buf, Matrix A, Matrix B, int i0, int mBlock, int p0, int
                 int row = ip * MR + mr;
                 int group = scaleGroup(i0 + row, p0 + p, rowA, colA);
                 dst[p * MR + mr] = (row < mBlock)
-                    ? ScaleValue(A.scale, group) * realAt(A, base + ((size_t)(i0 + row) * A.sRow + (size_t)(p0 + p) * A.sCol) * esz, group)
+                    ? ScaleValue(A.scale, group) * realAt(A, (size_t)(i0 + row) * A.sRow + (size_t)(p0 + p) * A.sCol, group)
                     : 0.0f;
             }
         }
@@ -492,24 +476,22 @@ static void smallGemm(Matrix A, Matrix B, Matrix C)
 
     B.factor = A.factor * B.factor / C.factor;
     if (B.sCol == 1 && B.type == FLOAT32 && B.factor == 1.0 && !B.scale.values) {
-        Bd = B.data;
+        Bd = B.data + B.off;
         sB = B.sRow;
     } else if (B.type == FLOAT32 && B.factor == 1.0 && !B.scale.values) {
         for (int p = 0; p < K; p++)
             for (int j = 0; j < N; j++)
-                Bpack[(size_t)p * N + j] = B.data[(size_t)p * B.sRow + (size_t)j * B.sCol];
+                Bpack[(size_t)p * N + j] = B.data[B.off + (size_t)p * B.sRow + (size_t)j * B.sCol];
         Bd = Bpack;
         sB = N;
     } else {
-        size_t esz = DataSize(B.type);
-        const unsigned char *base = (const unsigned char *)B.data;
         int rowB, colB;
         groupSteps(B, &rowB, &colB);
         for (int p = 0; p < K; p++)
             for (int j = 0; j < N; j++) {
                 int group = scaleGroup(p, j, rowB, colB);
                 Bpack[(size_t)p * N + j] = B.factor * ScaleValue(B.scale, group)
-                                         * realAt(B, base + ((size_t)p * B.sRow + (size_t)j * B.sCol) * esz, group);
+                                         * realAt(B, (size_t)p * B.sRow + (size_t)j * B.sCol, group);
             }
         Bd = Bpack;
         sB = N;
@@ -517,7 +499,7 @@ static void smallGemm(Matrix A, Matrix B, Matrix C)
 
     for (int i0 = 0; i0 < M; i0 += MR) {
         int mValid = imin(MR, M - i0);
-        const Real *Ai = A.data + (size_t)i0 * sA;
+        const Real *Ai = A.data + A.off + (size_t)i0 * sA;
         int j0 = 0;
 
         for (; j0 + NR <= N; j0 += NR) {

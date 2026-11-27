@@ -84,7 +84,6 @@ static void im2col(Operation *op, Real *patches, int n, int kStart, int kEnd)
     int sN = TensorStride(A)[0], sC = TensorStride(A)[1], sH = TensorStride(A)[2], sW = TensorStride(A)[3];
     DataType type = TensorDataType(A);
     Scale scale   = ScaleGet(A);
-    size_t esz    = DataSize(type);
     int real      = type == FLOAT32 && !scale.values;
     int S = Hout * Wout;
     for (int k = kStart; k < kEnd; k++) {
@@ -112,11 +111,11 @@ static void im2col(Operation *op, Real *patches, int n, int kStart, int kEnd)
                     if (real) {
                         memcpy(outRow + ow0, (const Real *)TensorEntries(A) + from, (size_t)(ow1 - ow0) * sizeof(Real));
                     } else {
-                        const unsigned char *src = (const unsigned char *)TensorEntries(A) + from * esz;
                         Vector s = VectorBcast(ScaleAt(scale, (int)from)), z = VectorBcast(ScaleZeroAt(scale, (int)from));
                         int ow = ow0;
                         for (; ow + VECTOR_DIMS <= ow1; ow += VECTOR_DIMS)
-                            VectorStore(outRow + ow, VectorMul(s, VectorSub(VectorLoad(src + (size_t)(ow - ow0) * esz, type), z)));
+                            VectorStore(outRow + ow, VectorMul(s, VectorSub(
+                                VectorLoadAt(TensorEntries(A), from + (size_t)(ow - ow0), type), z)));
                         for (; ow < ow1; ow++)
                             outRow[ow] = TensorGet(A, (int)from + (ow - ow0));
                     }
@@ -143,17 +142,15 @@ static void convolutionForward(void *arg, int start, int end)
     int K      = Cin * fH * fW;
     Real patches[(size_t)K * S];
 
-    Matrix Fv = MatrixView(TensorEntries(op->B), Cout, K, K, 1);
-    Fv.type   = TensorDataType(op->B);
-    Fv.scale  = ScaleGet(op->B);
+    Matrix Fv = MatrixView(TensorEntries(op->B), Cout, K, K, 1, TensorDataType(op->B), ScaleGet(op->B));
 
     for (int n = start; n < end; n++) {
         im2col(op, patches, n, 0, K);
         Real *prod = (Real *)TensorEntries(op->out) + (size_t)n * Cout * S;
         memset(prod, 0, (size_t)Cout * S * sizeof(Real));
         MatrixMultiply(Fv,
-                       MatrixView(patches, K, S, S, 1),
-                       MatrixView(prod, Cout, S, S, 1));
+                       MatrixView(patches, K, S, S, 1, FLOAT32, (Scale){0}),
+                       MatrixView(prod, Cout, S, S, 1, FLOAT32, (Scale){0}));
     }
 }
 
@@ -173,9 +170,9 @@ static void convolutionBackwardDb(void *arg, int start, int end)
     for (int n = start; n < end; n++) {
         im2col(op, patches, n, 0, K);
         Real *dProd_n = dProd + (size_t)n * Cout * S;
-        MatrixMultiply(MatrixView(dProd_n, Cout, S, S, 1),
-                       MatrixView(patches, S, K, 1, S),
-                       MatrixView(local, Cout, K, K, 1));
+        MatrixMultiply(MatrixView(dProd_n, Cout, S, S, 1, FLOAT32, (Scale){0}),
+                       MatrixView(patches, S, K, 1, S, FLOAT32, (Scale){0}),
+                       MatrixView(local, Cout, K, K, 1, FLOAT32, (Scale){0}));
     }
 
     ThreadPool pool = ThreadPoolGet();
@@ -201,9 +198,7 @@ static void convolutionBackwardDa(void *arg, int start, int end)
     int S    = Hout * Wout;
     int K    = Cin * fH * fW;
     int sN = TensorStride(A)[0], sC = TensorStride(A)[1], sH = TensorStride(A)[2], sW = TensorStride(A)[3];
-    Matrix Fv = MatrixView(TensorEntries(op->B), K, Cout, 1, K);
-    Fv.type   = TensorDataType(op->B);
-    Fv.scale  = ScaleGet(op->B);
+    Matrix Fv = MatrixView(TensorEntries(op->B), K, Cout, 1, K, TensorDataType(op->B), ScaleGet(op->B));
     Real *dProd  = TensorGradients(op->out);
     Real *dInput = TensorGradients(A);
 
@@ -213,8 +208,8 @@ static void convolutionBackwardDa(void *arg, int start, int end)
         Real *dProd_n = dProd + (size_t)n * Cout * S;
         memset(dWin, 0, (size_t)K * S * sizeof(Real));
         MatrixMultiply(Fv,
-                       MatrixView(dProd_n, Cout, S, S, 1),
-                       MatrixView(dWin, K, S, S, 1));
+                       MatrixView(dProd_n, Cout, S, S, 1, FLOAT32, (Scale){0}),
+                       MatrixView(dWin, K, S, S, 1, FLOAT32, (Scale){0}));
 
         for (int ci = 0; ci < Cin; ci++) {
             Real *plane = dInput + (size_t)n * sN + (size_t)ci * sC;

@@ -33,7 +33,7 @@ Binary MIN      = { (g)min,      (g)minDa,    (g)minDb     };
 typedef struct optimizer {
     Real *m;           // SGD momentum or Adam first moment
     Real *v;           // Adam second moment
-    int t;             // Adam timestep
+    int t;             // Timestep
     Real lr;           // learning rate
     Real decay;        // SGD momentum, or Adam beta1
     Real beta2;        // Adam second moment decay
@@ -71,8 +71,11 @@ static void scaleIndex(Scale *s, int group);                              // Col
 static void scaleFit(Scale *s, int group, Real low, Real high, Real max); // Map [low, high] onto a type reaching max
 static void scaleOnes(Tensor A, Scale *s);                                // A unit scale, one group per row
 
-// Pointer to the entry at given index
-static void *entry(Tensor A, size_t index) { return (unsigned char *)A->entries + index * DataSize(A->type); }
+// Key used for stochastic rounding at each step
+static uint32_t stepKey(Tensor A) { return (uint32_t)A->optimizer->t * 0x9e3779b9u ^ (uint32_t)(uintptr_t)A->entries * 0xc2b2ae35u; }
+
+// Pointer to the entry at given index, which must be byte-aligned for INT4 and INT2
+static void *entry(Tensor A, size_t index) { return (unsigned char *)A->entries + DataSize(A->type, index); }
 
 // Tensor accessor functions
 int TensorDimensions(Tensor A)    { return A->dimensions;   }
@@ -168,12 +171,12 @@ Tensor TensorView(Tensor A, int dimensions, const int *shape, const int *strides
 
 Real TensorGet(Tensor A, int index)
 {
-    return ScaleAt(A->scale, index) * (DataGet(entry(A, (size_t)index), A->type) - ScaleZeroAt(A->scale, index));
+    return ScaleAt(A->scale, index) * (DataGet(A->entries, (size_t)index, A->type) - ScaleZeroAt(A->scale, index));
 }
 
 void TensorSet(Tensor A, int index, Real value)
 {
-    DataSet(entry(A, (size_t)index), A->type, value / ScaleAt(A->scale, index) + ScaleZeroAt(A->scale, index));
+    DataSet(A->entries, (size_t)index, A->type, value / ScaleAt(A->scale, index) + ScaleZeroAt(A->scale, index));
 }
 
 int TensorSize(Tensor A)
@@ -209,7 +212,7 @@ Tensor TensorNew(int dimensions, int *shape, DataType d, int autograd)
             t->strides[i] = t->strides[i + 1] * t->shape[i + 1];
     }
     int size = TensorSize(t);
-    size_t footprint = (size_t)size * DataSize(d);
+    size_t footprint = DataSize(d, (size_t)size);
     MemoryPool pool = MemoryPoolGet();
     t->entries   = MemoryPoolAlloc(pool, footprint);
     t->gradients = autograd ? MemoryPoolAlloc(pool, (size_t)size * sizeof(Real)) : NULL;
@@ -246,7 +249,7 @@ void TensorFree(Tensor A)
         for (int i = 0; i < A->dimensions; i++)
             if (A->strides[i] > 0) footprint += (size_t)(A->shape[i] - 1) * A->strides[i];
         MemoryPool pool = MemoryPoolGet();
-        MemoryPoolFree(pool, A->entries, footprint * DataSize(A->type));
+        MemoryPoolFree(pool, A->entries, DataSize(A->type, footprint));
         MemoryPoolFree(pool, A->gradients, footprint * sizeof(Real));
         ScaleFree(&A->scale);
         if (A->optimizer) {
@@ -404,7 +407,6 @@ Tensor TensorCopy(Tensor A)
 
     Tensor out = TensorNew(A->dimensions, A->shape, A->type, FALSE);
     int size   = TensorSize(A);
-    size_t esz = DataSize(A->type);
 
     if (A->scale.values) { // Contiguous, so the groups carry over as they are
         ScaleNew(&out->scale, A->scale.groups, A->scale.stride, A->scale.zeros != NULL);
@@ -412,15 +414,16 @@ Tensor TensorCopy(Tensor A)
             out->scale.values[c] = A->scale.values[c];
             if (out->scale.zeros) out->scale.zeros[c] = A->scale.zeros[c];
         }
-        memcpy(out->entries, A->entries, (size_t)size * esz);
+        memcpy(out->entries, A->entries, DataSize(A->type, (size_t)size));
         return out;
     }
     if (contiguous) {
-        memcpy(out->entries, A->entries, (size_t)size * esz);
+        memcpy(out->entries, A->entries, DataSize(A->type, (size_t)size));
         return out;
     }
     for (int i = 0; i < size; i++)
-        memcpy(entry(out, (size_t)i), entry(A, (size_t)unravel(i, A->shape, A->strides, A->dimensions)), esz);
+        DataConvert(out->entries, (size_t)i, A->type, A->entries,
+                    (size_t)unravel(i, A->shape, A->strides, A->dimensions), A->type, 1);
     return out;
 }
 
@@ -642,17 +645,16 @@ Tensor TensorShuffle(Tensor A, unsigned int seed)
     if (isContiguous(A->shape, A->strides, A->dimensions)) {
         // Each row is contiguous, so permute rows with a single copy each
         for (int i = 0; i < n; i++)
-            memcpy(entry(out, (size_t)i * rowSize),
-                   entry(A, (size_t)perm[i] * rowSize),
-                   (size_t)rowSize * DataSize(A->type));
+            DataConvert(out->entries, (size_t)i * rowSize, A->type,
+                        A->entries, (size_t)perm[i] * rowSize, A->type, rowSize);
     } else {
         int innerDims = A->dimensions - 1;
         for (int i = 0; i < n; i++) {
             int srcRowOff = perm[i] * A->strides[0];
             for (int j = 0; j < rowSize; j++) {
                 int innerOff = unravel(j, A->shape + 1, A->strides + 1, innerDims);
-                Real v = DataGet(entry(A, (size_t)(srcRowOff + innerOff)), A->type);
-                DataSet(entry(out, (size_t)i * rowSize + j), out->type, v);
+                Real v = DataGet(A->entries, (size_t)(srcRowOff + innerOff), A->type);
+                DataSet(out->entries, (size_t)i * rowSize + j, out->type, v);
             }
         }
     }
@@ -767,7 +769,7 @@ Tensor TensorReadData(char *path, int dimensions, int *shape, long offset, DataT
     }
 
     Tensor t = TensorNew(dimensions, shape, d, FALSE);
-    size_t data = (size_t)TensorSize(t) * DataSize(d);
+    size_t data = DataSize(d, (size_t)TensorSize(t));
     if (fread(t->entries, 1, data, f) != data) {
         fprintf(stderr, "Cannot read file: %s\n", path);
         TensorFree(t);
@@ -866,7 +868,7 @@ void TensorArrayWrite(TensorArray ta, char *path)
         }
 
         // Write tensor entries
-        size_t data = (size_t)TensorSize(t) * DataSize(t->type);
+        size_t data = DataSize(t->type, (size_t)TensorSize(t));
         if (fwrite(t->entries, 1, data, f) != data) {
             fprintf(stderr, "Cannot write file: %s\n", path);
             fclose(f);
@@ -972,7 +974,7 @@ int TensorArrayRead(TensorArray ta, char *path)
         }
 
         // Read entries into the tensor
-        size_t data = (size_t)TensorSize(t) * DataSize(t->type);
+        size_t data = DataSize(t->type, (size_t)TensorSize(t));
         if (fread(t->entries, 1, data, f) != data)
             goto error;
     }
@@ -996,11 +998,14 @@ static void scaleUpdate(Tensor A, int base, int inner, int group, int overflow, 
     int tighten = !widen && (Real)wouldOverflow <= rMax * inner;
     if (!widen && !tighten) return;
 
-    Real zero = ScaleZero(A->scale, group);
-    for (int j = 0; j < inner; j++) {
-        void *e = entry(A, (size_t)(base + j));
-        Real level = DataGet(e, A->type) - zero;
-        DataSetStochastic(e, A->type, zero + (widen ? level / 2 : level * 2));
+    Real zero = ScaleZero(A->scale, group), wb[VECTOR_DIMS * VECTOR_CARD];
+    DataType d = A->type;
+    int chunk = VECTOR_DIMS * VECTOR_CARD;
+    for (int c = 0; c < inner; c += chunk) {
+        int nc = inner - c < chunk ? inner - c : chunk;
+        DataConvert(wb, 0, FLOAT32, A->entries, (size_t)(base + c), d, nc);
+        for (int k = 0; k < nc; k++) wb[k] = zero + (widen ? (wb[k] - zero) / 2 : (wb[k] - zero) * 2);
+        DataConvertStochastic(A->entries, (size_t)(base + c), d, wb, 0, FLOAT32, nc, stepKey(A) ^ 0x2545f491u);
     }
     A->scale.values[group] = widen ? A->scale.values[group] * 2 : A->scale.values[group] / 2;
 }
@@ -1008,7 +1013,10 @@ static void scaleUpdate(Tensor A, int base, int inner, int group, int overflow, 
 static int blockInner(Tensor A, int size)
 {
     int groups = A->scale.values ? A->scale.groups : 1;
-    if (groups > 1 && A->scale.stride) return A->scale.stride;
+    if (groups > 1 && A->scale.stride) {
+        if (A->scale.stride % DataPerByte(A->type)) return size;
+        return A->scale.stride;
+    }
     if (DataMax(A->type)) return size;
 
     int workers = ThreadPoolSize(ThreadPoolGet());
@@ -1019,12 +1027,118 @@ static int blockInner(Tensor A, int size)
     return inner < size ? inner : size;
 }
 
+/*
+ * ECO: each step's rounding residual is kept in the first moment, and the weights store the
+ * updated weight w' rounded stochastically. Please see: https://arxiv.org/abs/2601.22101
+ */
+static int ecoTrains(Tensor A, Real lr, Real decay)
+{
+    return DataMin(A->type) < 0 && !A->scale.zeros && lr > 0.0 && decay > 0.0 && decay < 1.0;
+}
+
+static void ecoKernel(Tensor A, int base, int n, int sgd)
+{
+    Optimizer *o = A->optimizer;
+    int rowLen = A->scale.groups > 1 ? A->scale.stride : TensorSize(A), chunk = VECTOR_DIMS * VECTOR_CARD;
+    Real bm = sgd ? 1.0 : o->biasM, C = o->lr * o->decay / (bm * (1 - o->decay));
+    Vector b1 = VectorBcast(o->decay), c1 = VectorBcast(1 - o->decay);
+    Vector b2 = VectorBcast(o->beta2), c2 = VectorBcast(1 - o->beta2);
+    Vector biasV = VectorBcast(o->biasV), epsv = VectorBcast(o->epsilon), wdv = VectorBcast(o->weightDecay);
+    Vector rate = VectorBcast(o->lr), bmv = VectorBcast(bm), Cv = VectorBcast(C);
+    Vector low = VectorBcast((Real)DataMin(A->type)), high = VectorBcast((Real)DataMax(A->type));
+    uint32_t key = stepKey(A);
+
+    Real eb[VECTOR_DIMS * VECTOR_CARD];
+    for (int row = base; row < base + n; row += rowLen) {
+        int group = row / rowLen;
+        Real scale = A->scale.values[group], next = scale;
+        Vector stat = VectorZero(), nextv = VectorZero(), inverse = VectorZero();
+        for (int pass = 0; pass < 2; pass++) {
+            for (int c = 0; c < rowLen; c += chunk) {
+                int nc = rowLen - c < chunk ? rowLen - c : chunk;
+                size_t e0 = (size_t)row + (size_t)c;
+                DataConvert(eb, 0, FLOAT32, A->entries, e0, A->type, nc);
+                for (int j = 0; j < nc; j += VECTOR_DIMS) {
+                    int cnt = nc - j < VECTOR_DIMS ? nc - j : VECTOR_DIMS;
+                    Real *mp = o->m + e0 + j, *vp = sgd ? NULL : o->v + e0 + j;
+                    Vector w = VectorMul(VectorBcast(scale), VectorLoadPartial(eb + j, cnt));
+                    Vector m = VectorLoadPartial(mp, cnt), v = vp ? VectorLoadPartial(vp, cnt) : VectorZero();
+                    if (pass == 0) {
+                        Vector g = VectorLoadPartial(A->gradients + e0 + j, cnt);
+                        m = sgd ? VectorFma(b1, m, g) : VectorFma(b1, m, VectorMul(c1, g));
+                        VectorStorePartial(mp, m, cnt);
+                        if (vp) {
+                            v = VectorFma(b2, v, VectorMul(c2, VectorMul(g, g)));
+                            VectorStorePartial(vp, v, cnt);
+                        }
+                    }
+
+                    // SGD: w' = w - lr m with C = lr b1 / (1 - b1)
+                    // Adam: w' = w - lr (m / (bm d) + wd w) with C = lr b1 / (bm (1 - b1))
+                    Vector d = sgd ? VectorBcast(1.0) : VectorAdd(sqrte(VectorDiv(v, biasV)), epsv);
+                    Vector wp = sgd ? VectorFnmadd(rate, m, w)
+                                    : VectorFnmadd(rate, VectorAdd(VectorDiv(m, VectorMul(bmv, d)), VectorMul(wdv, w)), w);
+                    if (pass == 0) {
+                        Vector a = VectorMax(wp, VectorZero() - wp);
+                        stat = A->type == INT2 ? VectorAdd(stat, a) : VectorMax(stat, a);
+                        continue;
+                    }
+
+                    Vector dithered = VectorAdd(VectorMul(wp, inverse), VectorUniformAt(key, e0 + (size_t)j));
+                    Vector code = VectorMin(VectorMax(VectorFloor(dithered), low), high);
+                    VectorStorePartial(mp, VectorSub(m, VectorMul(d, VectorDiv(VectorFnmadd(nextv, code, wp), Cv))), cnt);
+                    VectorStorePartial(eb + j, code, cnt);
+                }
+                if (pass == 1) DataConvert(A->entries, e0, A->type, eb, 0, FLOAT32, nc);
+            }
+
+            // The row's scale from its updated weights: INT2 is ternary and takes their absmean,
+            // wider types map the absmax onto the type's largest value
+            if (pass == 0) {
+                if (A->type == INT2) {
+                    next = VectorHsum(stat) / rowLen + (Real)1e-8;
+                } else {
+                    Real absmax = 0.0;
+                    for (int l = 0; l < VECTOR_DIMS; l++) if (stat[l] > absmax) absmax = stat[l];
+                    if (absmax > 0.0) next = absmax / (Real)DataMax(A->type);
+                }
+                nextv = VectorBcast(next);
+                inverse = VectorBcast(1 / next);
+            }
+        }
+        A->scale.values[group] = next;
+    }
+}
+
+static void ecoSGDBlock(void *arg, int start, int end)
+{
+    Tensor A = arg;
+    int size = TensorSize(A), inner = A->optimizer->inner;
+
+    for (int block = start; block < end; block++) {
+        int base = block * inner;
+        ecoKernel(A, base, size - base < inner ? size - base : inner, 1);
+    }
+}
+
+static void ecoAdamBlock(void *arg, int start, int end)
+{
+    Tensor A = arg;
+    int size = TensorSize(A), inner = A->optimizer->inner;
+
+    for (int block = start; block < end; block++) {
+        int base = block * inner;
+        ecoKernel(A, base, size - base < inner ? size - base : inner, 0);
+    }
+}
+
 static inline void sgdKernel(Tensor A, DataType d, int base, int n, int group,
                           int *overflowOut, int *wouldOut)
 {
     Optimizer *o = A->optimizer;
     Real *m = o->decay != 0.0 ? o->m : NULL;
     int64_t qMax = DataMax(d);
+    int inPlace = d == FLOAT32 && sizeof(Real) == 4;
     Real scale = ScaleValue(A->scale, group), zero = ScaleZero(A->scale, group);
     Vector decay = VectorBcast(o->decay);
     Vector rate = VectorBcast(scale > 0.0 ? o->lr / scale : 0.0);
@@ -1032,42 +1146,34 @@ static inline void sgdKernel(Tensor A, DataType d, int base, int n, int group,
     Vector zeroed = VectorBcast(zero);
     Vector upv = VectorBcast((Real)qMax - zero), downv = VectorBcast(zero - (Real)DataMin(d));
     Vector overflow = VectorZero(), wouldOverflow = VectorZero();
-    unsigned char *entries = (unsigned char *)A->entries + (size_t)base * DataSize(d);
+    uint32_t key = stepKey(A);
 
-    unsigned char eb[VECTOR_DIMS * sizeof(double)];
-    Real gb[VECTOR_DIMS], mb[VECTOR_DIMS];
-    for (int j = 0; j < n; j += VECTOR_DIMS) {
-        void *ep = entries + (size_t)j * DataSize(d);
-        Real *gp = A->gradients + base + j, *mp = m ? m + base + j : NULL;
-        int tail = n - j < VECTOR_DIMS;
-        size_t reals = (size_t)(n - j) * sizeof(Real);
-        if (tail) {
-            memset(eb, 0, sizeof(eb)); memset(gb, 0, sizeof(gb)); memset(mb, 0, sizeof(mb));
-            memcpy(eb, ep, (size_t)(n - j) * DataSize(d));
-            memcpy(gb, gp, reals);
-            if (mp) memcpy(mb, mp, reals);
-            ep = eb; gp = gb; mp = mp ? mb : NULL;
-        }
+    Real eb[VECTOR_DIMS * VECTOR_CARD];
+    int chunk = VECTOR_DIMS * VECTOR_CARD;
+    for (int c = 0; c < n; c += chunk) {
+        int nc = n - c < chunk ? n - c : chunk;
+        Real *entries = inPlace ? (Real *)A->entries + base + c : eb;
+        if (!inPlace) DataConvert(eb, 0, FLOAT32, A->entries, (size_t)(base + c), d, nc);
+        for (int j = 0; j < nc; j += VECTOR_DIMS) {
+            int cnt = nc - j < VECTOR_DIMS ? nc - j : VECTOR_DIMS;
+            Real *mp = m ? m + base + c + j : NULL;
 
-        Vector step = VectorLoad(gp, FLOAT32);
-        if (mp) { step = VectorFma(decay, VectorLoad(mp, FLOAT32), step); VectorStore(mp, step); }
-        Vector w = VectorFnmadd(rate, step, VectorLoad(ep, d));
-        if (qMax) {
-            Vector in = VectorMin(VectorMax(w, low), high);
-            Vector over = VectorSub(w, in);
-            overflow = VectorAdd(overflow, VectorGt0(VectorMax(over, VectorZero() - over)));
-            w = in;
-            Vector twice = VectorAdd(VectorSub(w, zeroed), VectorSub(w, zeroed));
-            wouldOverflow = VectorAdd(wouldOverflow,
-                                      VectorGt0(VectorMax(VectorSub(twice, upv),
-                                                          VectorSub(VectorZero() - downv, twice))));
+            Vector step = VectorLoadPartial(A->gradients + base + c + j, cnt);
+            if (mp) { step = VectorFma(decay, VectorLoadPartial(mp, cnt), step); VectorStorePartial(mp, step, cnt); }
+            Vector w = VectorFnmadd(rate, step, VectorLoadPartial(entries + j, cnt));
+            if (qMax) {
+                Vector in = VectorMin(VectorMax(w, low), high);
+                Vector over = VectorSub(w, in);
+                overflow = VectorAdd(overflow, VectorGt0(VectorMax(over, VectorZero() - over)));
+                w = in;
+                Vector twice = VectorAdd(VectorSub(w, zeroed), VectorSub(w, zeroed));
+                wouldOverflow = VectorAdd(wouldOverflow,
+                                          VectorGt0(VectorMax(VectorSub(twice, upv),
+                                                              VectorSub(VectorZero() - downv, twice))));
+            }
+            VectorStorePartial(entries + j, w, cnt);
         }
-        VectorStoreStochastic(ep, d, w);
-
-        if (tail) {
-            memcpy(entries + (size_t)j * DataSize(d), eb, (size_t)(n - j) * DataSize(d));
-            if (m) memcpy(m + base + j, mb, reals);
-        }
+        if (!inPlace) DataConvertStochastic(A->entries, (size_t)(base + c), d, eb, 0, FLOAT32, nc, key);
     }
 
     *overflowOut = (int)VectorHsum(overflow);
@@ -1091,6 +1197,8 @@ static void sgdBlock(void *arg, int start, int end)
             case UINT8:   sgdKernel(A, UINT8,   base, n, group, &overflow, &would); break;
             case INT16:   sgdKernel(A, INT16,   base, n, group, &overflow, &would); break;
             case INT32:   sgdKernel(A, INT32,   base, n, group, &overflow, &would); break;
+            case INT4:    sgdKernel(A, INT4,    base, n, group, &overflow, &would); break;
+            case INT2:    sgdKernel(A, INT2,    base, n, group, &overflow, &would); break;
             default:      sgdKernel(A, A->type, base, n, group, &overflow, &would); break;
         }
 
@@ -1114,10 +1222,12 @@ void TensorSGD(Tensor A, Real lr, Real momentum)
             exit(EXIT_FAILURE);
         }
     }
+    optimizer->t++;
     optimizer->lr = lr;
     optimizer->decay = momentum;
     int inner = optimizer->inner = blockInner(A, size);
-    OperationDispatch(sgdBlock, A, (size + inner - 1) / inner, (long)size * 10);
+    if (ecoTrains(A, lr, momentum)) OperationDispatch(ecoSGDBlock, A, (size + inner - 1) / inner, (long)size * 30);
+    else OperationDispatch(sgdBlock, A, (size + inner - 1) / inner, (long)size * 10);
 }
 
 void TensorArraySGD(TensorArray ta, Real lr, Real momentum)
@@ -1132,6 +1242,7 @@ static inline void adamKernel(Tensor A, DataType d, int base, int n, int group,
     Optimizer *o = A->optimizer;
     Real *m = o->m, *v = o->v, *g = A->gradients;
     int64_t qMax = DataMax(d);
+    int inPlace = d == FLOAT32 && sizeof(Real) == 4;
     Real scale = ScaleValue(A->scale, group), zero = ScaleZero(A->scale, group);
     Vector b1 = VectorBcast(o->decay), c1 = VectorBcast(1.0 - o->decay);
     Vector b2 = VectorBcast(o->beta2), c2 = VectorBcast(1.0 - o->beta2);
@@ -1142,54 +1253,43 @@ static inline void adamKernel(Tensor A, DataType d, int base, int n, int group,
     Vector low = VectorBcast((Real)DataMin(d)), high = VectorBcast((Real)qMax);
     Vector upv = VectorBcast((Real)qMax - zero), downv = VectorBcast(zero - (Real)DataMin(d));
     Vector overflow = VectorZero(), wouldOverflow = VectorZero();
-    unsigned char *entries = (unsigned char *)A->entries + (size_t)base * DataSize(d);
+    uint32_t key = stepKey(A);
 
-    unsigned char eb[VECTOR_DIMS * sizeof(double)];
-    Real gb[VECTOR_DIMS], mb[VECTOR_DIMS], vb[VECTOR_DIMS];
-    for (int j = 0; j < n; j += VECTOR_DIMS) {
-        void *ep = entries + (size_t)j * DataSize(d);
-        Real *gp = g + base + j, *mp = m + base + j, *vp = v + base + j;
-        int tail = n - j < VECTOR_DIMS;
-        size_t reals = (size_t)(n - j) * sizeof(Real);
-        if (tail) { // Tail through padded buffers, so the zeroed lanes are a no-op
-            memset(eb, 0, sizeof(eb)); memset(gb, 0, sizeof(gb));
-            memset(mb, 0, sizeof(mb)); memset(vb, 0, sizeof(vb));
-            memcpy(eb, ep, (size_t)(n - j) * DataSize(d));
-            memcpy(gb, gp, reals);
-            memcpy(mb, mp, reals);
-            memcpy(vb, vp, reals);
-            ep = eb; gp = gb; mp = mb; vp = vb;
+    Real eb[VECTOR_DIMS * VECTOR_CARD];
+    int chunk = VECTOR_DIMS * VECTOR_CARD;
+    for (int c = 0; c < n; c += chunk) {
+        int nc = n - c < chunk ? n - c : chunk;
+        Real *entries = inPlace ? (Real *)A->entries + base + c : eb;
+        if (!inPlace) DataConvert(eb, 0, FLOAT32, A->entries, (size_t)(base + c), d, nc);
+        for (int j = 0; j < nc; j += VECTOR_DIMS) {
+            int cnt = nc - j < VECTOR_DIMS ? nc - j : VECTOR_DIMS;
+            Real *gp = g + base + c + j, *mp = m + base + c + j, *vp = v + base + c + j;
+
+            Vector gv = VectorLoadPartial(gp, cnt);
+            Vector mv = VectorFma(b1, VectorLoadPartial(mp, cnt), VectorMul(c1, gv));
+            Vector vv = VectorFma(b2, VectorLoadPartial(vp, cnt), VectorMul(c2, VectorMul(gv, gv)));
+            VectorStorePartial(mp, mv, cnt);
+            VectorStorePartial(vp, vv, cnt);
+
+            Vector e    = VectorLoadPartial(entries + j, cnt);
+            Vector mHat = VectorDiv(mv, biasM);
+            Vector vHat = VectorDiv(vv, biasV);
+            Vector step = VectorAdd(VectorDiv(mHat, VectorAdd(sqrte(vHat), epsv)),
+                                    VectorMul(wdv, VectorMul(scaled, VectorSub(e, zeroed))));
+            Vector w = VectorFnmadd(rate, step, e);
+            if (qMax) {
+                Vector in = VectorMin(VectorMax(w, low), high);
+                Vector over = VectorSub(w, in);
+                overflow = VectorAdd(overflow, VectorGt0(VectorMax(over, VectorZero() - over)));
+                w = in;
+                Vector twice = VectorAdd(VectorSub(w, zeroed), VectorSub(w, zeroed));
+                wouldOverflow = VectorAdd(wouldOverflow,
+                                          VectorGt0(VectorMax(VectorSub(twice, upv),
+                                                              VectorSub(VectorZero() - downv, twice))));
+            }
+            VectorStorePartial(entries + j, w, cnt);
         }
-
-        Vector gv = VectorLoad(gp, FLOAT32);
-        Vector mv = VectorFma(b1, VectorLoad(mp, FLOAT32), VectorMul(c1, gv));
-        Vector vv = VectorFma(b2, VectorLoad(vp, FLOAT32), VectorMul(c2, VectorMul(gv, gv)));
-        VectorStore(mp, mv);
-        VectorStore(vp, vv);
-
-        Vector e    = VectorLoad(ep, d);
-        Vector mHat = VectorDiv(mv, biasM);
-        Vector vHat = VectorDiv(vv, biasV);
-        Vector step = VectorAdd(VectorDiv(mHat, VectorAdd(sqrte(vHat), epsv)),
-                                VectorMul(wdv, VectorMul(scaled, VectorSub(e, zeroed))));
-        Vector w = VectorFnmadd(rate, step, e);
-        if (qMax) {
-            Vector in = VectorMin(VectorMax(w, low), high);
-            Vector over = VectorSub(w, in);
-            overflow = VectorAdd(overflow, VectorGt0(VectorMax(over, VectorZero() - over)));
-            w = in;
-            Vector twice = VectorAdd(VectorSub(w, zeroed), VectorSub(w, zeroed));
-            wouldOverflow = VectorAdd(wouldOverflow,
-                                      VectorGt0(VectorMax(VectorSub(twice, upv),
-                                                          VectorSub(VectorZero() - downv, twice))));
-        }
-        VectorStoreStochastic(ep, d, w);
-
-        if (tail) {
-            memcpy(entries + (size_t)j * DataSize(d), eb, (size_t)(n - j) * DataSize(d));
-            memcpy(m + base + j, mb, reals);
-            memcpy(v + base + j, vb, reals);
-        }
+        if (!inPlace) DataConvertStochastic(A->entries, (size_t)(base + c), d, eb, 0, FLOAT32, nc, key);
     }
 
     *overflowOut = (int)VectorHsum(overflow);
@@ -1213,6 +1313,8 @@ static void adamBlock(void *arg, int start, int end)
             case UINT8:   adamKernel(A, UINT8,   base, n, group, &overflow, &would); break;
             case INT16:   adamKernel(A, INT16,   base, n, group, &overflow, &would); break;
             case INT32:   adamKernel(A, INT32,   base, n, group, &overflow, &would); break;
+            case INT4:    adamKernel(A, INT4,    base, n, group, &overflow, &would); break;
+            case INT2:    adamKernel(A, INT2,    base, n, group, &overflow, &would); break;
             default:      adamKernel(A, A->type, base, n, group, &overflow, &would); break;
         }
 
@@ -1246,7 +1348,8 @@ void TensorAdam(Tensor A, Real lr, Real beta1, Real beta2, Real epsilon, Real we
     optimizer->biasV = 1.0 - powi(beta2, optimizer->t);
 
     int inner = optimizer->inner = blockInner(A, size);
-    OperationDispatch(adamBlock, A, (size + inner - 1) / inner, (long)size * 16);
+    if (ecoTrains(A, lr, beta1)) OperationDispatch(ecoAdamBlock, A, (size + inner - 1) / inner, (long)size * 40);
+    else OperationDispatch(adamBlock, A, (size + inner - 1) / inner, (long)size * 16);
 }
 
 void TensorArrayAdam(TensorArray ta, Real lr, Real beta1, Real beta2, Real epsilon, Real weightDecay)

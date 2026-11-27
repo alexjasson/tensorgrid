@@ -7,3 +7,4 @@
 - [Training deep neural networks with low precision multiplications](https://arxiv.org/abs/1412.7024)
 - [Deep Learning with Limited Numerical Precision](https://arxiv.org/abs/1502.02551)
 - [Anatomy of High-Performance Matrix Multiplication](https://www.cs.utexas.edu/~flame/pubs/GotoTOMS.pdf)
+- [ECO: Quantized Training without Full-Precision Master Weights](https://arxiv.org/abs/2601.22101)

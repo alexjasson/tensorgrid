@@ -26,16 +26,22 @@ typedef Real Vector __attribute__((__vector_size__(VECTOR_BYTES)));
 typedef Vector (*VectorUnary)(Vector);
 typedef Vector (*VectorBinary)(Vector, Vector);
 
-size_t  DataSize(DataType d);
+size_t  DataSize(DataType d, size_t n);    // Bytes needed to store n entries
+int     DataPerByte(DataType d);           // Entries packed into one byte: 2 for INT4, 4 for INT2, else 1
 int64_t DataMax(DataType d);
 int64_t DataMin(DataType d);
-Real    DataGet(const void *p, DataType d);
-void    DataSet(void *p, DataType d, Real x);
-void    DataSetStochastic(void *p, DataType d, Real x); // DataSet, rounding integers stochastically
+Real    DataGet(const void *base, size_t index, DataType d);
+void    DataSet(void *base, size_t index, DataType d, Real x);
+void    DataConvert(void *dst, size_t di, DataType to, const void *src, size_t si, DataType from, int count);
+void    DataConvertStochastic(void *dst, size_t di, DataType to, const void *src, size_t si, DataType from, int count,
+                              uint32_t key); // DataConvert, rounding integers stochastically by (key, di)
 
 Vector VectorLoad(const void *p, DataType d);
 void   VectorStore(Real *p, Vector x);
-void   VectorStoreStochastic(void *p, DataType d, Vector x);
+Vector VectorLoadPartial(const Real *p, int n);         // n <= VECTOR_DIMS Reals from p, the rest of the Vector zero
+void   VectorStorePartial(Real *p, Vector x, int n);    // The first n <= VECTOR_DIMS Reals of x to p
+Vector VectorLoadAt(const void *base, size_t index, DataType d);
+Vector VectorUniformAt(uint32_t key, size_t index);     // The [0, 1) dither DataConvertStochastic uses for (key, index)
 void   VectorFetch(const Real *p);
 Vector VectorBcast(Real x);
 Vector VectorAdd(Vector a, Vector b);

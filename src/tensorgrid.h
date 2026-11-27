@@ -15,7 +15,7 @@ typedef struct { g g, da, db; } Binary;
 extern Unary RELU, GELU, SIGMOID, LOG, EXP, NEGATE, IDENTITY, TANH, SQRT;
 extern Binary ADD, SUBTRACT, MULTIPLY, DIVIDE, MAX, MIN;
 
-typedef enum { UINT8, INT8, INT16, INT32, FLOAT16, FLOAT32, FLOAT64 } DataType;
+typedef enum { INT2, INT4, UINT8, INT8, INT16, INT32, FLOAT16, FLOAT32, FLOAT64 } DataType;
 typedef struct tensor *Tensor;
 typedef struct tensorArray *TensorArray; // Array of tensors intended to be used for model parameters
 

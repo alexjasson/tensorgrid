@@ -1,8 +1,10 @@
 #include <stdint.h>
-#include <stdatomic.h>
 #include <string.h>
 #include <immintrin.h>
 #include "Vector.h"
+
+typedef uint32_t Bits __attribute__((__vector_size__(VECTOR_DIMS * sizeof(uint32_t))));
+typedef int32_t Signed __attribute__((__vector_size__(VECTOR_DIMS * sizeof(int32_t))));
 
 static Real in(Real x, Real lo, Real hi) { return x < lo ? lo : x > hi ? hi : x; }
 static Real nearest(Real x) { return x < 0 ? x - (Real)0.5 : x + (Real)0.5; }
@@ -51,8 +53,25 @@ static uint16_t realToHalf(Real x)
     return h;
 }
 
-// Size of the data type in bytes
-size_t DataSize(DataType d) { return (0x8424211u >> (4 * d)) & 0xF; }
+static size_t dataBits(DataType d)
+{
+    switch (d) {
+        case INT2:    return 2;
+        case INT4:    return 4;
+        case UINT8:
+        case INT8:    return 8;
+        case INT16:
+        case FLOAT16: return 16;
+        case INT32:
+        case FLOAT32: return 32;
+        case FLOAT64: return 64;
+    }
+    return 8;
+}
+
+// Size of n entries of the data type in bytes
+size_t DataSize(DataType d, size_t n) { return (n * dataBits(d) + 7) / 8; }
+int DataPerByte(DataType d) { return d == INT4 ? 2 : d == INT2 ? 4 : 1; }
 
 int64_t DataMax(DataType d)
 {
@@ -61,6 +80,8 @@ int64_t DataMax(DataType d)
         case INT8:  return INT8_MAX;
         case INT16: return INT16_MAX;
         case INT32: return INT32_MAX;
+        case INT4:  return 7;
+        case INT2:  return 1;
         default:    return 0;
     }
 }
@@ -72,6 +93,8 @@ int64_t DataMin(DataType d)
         case INT8:  return INT8_MIN;
         case INT16: return INT16_MIN;
         case INT32: return INT32_MIN;
+        case INT4:  return -8;
+        case INT2:  return -1; // ternary
         default:    return 0;
     }
 }
@@ -82,66 +105,44 @@ static Real dataHigh(DataType d)
     return (int64_t)h > DataMax(d) ? h * (Real)(1.0 - 1.0 / 16777216.0) : h;
 }
 
-static uint32_t ditherBase(const void *p)
+static inline Vector bitsUniform(Bits z)
 {
-    static _Atomic uint32_t draws;
-    uint32_t c = atomic_load_explicit(&draws, memory_order_relaxed);
-    atomic_store_explicit(&draws, c + 1, memory_order_relaxed);
-    return c * 0x9e3779b9u + (uint32_t)(uintptr_t)p * 2654435761u;
-}
-
-static Real randomScalar(const void *p)
-{
-    uint32_t z = ditherBase(p);
     z ^= z >> 16; z *= 0x7feb352du;
     z ^= z >> 15; z *= 0x846ca68bu;
     z ^= z >> 16;
-    return (Real)(z >> 8) * (Real)(1.0 / 16777216.0);
+    return __builtin_convertvector((Signed)(z >> 8), Vector) * (Real)(1.0 / 16777216.0);
 }
 
-static Vector randomVector(const void *p)
+static inline Vector uniformAt(uint32_t key, size_t index)
 {
-    typedef uint32_t Bits __attribute__((__vector_size__(VECTOR_DIMS * sizeof(uint32_t))));
-    uint32_t base = ditherBase(p);
-
-    Bits z;
-    for (int i = 0; i < VECTOR_DIMS; i++) z[i] = base + (uint32_t)i;
-    z ^= z >> 16; z *= 0x7feb352du;
-    z ^= z >> 15; z *= 0x846ca68bu;
-    z ^= z >> 16;
-
-    Vector u;
-    for (int i = 0; i < VECTOR_DIMS; i++) u[i] = (Real)(z[i] >> 8);
-    return u * (Real)(1.0 / 16777216.0);
+    Bits offset, high = (Bits){0} + (uint32_t)(index >> 32);
+    for (int i = 0; i < VECTOR_DIMS; i++) offset[i] = (uint32_t)i;
+    if ((index + VECTOR_DIMS - 1) >> 32 != index >> 32) // the indices straddle a multiple of 2^32
+        for (int i = 0; i < VECTOR_DIMS; i++) high[i] = (uint32_t)((index + (size_t)i) >> 32);
+    return bitsUniform(key ^ ((uint32_t)index + offset) * 0x85ebca6bu ^ high);
 }
 
-static Real roundDown(Real x)
+Vector VectorUniformAt(uint32_t key, size_t index) { return uniformAt(key, index); }
+
+static int subGet(const void *base, size_t index, DataType d)
 {
-    int64_t i = (int64_t)x;
-    return (Real)(i - (x < (Real)i));
+    const unsigned char *bytes = base;
+    if (d == INT2) { int v = (bytes[index >> 2] >> (index & 3) * 2) & 3; return v > 1 ? v - 4 : v; }
+    int v = (bytes[index >> 1] >> (index & 1) * 4) & 15;
+    return v > 7 ? v - 16 : v;
 }
 
-static void DataSetInt64(void *p, DataType d, int64_t x)
+static void subSet(void *base, size_t index, DataType d, int v)
 {
-    if (d > INT32) { DataSet(p, d, (Real)x); return; }
-    int64_t low = DataMin(d), high = DataMax(d);
-    if (x < low)  x = low;
-    if (x > high) x = high;
-    switch (d) {
-        case UINT8: *(unsigned char *)p = (unsigned char)x; break;
-        case INT8:  *(signed char *)p = (signed char)x; break;
-        case INT16: { int16_t v = (int16_t)x; memcpy(p, &v, 2); break; }
-        default:    { int32_t v = (int32_t)x; memcpy(p, &v, 4); break; }
-    }
+    int shift = d == INT2 ? (int)(index & 3) * 2 : (int)(index & 1) * 4;
+    unsigned char *byte = (unsigned char *)base + (d == INT2 ? index >> 2 : index >> 1);
+    unsigned char mask = (unsigned char)((d == INT2 ? 3 : 15) << shift);
+    *byte = (unsigned char)((*byte & ~mask) | (((unsigned)v << shift) & mask));
 }
 
-void DataSetStochastic(void *p, DataType d, Real x)
-{
-    if (!DataMax(d)) { DataSet(p, d, x); return; }
-    DataSetInt64(p, d, (int64_t)roundDown(x + randomScalar(p)));
-}
+static int subClamp(DataType d, Real x) { return (int)in(x, (Real)DataMin(d), (Real)DataMax(d)); }
 
-Real DataGet(const void *p, DataType d)
+static Real byteGet(const void *p, DataType d)
 {
     switch (d) {
         case UINT8:   return (Real)*(const unsigned char *)p;
@@ -151,11 +152,12 @@ Real DataGet(const void *p, DataType d)
         case FLOAT16: { uint16_t x; memcpy(&x, p, 2); return halfToReal(x); }
         case FLOAT32: { float    x; memcpy(&x, p, 4); return (Real)x; }
         case FLOAT64: { double   x; memcpy(&x, p, 8); return (Real)x; }
+        case INT4: case INT2: break; // narrower than a byte
     }
     return 0.0;
 }
 
-void DataSet(void *p, DataType d, Real x)
+static void byteSet(void *p, DataType d, Real x)
 {
     switch (d) {
         case UINT8:   *(unsigned char *)p = (unsigned char)nearest(in(x, 0.0, 255.0)); break;
@@ -167,15 +169,81 @@ void DataSet(void *p, DataType d, Real x)
         case FLOAT32: { float    v = sizeof(Real) == 4 ? (float)x
                                    : (float)in(x, -3.402823466e+38, 3.402823466e+38);      memcpy(p, &v, 4); break; }
         case FLOAT64: { double   v = (double)x;                                            memcpy(p, &v, 8); break; }
+        case INT4: case INT2: break; // narrower than a byte
     }
 }
 
-Vector VectorLoad(const void *p, DataType d)
+Real DataGet(const void *base, size_t index, DataType d)
+{
+    if (DataPerByte(d) > 1) return (Real)subGet(base, index, d);
+    return byteGet((const unsigned char *)base + DataSize(d, index), d);
+}
+
+void DataSet(void *base, size_t index, DataType d, Real x)
+{
+    if (DataPerByte(d) > 1) { subSet(base, index, d, subClamp(d, nearest(x))); return; }
+    byteSet((unsigned char *)base + DataSize(d, index), d, x);
+}
+
+static inline __attribute__((always_inline)) Vector load(const void *p, DataType d)
 {
     Vector x = VectorZero();
+#if defined(__AVX2__) && !defined(__AVX512F__)
+    if (sizeof(Real) == 4 && VECTOR_DIMS == 8 && (d == UINT8 || d == INT8 || d == INT16 || d == INT32)) {
+        __m256i v = d == UINT8 ? _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)p))
+                  : d == INT8  ? _mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)p))
+                  : d == INT16 ? _mm256_cvtepi16_epi32(_mm_loadu_si128((const __m128i *)p))
+                  :              _mm256_loadu_si256((const __m256i *)p);
+        __m256 f = _mm256_cvtepi32_ps(v);
+        memcpy(&x, &f, sizeof(x));
+        return x;
+    }
+#endif
     switch (d) {
         case UINT8:   { const uint8_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
         case INT8:    { const int8_t  *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
+        case INT4: {
+            const unsigned char *e = p;
+#if defined(__AVX2__) && !defined(__AVX512F__)
+            if (sizeof(Real) == 4 && VECTOR_DIMS == 8) {
+                uint32_t w;
+                memcpy(&w, e, 4);
+                __m256i v = _mm256_srlv_epi32(_mm256_set1_epi32((int)w),
+                                              _mm256_setr_epi32(0, 4, 8, 12, 16, 20, 24, 28));
+                v = _mm256_and_si256(v, _mm256_set1_epi32(0xF));
+                v = _mm256_sub_epi32(_mm256_xor_si256(v, _mm256_set1_epi32(8)), _mm256_set1_epi32(8));
+                __m256 f = _mm256_cvtepi32_ps(v);
+                memcpy(&x, &f, sizeof(x));
+                break;
+            }
+#endif
+            for (int i = 0; i < VECTOR_DIMS; i++) {
+                int v = (i & 1) ? e[i / 2] >> 4 : e[i / 2] & 0xF;
+                x[i] = (Real)(v > 7 ? v - 16 : v);
+            }
+            break;
+        }
+        case INT2: {
+            const unsigned char *e = p;
+#if defined(__AVX2__) && !defined(__AVX512F__)
+            if (sizeof(Real) == 4 && VECTOR_DIMS == 8) {
+                uint16_t w;
+                memcpy(&w, e, 2);
+                __m256i v = _mm256_srlv_epi32(_mm256_set1_epi32((int)w),
+                                              _mm256_setr_epi32(0, 2, 4, 6, 8, 10, 12, 14));
+                v = _mm256_and_si256(v, _mm256_set1_epi32(3));
+                v = _mm256_sub_epi32(_mm256_xor_si256(v, _mm256_set1_epi32(2)), _mm256_set1_epi32(2));
+                __m256 f = _mm256_cvtepi32_ps(v);
+                memcpy(&x, &f, sizeof(x));
+                break;
+            }
+#endif
+            for (int i = 0; i < VECTOR_DIMS; i++) {
+                int v = (e[i / 4] >> (i % 4) * 2) & 3;
+                x[i] = (Real)(v > 1 ? v - 4 : v);
+            }
+            break;
+        }
         case INT16:   { const int16_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
         case INT32:   { const int32_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) x[i] = (Real)e[i]; break; }
         // The native width is the hot path: a whole vector is one copy, no conversion
@@ -196,23 +264,40 @@ Vector VectorLoad(const void *p, DataType d)
             }
 #endif
             for (int i = 0; i < VECTOR_DIMS; i++)
-                x[i] = DataGet((const uint16_t *)p + i, FLOAT16);
+                x[i] = byteGet((const uint16_t *)p + i, FLOAT16);
             break;
     }
     return x;
 }
+
+Vector VectorLoad(const void *p, DataType d)      { return load(p, d); }
 void   VectorStore(Real *p, Vector x)             { memcpy(p, &x, sizeof(x)); }
+
+Vector VectorLoadPartial(const Real *p, int n)
+{
+    Vector x = VectorZero();
+    if (n == VECTOR_DIMS) memcpy(&x, p, sizeof(x));
+    else for (int i = 0; i < n; i++) x[i] = p[i];
+    return x;
+}
+
+void VectorStorePartial(Real *p, Vector x, int n)
+{
+    if (n == VECTOR_DIMS) memcpy(p, &x, sizeof(x));
+    else for (int i = 0; i < n; i++) p[i] = x[i];
+}
 
 static int narrowPacked(void *p, DataType d, Vector x)
 {
 #if defined(__AVX2__) && !defined(__AVX512F__)
-    if (sizeof(Real) == 4 && (d == INT8 || d == INT16)) {
+    if (sizeof(Real) == 4 && (d == INT8 || d == UINT8 || d == INT16)) {
         __m256i w;
         memcpy(&w, &x, sizeof(w));
         __m256i v = _mm256_cvttps_epi32(_mm256_castsi256_ps(w));
         __m128i n = _mm_packs_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256(v, 1));
-        if (d == INT8) _mm_storel_epi64((__m128i *)p, _mm_packs_epi16(n, n));
-        else           _mm_storeu_si128((__m128i *)p, n);
+        if (d == INT8)       _mm_storel_epi64((__m128i *)p, _mm_packs_epi16(n, n));
+        else if (d == UINT8) _mm_storel_epi64((__m128i *)p, _mm_packus_epi16(n, n));
+        else                 _mm_storeu_si128((__m128i *)p, n);
         return 1;
     }
 #endif
@@ -220,26 +305,243 @@ static int narrowPacked(void *p, DataType d, Vector x)
     return 0;
 }
 
-void VectorStoreStochastic(void *p, DataType d, Vector x)
+// u rounds stochastically (x + u, floored), NULL to nearest
+static inline __attribute__((always_inline)) void storeRounded(void *p, DataType d, Vector x, const Vector *u)
 {
     if (!DataMax(d)) {
         if (d == FLOAT32 && sizeof(Real) == 4) { memcpy(p, &x, sizeof(x)); return; }
+#if defined(__AVX2__) && defined(__F16C__) && !defined(__AVX512F__)
+        if (d == FLOAT16 && sizeof(Real) == 4) { // as realToHalf: saturates at 65504, NaN stays NaN
+            __m256 v, top = _mm256_set1_ps(65504.0f);
+            memcpy(&v, &x, sizeof(v));
+            // NaN found on the bits: -Ofast assumes floats are finite
+            __m256i bits = _mm256_and_si256(_mm256_castps_si256(v), _mm256_set1_epi32(0x7FFFFFFF));
+            __m256 nan = _mm256_castsi256_ps(_mm256_cmpgt_epi32(bits, _mm256_set1_epi32(0x7F800000)));
+            __m256 clamped = _mm256_max_ps(_mm256_min_ps(v, top), _mm256_sub_ps(_mm256_setzero_ps(), top));
+            v = _mm256_blendv_ps(clamped, v, nan);
+            _mm_storeu_si128((__m128i *)p, _mm256_cvtps_ph(v, _MM_FROUND_TO_NEAREST_INT));
+            return;
+        }
+#endif
         for (int i = 0; i < VECTOR_DIMS; i++)
-            DataSet((unsigned char *)p + (size_t)i * DataSize(d), d, x[i]);
+            DataSet(p, (size_t)i, d, x[i]);
         return;
     }
 
     Vector lo = VectorBcast((Real)DataMin(d)), hi = VectorBcast(dataHigh(d));
     x = VectorMin(VectorMax(x, lo), hi);
-    x = VectorMin(VectorMax(VectorFloor(x + randomVector(p)), lo), hi);
+    x = VectorMin(VectorMax(VectorFloor(x + (u ? *u : VectorBcast((Real)0.5))), lo), hi);
 
     if (narrowPacked(p, d, x)) return;
     switch (d) {
         case UINT8: { uint8_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) e[i] = (uint8_t)x[i]; break; }
         case INT8:  { int8_t  *e = p; for (int i = 0; i < VECTOR_DIMS; i++) e[i] = (int8_t)x[i];  break; }
         case INT16: { int16_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) e[i] = (int16_t)x[i]; break; }
+        case INT4:  {
+            unsigned char *e = p;
+#if defined(__AVX2__) && !defined(__AVX512F__)
+            if (sizeof(Real) == 4 && VECTOR_DIMS == 8) { // shift each nibble into place, OR them in pairs
+                __m256 xs;
+                memcpy(&xs, &x, sizeof(xs));
+                __m256i v = _mm256_and_si256(_mm256_cvttps_epi32(xs), _mm256_set1_epi32(0xF));
+                v = _mm256_sllv_epi32(v, _mm256_setr_epi32(0, 4, 0, 4, 0, 4, 0, 4));
+                v = _mm256_or_si256(v, _mm256_srli_epi64(v, 32));        // byte k of the result in element 2k
+                v = _mm256_permutevar8x32_epi32(v, _mm256_setr_epi32(0, 2, 4, 6, 0, 2, 4, 6));
+                __m128i n = _mm256_castsi256_si128(v);
+                __m128i b = _mm_packus_epi16(_mm_packus_epi32(n, n), _mm_setzero_si128());
+                int32_t w = _mm_cvtsi128_si32(b);
+                memcpy(e, &w, 4);
+                break;
+            }
+#endif
+            int i = 0;
+            for (; i + 1 < VECTOR_DIMS; i += 2)
+                e[i / 2] = (unsigned char)(((int)x[i] & 0xF) | ((int)x[i + 1] & 0xF) << 4);
+            if (i < VECTOR_DIMS)
+                e[i / 2] = (unsigned char)((e[i / 2] & 0xF0) | ((int)x[i] & 0xF));
+            break;
+        }
+        case INT2:  { // VECTOR_DIMS is a multiple of 4, so whole bytes
+            unsigned char *e = p;
+#if defined(__AVX2__) && !defined(__AVX512F__)
+            if (sizeof(Real) == 4 && VECTOR_DIMS == 8) { // shift each crumb into place, OR them in fours
+                __m256 xs;
+                memcpy(&xs, &x, sizeof(xs));
+                __m256i v = _mm256_and_si256(_mm256_cvttps_epi32(xs), _mm256_set1_epi32(3));
+                v = _mm256_sllv_epi32(v, _mm256_setr_epi32(0, 2, 4, 6, 0, 2, 4, 6));
+                v = _mm256_or_si256(v, _mm256_srli_epi64(v, 32));
+                v = _mm256_or_si256(v, _mm256_srli_si256(v, 8));          // byte k of the result in element 4k
+                uint16_t w = (uint16_t)(_mm256_extract_epi32(v, 0) | _mm256_extract_epi32(v, 4) << 8);
+                memcpy(e, &w, 2);
+                break;
+            }
+#endif
+            for (int i = 0; i < VECTOR_DIMS; i += 4)
+                e[i / 4] = (unsigned char)(((int)x[i] & 3) | ((int)x[i + 1] & 3) << 2
+                                           | ((int)x[i + 2] & 3) << 4 | ((int)x[i + 3] & 3) << 6);
+            break;
+        }
         default:    { int32_t *e = p; for (int i = 0; i < VECTOR_DIMS; i++) e[i] = (int32_t)x[i]; break; }
     }
+}
+
+static void widenCrumbs(const unsigned char *p, int count, int16_t *dst)
+{
+    int i = 0;
+#if defined(__SSE4_1__)
+    for (; i + 16 <= count; i += 16) {
+        uint32_t w;
+        memcpy(&w, p + i / 4, 4); // 4 bytes hold 16 entries
+        // Element k of word j holds crumb j of byte k; gather them back into entry order
+        __m128i v = _mm_setr_epi32((int)w, (int)(w >> 2), (int)(w >> 4), (int)(w >> 6));
+        v = _mm_shuffle_epi8(v, _mm_setr_epi8(0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15));
+        v = _mm_and_si128(v, _mm_set1_epi8(3));
+        v = _mm_sub_epi8(_mm_xor_si128(v, _mm_set1_epi8(2)), _mm_set1_epi8(2)); // sign extend 2 bits
+        _mm_storeu_si128((__m128i *)(dst + i),     _mm_cvtepi8_epi16(v));
+        _mm_storeu_si128((__m128i *)(dst + i + 8), _mm_cvtepi8_epi16(_mm_srli_si128(v, 8)));
+    }
+#endif
+    for (; i < count; i++) {
+        int v = (p[i / 4] >> (i % 4) * 2) & 3;
+        dst[i] = (int16_t)(v > 1 ? v - 4 : v);
+    }
+}
+
+static void widenNibbles(const unsigned char *p, int count, int16_t *dst)
+{
+    int i = 0;
+#if defined(__SSE4_1__)
+    for (; i + 16 <= count; i += 16) {
+        __m128i b  = _mm_loadl_epi64((const __m128i *)(p + i / 2)); // 8 bytes hold 16 entries
+        __m128i lo = _mm_and_si128(b, _mm_set1_epi8(0x0F));
+        __m128i hi = _mm_and_si128(_mm_srli_epi16(b, 4), _mm_set1_epi8(0x0F));
+        __m128i v  = _mm_unpacklo_epi8(lo, hi);                     // back into entry order
+        v = _mm_sub_epi8(_mm_xor_si128(v, _mm_set1_epi8(8)), _mm_set1_epi8(8)); // sign extend 4 bits
+        _mm_storeu_si128((__m128i *)(dst + i),     _mm_cvtepi8_epi16(v));
+        _mm_storeu_si128((__m128i *)(dst + i + 8), _mm_cvtepi8_epi16(_mm_srli_si128(v, 8)));
+    }
+#endif
+    for (; i < count; i++) {
+        int v = (i & 1) ? p[i / 2] >> 4 : p[i / 2] & 0xF;
+        dst[i] = (int16_t)(v > 7 ? v - 16 : v);
+    }
+}
+
+static inline __attribute__((always_inline)) void widenRun(Real *dst, const void *src, size_t si, DataType from,
+                                                           int count)
+{
+    int i = 0;
+    if (si % (size_t)DataPerByte(from) == 0)
+        for (; i + VECTOR_DIMS <= count; i += VECTOR_DIMS)
+            VectorStore(dst + i, load((const unsigned char *)src + DataSize(from, si + (size_t)i), from));
+    for (; i < count; i++) dst[i] = DataGet(src, si + (size_t)i, from);
+}
+
+// Copies count entries of type d between any offsets
+static void copyEntries(void *dst, size_t di, const void *src, size_t si, DataType d, int count)
+{
+    size_t per = (size_t)DataPerByte(d);
+    if (per > 1 && (di % per || si % per || (size_t)count % per))
+        for (int i = 0; i < count; i++) DataSet(dst, di + (size_t)i, d, DataGet(src, si + (size_t)i, d));
+    else
+        memcpy((unsigned char *)dst + DataSize(d, di), (const unsigned char *)src + DataSize(d, si), DataSize(d, (size_t)count));
+}
+
+// Stores n Reals from index, rounding stochastically by key, or to nearest when key is NULL
+static inline __attribute__((always_inline)) void quantizeRun(void *base, size_t index, DataType d, const Real *x,
+                                                              int n, const uint32_t *key)
+{
+    for (int k = 0; k < n; k += VECTOR_DIMS) {
+        int cnt = n - k < VECTOR_DIMS ? n - k : VECTOR_DIMS;
+        size_t e = index + (size_t)k;
+        Vector y = VectorZero();
+        if (cnt == VECTOR_DIMS) memcpy(&y, x + k, sizeof(y));
+        else memcpy(&y, x + k, (size_t)cnt * sizeof(Real));
+        unsigned char buffer[VECTOR_DIMS * sizeof(double)];
+        int direct = cnt == VECTOR_DIMS && e % (size_t)DataPerByte(d) == 0;
+        void *p = direct ? (unsigned char *)base + DataSize(d, e) : buffer;
+        if (key) { Vector u = uniformAt(*key, e); storeRounded(p, d, y, &u); }
+        else storeRounded(p, d, y, NULL);
+        if (!direct) copyEntries(base, e, buffer, 0, d, cnt);
+    }
+}
+
+static void quantize(void *base, size_t index, DataType d, const Real *x, int n, const uint32_t *key)
+{
+    switch (d) {
+        case INT8:    quantizeRun(base, index, INT8, x, n, key); break;
+        case UINT8:   quantizeRun(base, index, UINT8, x, n, key); break;
+        case INT16:   quantizeRun(base, index, INT16, x, n, key); break;
+        case FLOAT16: quantizeRun(base, index, FLOAT16, x, n, key); break;
+        case INT4:    quantizeRun(base, index, INT4, x, n, key); break;
+        case INT2:    quantizeRun(base, index, INT2, x, n, key); break;
+        default:      quantizeRun(base, index, d, x, n, key); break;
+    }
+}
+
+void DataConvert(void *dst, size_t di, DataType to, const void *src, size_t si, DataType from, int count)
+{
+    if (to == FLOAT32 && from != FLOAT32 && sizeof(Real) == 4) { // the stored types worth specialising
+        Real *out = (Real *)dst + di;
+        switch (from) {
+            case INT8:    widenRun(out, src, si, INT8, count); break;
+            case UINT8:   widenRun(out, src, si, UINT8, count); break;
+            case INT16:   widenRun(out, src, si, INT16, count); break;
+            case FLOAT16: widenRun(out, src, si, FLOAT16, count); break;
+            case INT4:    widenRun(out, src, si, INT4, count); break;
+            case INT2:    widenRun(out, src, si, INT2, count); break;
+            default:      widenRun(out, src, si, from, count); break;
+        }
+        return;
+    }
+
+    if (from == FLOAT32 && to != FLOAT32 && sizeof(Real) == 4) {
+        quantize(dst, di, to, (const Real *)src + si, count, NULL);
+        return;
+    }
+
+    if (to == from) { copyEntries(dst, di, src, si, to, count); return; }
+
+    if (to == INT16) {
+        int16_t *out = (int16_t *)dst + di;
+        switch (from) {
+            case INT4:
+                if (!(si & 1)) { widenNibbles((const unsigned char *)src + si / 2, count, out); return; }
+                break;
+            case INT2:
+                if (!(si & 3)) { widenCrumbs((const unsigned char *)src + si / 4, count, out); return; }
+                break;
+            case INT8:  { const int8_t  *e = (const int8_t  *)src + si; for (int i = 0; i < count; i++) out[i] = e[i]; return; }
+            case UINT8: { const uint8_t *e = (const uint8_t *)src + si; for (int i = 0; i < count; i++) out[i] = e[i]; return; }
+            default: break;
+        }
+    }
+
+    for (int i = 0; i < count; i++)
+        DataSet(dst, di + (size_t)i, to, DataGet(src, si + (size_t)i, from));
+}
+
+void DataConvertStochastic(void *dst, size_t di, DataType to, const void *src, size_t si, DataType from, int count,
+                           uint32_t key)
+{
+    if (from == FLOAT32 && sizeof(Real) == 4) { quantize(dst, di, to, (const Real *)src + si, count, &key); return; }
+
+    // Any other type as Reals first
+    Real x[VECTOR_DIMS * VECTOR_CARD];
+    int chunk = VECTOR_DIMS * VECTOR_CARD;
+    for (int c = 0; c < count; c += chunk) {
+        int n = count - c < chunk ? count - c : chunk;
+        for (int i = 0; i < n; i++) x[i] = DataGet(src, si + (size_t)(c + i), from);
+        quantize(dst, di + (size_t)c, to, x, n, &key);
+    }
+}
+
+Vector VectorLoadAt(const void *base, size_t index, DataType d)
+{
+    if (index % (size_t)DataPerByte(d) == 0) return VectorLoad((const unsigned char *)base + DataSize(d, index), d);
+    Vector x = VectorZero();
+    for (int i = 0; i < VECTOR_DIMS; i++) x[i] = DataGet(base, index + (size_t)i, d);
+    return x;
 }
 
 void   VectorFetch(const Real *p)                 { _mm_prefetch((const char *)p, _MM_HINT_ET0); }

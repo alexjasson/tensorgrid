@@ -65,24 +65,19 @@ static void multiplyForward(void *arg, int start, int end)
     int aRowStride = TensorStride(op->A)[dimsA - 2], aColStride = TensorStride(op->A)[dimsA - 1];
     int bRowStride = TensorStride(op->B)[dimsB - 2], bColStride = TensorStride(op->B)[dimsB - 1];
     unsigned char *Ae = TensorEntries(op->A), *Be = TensorEntries(op->B);
-    size_t aSize = DataSize(TensorDataType(op->A)), bSize = DataSize(TensorDataType(op->B));
     Scale aScale = ScaleGet(op->A), bScale = ScaleGet(op->B);
 
-    Matrix Av  = MatrixView((Real *)Ae, m, k, aRowStride, aColStride);
-    Av.type    = TensorDataType(op->A);
-    Av.scale   = aScale;
-    Matrix Bv  = MatrixView((Real *)Be, k, n, bRowStride, bColStride);
-    Bv.type    = TensorDataType(op->B);
-    Bv.scale   = bScale;
+    Matrix Av  = MatrixView(Ae, m, k, aRowStride, aColStride, TensorDataType(op->A), aScale);
+    Matrix Bv  = MatrixView(Be, k, n, bRowStride, bColStride, TensorDataType(op->B), bScale);
 
     // If B is shared and A's batches are contiguous, fuse into a single GEMM
     if (batchStrideB == 0 && batchStrideA == m * aRowStride && (dimsA < 3 || !aScale.values)) {
         memset((Real *)TensorEntries(op->out) + (size_t)start * n, 0, (size_t)(end - start) * n * sizeof(Real));
-        Av.data = (Real *)(Ae + (size_t)start * aRowStride * aSize);
+        Av.off  = (size_t)start * aRowStride;
         Av.rows = end - start;
         Av.scale.values = aScale.values ? aScale.values + start : NULL;
         Av.scale.zeros  = aScale.zeros  ? aScale.zeros  + start : NULL;
-        MatrixMultiply(Av, Bv, MatrixView((Real *)TensorEntries(op->out) + (size_t)start * n, end - start, n, n, 1));
+        MatrixMultiply(Av, Bv, MatrixView((Real *)TensorEntries(op->out) + (size_t)start * n, end - start, n, n, 1, FLOAT32, (Scale){0}));
         return;
     }
 
@@ -96,19 +91,19 @@ static void multiplyForward(void *arg, int start, int end)
         Real *C_batch = (Real *)TensorEntries(op->out) + (size_t)batch * m * n;
         int aGroup = dimsA >= 3 ? batch : r0, bGroup = dimsB >= 3 ? batch : 0;
 
-        Av.data = (Real *)(Ae + ((size_t)batch * batchStrideA + (size_t)r0 * aRowStride) * aSize);
+        Av.off  = (size_t)batch * batchStrideA + (size_t)r0 * aRowStride;
         Av.rows = r1 - r0;
         Av.scale.values = aScale.values ? aScale.values + aGroup : NULL;
         Av.scale.zeros  = aScale.zeros  ? aScale.zeros  + aGroup : NULL;
 
-        Bv.data = (Real *)(Be + (size_t)batch * batchStrideB * bSize);
+        Bv.off  = (size_t)batch * batchStrideB;
         Bv.scale.values = bScale.values ? bScale.values + bGroup : NULL;
         Bv.scale.zeros  = bScale.zeros  ? bScale.zeros  + bGroup : NULL;
 
         memset(C_batch + (size_t)r0 * n, 0, (size_t)(r1 - r0) * n * sizeof(Real));
         MatrixMultiply(Av,
                        Bv,
-                       MatrixView(C_batch + (size_t)r0 * n, r1 - r0, n, n, 1));
+                       MatrixView(C_batch + (size_t)r0 * n, r1 - r0, n, n, 1, FLOAT32, (Scale){0}));
         i = chunkEnd;
     }
 }
@@ -125,36 +120,31 @@ static void multiplyBackwardDa(void *arg, int start, int end)
     int bRowStride = TensorStride(op->B)[dimsB - 2], bColStride = TensorStride(op->B)[dimsB - 1];
     int batchSize = TensorSize(op->out) / (m * n);
     unsigned char *Be = TensorEntries(op->B);
-    size_t bSize = DataSize(TensorDataType(op->B));
     Scale bScale = ScaleGet(op->B);
 
     // Column split
     if (batchStrideA == 0 && (batchSize > 1 || m < k)) {
-        Matrix Bv  = MatrixView((Real *)Be, end - start, n, bRowStride, bColStride);
-        Bv.type    = TensorDataType(op->B);
-        Bv.scale   = bScale;
+        Matrix Bv  = MatrixView(Be, end - start, n, bRowStride, bColStride, TensorDataType(op->B), bScale);
         for (int batch = 0; batch < batchSize; batch++) {
             Real *dout = TensorGradients(op->out) + (size_t)batch * m * n;
             int bGroup = dimsB >= 3 ? batch : start;
-            Bv.data = (Real *)(Be + ((size_t)batch * batchStrideB + (size_t)start * bRowStride) * bSize);
+            Bv.off  = (size_t)batch * batchStrideB + (size_t)start * bRowStride;
             Bv.scale.values = bScale.values ? bScale.values + bGroup : NULL;
             Bv.scale.zeros  = bScale.zeros  ? bScale.zeros  + bGroup : NULL;
             MatrixMultiply(Bv,
-                           MatrixView(dout, n, m, 1, n),
-                           MatrixView(TensorGradients(op->A) + (size_t)start * aColStride, end - start, m, aColStride, aRowStride));
+                           MatrixView(dout, n, m, 1, n, FLOAT32, (Scale){0}),
+                           MatrixView(TensorGradients(op->A) + (size_t)start * aColStride, end - start, m, aColStride, aRowStride, FLOAT32, (Scale){0}));
         }
         return;
     }
 
-    Matrix Bt  = MatrixView((Real *)Be, n, k, bColStride, bRowStride);
-    Bt.type    = TensorDataType(op->B);
-    Bt.scale   = bScale;
+    Matrix Bt  = MatrixView(Be, n, k, bColStride, bRowStride, TensorDataType(op->B), bScale);
 
     // Row split
     if (batchStrideB == 0 && (dimsA < 3 || batchStrideA == m * aRowStride)) {
-        MatrixMultiply(MatrixView(TensorGradients(op->out) + (size_t)start * n, end - start, n, n, 1),
+        MatrixMultiply(MatrixView(TensorGradients(op->out) + (size_t)start * n, end - start, n, n, 1, FLOAT32, (Scale){0}),
                        Bt,
-                       MatrixView(TensorGradients(op->A) + (size_t)start * aRowStride, end - start, k, aRowStride, aColStride));
+                       MatrixView(TensorGradients(op->A) + (size_t)start * aRowStride, end - start, k, aRowStride, aColStride, FLOAT32, (Scale){0}));
         return;
     }
     int i = start;
@@ -168,12 +158,12 @@ static void multiplyBackwardDa(void *arg, int start, int end)
         Real *dA    = TensorGradients(op->A)   + (size_t)batch * batchStrideA;
         int bGroup  = dimsB >= 3 ? batch : 0;
 
-        Bt.data = (Real *)(Be + (size_t)batch * batchStrideB * bSize);
+        Bt.off  = (size_t)batch * batchStrideB;
         Bt.scale.values = bScale.values ? bScale.values + bGroup : NULL;
         Bt.scale.zeros  = bScale.zeros  ? bScale.zeros  + bGroup : NULL;
-        MatrixMultiply(MatrixView(dout + (size_t)r0 * n, r1 - r0, n, n, 1),
+        MatrixMultiply(MatrixView(dout + (size_t)r0 * n, r1 - r0, n, n, 1, FLOAT32, (Scale){0}),
                        Bt,
-                       MatrixView(dA + (size_t)r0 * aRowStride, r1 - r0, k, aRowStride, aColStride));
+                       MatrixView(dA + (size_t)r0 * aRowStride, r1 - r0, k, aRowStride, aColStride, FLOAT32, (Scale){0}));
         i = chunkEnd;
     }
 }
@@ -190,22 +180,19 @@ static void multiplyBackwardDb(void *arg, int start, int end)
     int bRowStride = TensorStride(op->B)[dimsB - 2], bColStride = TensorStride(op->B)[dimsB - 1];
     int batchSize = TensorSize(op->out) / (m * n);
     unsigned char *Ae = TensorEntries(op->A);
-    size_t aSize = DataSize(TensorDataType(op->A));
     Scale aScale = ScaleGet(op->A);
 
-    Matrix At  = MatrixView((Real *)Ae, k, end - start, aColStride, aRowStride);
-    At.type    = TensorDataType(op->A);
-    At.scale   = aScale;
+    Matrix At  = MatrixView(Ae, k, end - start, aColStride, aRowStride, TensorDataType(op->A), aScale);
 
     if (batchStrideB == 0 && batchStrideA == m * aRowStride && batchSize > 1 && (dimsA < 3 || !aScale.values)) {
         Real local[(size_t)k * n];
         memset(local, 0, (size_t)k * n * sizeof(Real));
-        At.data = (Real *)(Ae + (size_t)start * aRowStride * aSize);
+        At.off  = (size_t)start * aRowStride;
         At.scale.values = aScale.values ? aScale.values + start : NULL;
         At.scale.zeros  = aScale.zeros  ? aScale.zeros  + start : NULL;
         MatrixMultiply(At,
-                       MatrixView(TensorGradients(op->out) + (size_t)start * n, end - start, n, n, 1),
-                       MatrixView(local, k, n, n, 1));
+                       MatrixView(TensorGradients(op->out) + (size_t)start * n, end - start, n, n, 1, FLOAT32, (Scale){0}),
+                       MatrixView(local, k, n, n, 1, FLOAT32, (Scale){0}));
         ThreadPool pool = ThreadPoolGet();
         ThreadPoolLock(pool);
         for (int i = 0; i < k; i++)
@@ -227,36 +214,36 @@ static void multiplyBackwardDb(void *arg, int start, int end)
             Real *dB    = TensorGradients(op->B)   + (size_t)batch * batchStrideB;
             int aGroup  = dimsA >= 3 ? batch : 0;
 
-            At.data = (Real *)(Ae + ((size_t)batch * batchStrideA + (size_t)r0 * aColStride) * aSize);
+            At.off  = (size_t)batch * batchStrideA + (size_t)r0 * aColStride;
             At.rows = r1 - r0;
             At.cols = m;
             At.scale.values = aScale.values ? aScale.values + aGroup : NULL;
             At.scale.zeros  = aScale.zeros  ? aScale.zeros  + aGroup : NULL;
             MatrixMultiply(At,
-                           MatrixView(dout, m, n, n, 1),
-                           MatrixView(dB + (size_t)r0 * bRowStride, r1 - r0, n, bRowStride, bColStride));
+                           MatrixView(dout, m, n, n, 1, FLOAT32, (Scale){0}),
+                           MatrixView(dB + (size_t)r0 * bRowStride, r1 - r0, n, bRowStride, bColStride, FLOAT32, (Scale){0}));
             i = chunkEnd;
         }
     } else if (batchStrideA == m * aRowStride && (dimsA < 3 || !aScale.values)) {
         // If A's batches are contiguous, fuse into a single GEMM
-        At.data = (Real *)(Ae + (size_t)start * aColStride * aSize);
+        At.off  = (size_t)start * aColStride;
         At.rows = end - start;
         At.cols = batchSize * m;
         MatrixMultiply(At,
-                       MatrixView(TensorGradients(op->out), batchSize * m, n, n, 1),
-                       MatrixView(TensorGradients(op->B) + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride));
+                       MatrixView(TensorGradients(op->out), batchSize * m, n, n, 1, FLOAT32, (Scale){0}),
+                       MatrixView(TensorGradients(op->B) + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride, FLOAT32, (Scale){0}));
     } else {
         for (int batch = 0; batch < batchSize; batch++) {
             Real *dout = TensorGradients(op->out) + (size_t)batch * m * n;
             int aGroup = dimsA >= 3 ? batch : 0;
-            At.data = (Real *)(Ae + ((size_t)batch * batchStrideA + (size_t)start * aColStride) * aSize);
+            At.off  = (size_t)batch * batchStrideA + (size_t)start * aColStride;
             At.rows = end - start;
             At.cols = m;
             At.scale.values = aScale.values ? aScale.values + aGroup : NULL;
             At.scale.zeros  = aScale.zeros  ? aScale.zeros  + aGroup : NULL;
             MatrixMultiply(At,
-                           MatrixView(dout, m, n, n, 1),
-                           MatrixView(TensorGradients(op->B) + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride));
+                           MatrixView(dout, m, n, n, 1, FLOAT32, (Scale){0}),
+                           MatrixView(TensorGradients(op->B) + (size_t)start * bRowStride, end - start, n, bRowStride, bColStride, FLOAT32, (Scale){0}));
         }
     }
 }
